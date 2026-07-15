@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     finnhub_mcp_url: str = "http://finnhub-mcp:8125/mcp"
     archive_dir: str = "/data/archive"
     news_poll_minutes: int = 15
-    news_relevance_threshold: float = 0.35
+    news_relevance_threshold: float = 0.15
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

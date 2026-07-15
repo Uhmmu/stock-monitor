@@ -34,6 +34,8 @@ from app.services.search import search_ticker_news
 from app.services.title_translation import title_input_hash, translate_title
 
 settings = get_settings()
+NEWS_PER_TICKER = 12  # 每只股票入库上限，按相关性取 top N
+MIN_NEWS_PER_TICKER = 5  # 保底：新闻少的股票不被阈值砍光，按关联度降序至少留 N 篇
 celery_app = Celery("stock_monitor", broker=settings.redis_url, backend=settings.redis_url)
 celery_app.conf.timezone = "UTC"
 celery_app.conf.beat_schedule = {
@@ -277,14 +279,18 @@ def poll_news(ticker: str | None = None):
                 continue
             scores = score_news(item.ticker, [(dto.title, dto.summary or dto.raw_content or "") for dto in kept])
             threshold = settings.news_relevance_threshold
-            final: list = []
-            final_scores: list[tuple[float | None, float | None]] = []
-            for index, dto in enumerate(kept):
-                relevance, sentiment = scores.get(index, (None, None))
-                if relevance is not None and relevance < threshold:
-                    continue
-                final.append(dto)
-                final_scores.append((relevance, sentiment))
+            # 全部按相关性降序（无分的排最后）
+            ranked = sorted(
+                ((dto, *scores.get(index, (None, None))) for index, dto in enumerate(kept)),
+                key=lambda row: row[1] if row[1] is not None else -1.0,
+                reverse=True,
+            )
+            # 达标的（≥阈值）优先；若达标不足 MIN_NEWS_PER_TICKER，按关联度降序补齐保底篇数
+            above = [row for row in ranked if row[1] is not None and row[1] >= threshold]
+            scored = above if len(above) >= MIN_NEWS_PER_TICKER else ranked[:MIN_NEWS_PER_TICKER]
+            scored = scored[:NEWS_PER_TICKER]
+            final = [row[0] for row in scored]
+            final_scores = [(row[1], row[2]) for row in scored]
             saved = persist_news(db, item.ticker, parsed, final, final_scores)
             total += len(saved)
         db.commit()
@@ -342,52 +348,63 @@ def curate_daily_archives():
         return {"curated": curated}
 
 
+def _sync_ticker_financials(db, ticker: str) -> bool:
+    """同步单只财报到 DB + 归档。成功返回 True，无数据/异常返回 False。"""
+    try:
+        rows = fetch_yf_quarterly(ticker)
+    except Exception:
+        return False
+    quarters = quarters_from_yf(rows)
+    if not quarters:
+        return False
+    for quarter in quarters:
+        row = db.scalar(
+            select(QuarterlyFinancial).where(
+                QuarterlyFinancial.ticker == ticker,
+                QuarterlyFinancial.fiscal_year == quarter.fiscal_year,
+                QuarterlyFinancial.fiscal_period == quarter.fiscal_period,
+            )
+        )
+        if not row:
+            row = QuarterlyFinancial(ticker=ticker, fiscal_year=quarter.fiscal_year, fiscal_period=quarter.fiscal_period)
+            db.add(row)
+        row.period_end = quarter.period_end
+        row.filed_at = quarter.filed_at
+        row.currency = quarter.currency
+        row.revenue = quarter.revenue
+        row.eps = quarter.eps
+        row.net_income = quarter.net_income
+        row.operating_income = quarter.operating_income
+        row.gross_margin = quarter.gross_margin
+        row.net_margin = quarter.net_margin
+        row.operating_cash_flow = quarter.operating_cash_flow
+        row.free_cash_flow = quarter.free_cash_flow
+        row.raw_payload = quarter.raw_payload
+        archive.write_quarter(ticker, quarter.label, quarter.raw_payload)
+    keep_labels = [q.label for q in quarters]
+    keep_pairs = {(q.fiscal_year, q.fiscal_period) for q in quarters}
+    for row in db.scalars(select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker)).all():
+        if (row.fiscal_year, row.fiscal_period) not in keep_pairs:
+            db.delete(row)
+    archive.prune_quarters(ticker, keep_labels)
+    return True
+
+
 @celery_app.task(name="app.tasks.celery_app.sync_financials")
 def sync_financials():
     with SessionLocal() as db:
         tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
-        synced = 0
-        for ticker in tickers:
-            try:
-                rows = fetch_yf_quarterly(ticker)
-            except Exception:
-                continue
-            quarters = quarters_from_yf(rows)
-            if not quarters:
-                continue
-            for quarter in quarters:
-                row = db.scalar(
-                    select(QuarterlyFinancial).where(
-                        QuarterlyFinancial.ticker == ticker,
-                        QuarterlyFinancial.fiscal_year == quarter.fiscal_year,
-                        QuarterlyFinancial.fiscal_period == quarter.fiscal_period,
-                    )
-                )
-                if not row:
-                    row = QuarterlyFinancial(ticker=ticker, fiscal_year=quarter.fiscal_year, fiscal_period=quarter.fiscal_period)
-                    db.add(row)
-                row.period_end = quarter.period_end
-                row.filed_at = quarter.filed_at
-                row.currency = quarter.currency
-                row.revenue = quarter.revenue
-                row.eps = quarter.eps
-                row.net_income = quarter.net_income
-                row.operating_income = quarter.operating_income
-                row.gross_margin = quarter.gross_margin
-                row.net_margin = quarter.net_margin
-                row.operating_cash_flow = quarter.operating_cash_flow
-                row.free_cash_flow = quarter.free_cash_flow
-                row.raw_payload = quarter.raw_payload
-                archive.write_quarter(ticker, quarter.label, quarter.raw_payload)
-            keep_labels = [q.label for q in quarters]
-            keep_pairs = {(q.fiscal_year, q.fiscal_period) for q in quarters}
-            for row in db.scalars(select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker)).all():
-                if (row.fiscal_year, row.fiscal_period) not in keep_pairs:
-                    db.delete(row)
-            archive.prune_quarters(ticker, keep_labels)
-            synced += 1
+        synced = sum(1 for ticker in tickers if _sync_ticker_financials(db, ticker))
         db.commit()
         return {"synced": synced}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_ticker_financials")
+def sync_ticker_financials(ticker: str):
+    with SessionLocal() as db:
+        ok = _sync_ticker_financials(db, ticker)
+        db.commit()
+        return {"ticker": ticker, "synced": ok}
 
 
 def _financials_text(db, ticker: str) -> str:

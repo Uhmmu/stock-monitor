@@ -39,7 +39,7 @@ export default function App() {
   const submitTicker = (event:FormEvent) => { event.preventDefault(); if(ticker.trim()) add.mutate() }
   return <div className="app">
     <aside>
-      <div className="brand"><span className="mark">MS</span><div><strong>Market Signal</strong><small>智能市场监控台 · v0.1beta</small></div></div>
+      <div className="brand"><span className="mark">MS</span><div><strong>Market Signal</strong><small>智能市场监控台 · v0.1</small></div></div>
       <nav>{[['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['reports','报告中心'],['settings','监控设置']].map(([key,label])=><button className={tab===key?'active':''} onClick={()=>setTab(key)} key={key}>{label}</button>)}</nav>
       <div className="side-status"><i className={dashboard.data?.market.is_open?'online':''}/><span>{dashboard.data?.market.is_open?'美股交易中':'当前休市'}</span></div>
     </aside>
@@ -105,17 +105,16 @@ function NewsCenter({tickers}:{tickers:string[]}) {
     {archive.data?<article className="report-detail"><p className="eyebrow">{archive.data.market_date} · v{archive.data.version} · {archive.data.model}</p><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{stripExcluded(archive.data.content)}</ReactMarkdown></div></article>:<div className="empty">尚未生成每日定档。</div>}
     <div className="section-title"><h2>{current} 新闻</h2><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'刷新中…':'刷新新闻'}</button></div>
     {refresh.isSuccess&&<p className="saved">已触发后台采集，稍后刷新查看。</p>}
-    <div className="news-list">{news.data?.map(item=>{const no=orderNo(item.id);return <article className={`news-card${item.image_url?'':' no-image'}`} key={item.id}>
-      {item.image_url&&<img src={item.image_url} alt="" loading="lazy"/>}
+    <div className="news-list">{news.data?.map(item=>{const no=orderNo(item.id);return <article className="news-card" key={item.id}>
       <div className="news-body">
-        <div className="news-meta">{no&&<span className="news-no">[{no}]</span>}<span className={`prov ${item.provider}`}>{item.provider==='finnhub'?'Finnhub':item.provider==='tavily'?'Tavily':item.provider}</span>{item.source&&<span>{item.source}</span>}<span>{item.published_at?formatDate(item.published_at):formatDate(item.found_at)}</span></div>
+        <div className="news-meta">{no&&<span className="news-no">[{no}]</span>}<span className={`prov ${item.provider}`}>{item.provider==='finnhub'?'Finnhub':item.provider==='tavily'?'Tavily':item.provider==='yfinance'?'Yahoo财经':item.provider}</span>{item.source&&<span>{item.source}</span>}<span>{item.published_at?formatDate(item.published_at):formatDate(item.found_at)}</span></div>
         <a className="news-title" href={item.url} target="_blank" rel="noreferrer">{item.translated_title||item.title}</a>
         {item.translated_title&&item.translated_title!==item.title&&<p className="news-original-title">{item.title}</p>}
         {item.summary&&<p className="news-summary">{item.summary}</p>}
         <button className="ai-btn" onClick={()=>summarize.mutate(item.id)} disabled={summarize.isPending&&summarize.variables===item.id}>{summarize.isPending&&summarize.variables===item.id?'AI 总结中…':item.ai_summary?'重新总结':'AI 总结'}</button>
         {item.ai_summary&&<div className="ai-summary"><span className="ai-tag">Luna · {item.ai_summary_model}</span><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{item.ai_summary}</ReactMarkdown></div>}
       </div>
-    </article>})}{!news.data?.length&&<div className="empty">暂无原始新闻，点击“刷新新闻”触发采集。</div>}</div>
+    </article>})}{!news.data?.length&&<div className="empty">暂无原始新闻，点击"刷新新闻"触发采集。</div>}</div>
   </div>
 }
 

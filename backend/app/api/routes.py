@@ -20,6 +20,7 @@ from app.models import (
     WatchlistItem,
 )
 from app.schemas import SettingsOut, SettingsUpdate, WatchlistCreate, WatchlistOut, WatchlistUpdate
+from app.services.article_fetch import fetch_article_text
 from app.services.finnhub_mcp import fetch_basic_metrics, fetch_recommendations
 from app.services.market_data import fetch_yf_info_metrics
 from app.services.llm import summarize_news
@@ -61,6 +62,10 @@ def add_watchlist(payload: WatchlistCreate, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(409, "该股票已在自选列表中")
     db.refresh(item)
+    if item.enabled:
+        from app.tasks.celery_app import sync_ticker_financials
+
+        sync_ticker_financials.delay(item.ticker)
     return item
 
 
@@ -184,7 +189,12 @@ def summarize(news_id: int, db: Session = Depends(get_db)):
     item = db.get(NewsItem, news_id)
     if not item:
         raise HTTPException(404, "未找到新闻")
-    content = item.raw_content or item.summary or item.title
+    full_text = fetch_article_text(item.url)
+    if full_text:
+        item.raw_content = full_text
+        content = full_text
+    else:
+        content = item.raw_content or item.summary or item.title
     input_hash = hashlib.sha256(f"{item.title}\n{content}".encode("utf-8")).hexdigest()[:64]
     if item.ai_summary and item.ai_summary_input_hash == input_hash:
         return _news_out(item)

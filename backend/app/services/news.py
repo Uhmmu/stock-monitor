@@ -12,15 +12,13 @@ SOURCE_BLACKLIST = {
     "simply wall st", "gurufocus", "tipranks", "stocktwits", "247wallst.com",
     "247 wall st.", "benzinga", "seeking alpha",
 }
-# 标题垃圾关键词（小写子串匹配）
+# 标题垃圾关键词（小写子串匹配）——只保留无争议的垃圾类型
 TITLE_BLACKLIST = (
     "options trading", "technical analysis", "is a buy", "is it a buy",
     "should you buy", "best stocks", "stocks to buy", "moving average",
-    "price target", "vs.", "3 stocks", "5 stocks", "7 stocks",
-    "motley fool", "why is", "here's why", "here is why",
+    "motley fool", "3 stocks", "5 stocks", "7 stocks",
 )
-_MAX_AGE = timedelta(hours=24)
-_MIN_SUMMARY_LEN = 30
+_MAX_AGE = timedelta(hours=48)
 
 
 def filter_news(dto: "NewsDTO", now: datetime | None = None) -> bool:
@@ -32,9 +30,6 @@ def filter_news(dto: "NewsDTO", now: datetime | None = None) -> bool:
         return False
     title_lower = (dto.title or "").lower()
     if any(keyword in title_lower for keyword in TITLE_BLACKLIST):
-        return False
-    body = dto.summary or dto.raw_content or ""
-    if len(body.strip()) < _MIN_SUMMARY_LEN:
         return False
     return True
 
@@ -81,16 +76,63 @@ def news_fingerprint(provider: str, external_id: str | None, url: str, title: st
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:64]
 
 
+_FINNHUB_CAP = 20  # finnhub 常返回上百条，取最新的即可，省 AI 打分 token
+
+
 def collect_ticker_news(ticker: str, context: str = "latest company news", days: int = 7) -> list[NewsDTO]:
     from app.services.finnhub_mcp import fetch_company_news
 
+    def _capped_finnhub() -> list[NewsDTO]:
+        rows = fetch_company_news(ticker, days)
+        rows.sort(key=lambda d: d.published_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+        return rows[:_FINNHUB_CAP]
+
     items: list[NewsDTO] = []
-    for fetch in (lambda: fetch_company_news(ticker, days), lambda: _tavily_dtos(ticker, context)):
+    for fetch in (_capped_finnhub, lambda: _yfinance_news_dtos(ticker), lambda: _tavily_dtos(ticker, context)):
         try:
             items.extend(fetch())
         except Exception:
             continue
     return deduplicate(items)
+
+
+def _yfinance_news_dtos(ticker: str) -> list[NewsDTO]:
+    import yfinance as yf
+    from datetime import timezone
+
+    raw = yf.Ticker(ticker).news or []
+    items: list[NewsDTO] = []
+    for item in raw:
+        # yfinance 0.2.x 有两种结构：扁平或嵌套在 content 里
+        nested = item.get("content") or {}
+        title = item.get("title") or nested.get("title") or ""
+        if not title:
+            continue
+        url = (item.get("link") or item.get("url")
+               or nested.get("canonicalUrl", {}).get("url")
+               or nested.get("clickThroughUrl", {}).get("url") or "")
+        if not url:
+            continue
+        pub_ts = item.get("providerPublishTime") or nested.get("pubDate")
+        published_at = None
+        if pub_ts:
+            try:
+                published_at = (datetime.fromtimestamp(int(pub_ts), tz=UTC)
+                                if isinstance(pub_ts, (int, float))
+                                else datetime.fromisoformat(str(pub_ts)[:19]).replace(tzinfo=UTC))
+            except Exception:
+                pass
+        source = (item.get("publisher") or
+                  nested.get("provider", {}).get("displayName") or
+                  nested.get("publisher", {}).get("name") or None)
+        summary = (item.get("summary") or nested.get("summary") or
+                   nested.get("description") or None)
+        items.append(NewsDTO(
+            provider="yfinance", ticker=ticker, title=title[:512], url=url,
+            source=source, summary=summary, raw_content=summary,
+            published_at=published_at,
+        ))
+    return items
 
 
 def _tavily_dtos(ticker: str, context: str) -> list[NewsDTO]:
@@ -119,4 +161,37 @@ def deduplicate(items: list[NewsDTO]) -> list[NewsDTO]:
             continue
         seen.add(key)
         unique.append(item)
-    return unique
+    return dedupe_by_title(unique)
+
+
+_TITLE_STOPWORDS = {
+    "the", "a", "an", "to", "of", "in", "on", "for", "and", "or", "is", "are",
+    "as", "at", "by", "with", "from", "its", "amid", "after", "over", "into",
+    "inc", "corp", "co", "ltd", "stock", "shares", "says", "will",
+}
+_TITLE_SIMILARITY_THRESHOLD = 0.6  # Jaccard 词集合相似度 ≥ 此值视为同一事件
+
+
+def _title_tokens(title: str) -> frozenset[str]:
+    words = re.findall(r"[a-z0-9]+", (title or "").lower())
+    return frozenset(w for w in words if w not in _TITLE_STOPWORDS and len(w) > 1)
+
+
+def _title_similarity(a: frozenset[str], b: frozenset[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def dedupe_by_title(items: list[NewsDTO]) -> list[NewsDTO]:
+    """在精确指纹去重之后，再按标题词集合相似度合并跨来源的同一事件。
+    保留先出现的一条（collect 顺序为 finnhub→yfinance→tavily，即优先高质量源）。"""
+    kept: list[NewsDTO] = []
+    kept_tokens: list[frozenset[str]] = []
+    for item in items:
+        tokens = _title_tokens(item.title)
+        if any(_title_similarity(tokens, prev) >= _TITLE_SIMILARITY_THRESHOLD for prev in kept_tokens):
+            continue
+        kept.append(item)
+        kept_tokens.append(tokens)
+    return kept
