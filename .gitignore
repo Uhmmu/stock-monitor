@@ -1,22 +1,8 @@
-# dependencies
 node_modules/
-# build output
-dist/
-build/
-# python
 __pycache__/
-*.py[cod]
+dist/
 .venv/
 venv/
-.pytest_cache/
-# secrets
+*.pyc
 .env
-.env.*
-*.pem
-# os / editor
-.DS_Store
-*.swp
-.idea/
-.vscode/
-# logs
-*.log
+.git
