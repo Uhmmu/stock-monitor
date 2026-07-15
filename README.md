@@ -55,3 +55,4 @@
 - 新闻与财报接口：`curl -u "$AUTH_USER:你的密码" "https://$SITE_DOMAIN/api/news?ticker=AAPL"` 与 `.../api/financials?ticker=AAPL`。
 - 归档落盘：`docker compose exec worker ls /data/archive/AAPL/news`。
 # stock-monitor
+# stock-monitor
