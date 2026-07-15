@@ -1,0 +1,7 @@
+{$SITE_DOMAIN} {
+  encode zstd gzip
+  basic_auth {
+    {$AUTH_USER} {$AUTH_PASSWORD_HASH}
+  }
+  reverse_proxy frontend:80
+}

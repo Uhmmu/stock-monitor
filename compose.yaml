@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-stock_monitor}
+      POSTGRES_USER: ${POSTGRES_USER:-stock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stock}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stock} -d ${POSTGRES_DB:-stock_monitor}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  finnhub-mcp:
+    build: ./finnhub-mcp
+    environment:
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY}
+      FINNHUB_STORAGE_DIR: /data/finnhub
+    volumes:
+      - finnhub_data:/data/finnhub
+
+  api: &backend
+    build: ./backend
+    env_file: .env
+    volumes:
+      - archive_data:/data/archive
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      finnhub-mcp:
+        condition: service_started
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    <<: *backend
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    healthcheck:
+      disable: true
+
+  beat:
+    <<: *backend
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    healthcheck:
+      disable: true
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - frontend
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:-localhost}
+      AUTH_USER: ${AUTH_USER:-admin}
+      AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+  archive_data:
+  finnhub_data:
