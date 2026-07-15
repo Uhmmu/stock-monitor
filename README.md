@@ -54,3 +54,4 @@
 - Finnhub MCP：`docker compose exec api python -c "from app.services.finnhub_mcp import fetch_company_news; print(len(fetch_company_news('AAPL', 3)))"`；确认 8125 端口未映射到公网。
 - 新闻与财报接口：`curl -u "$AUTH_USER:你的密码" "https://$SITE_DOMAIN/api/news?ticker=AAPL"` 与 `.../api/financials?ticker=AAPL`。
 - 归档落盘：`docker compose exec worker ls /data/archive/AAPL/news`。
+# stock-monitor
