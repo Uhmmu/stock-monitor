@@ -28,6 +28,7 @@ from app.models import (
     WatchlistItem,
 )
 from app.schemas import SettingsOut, SettingsUpdate, WatchlistCreate, WatchlistOut, WatchlistUpdate
+from app.auth import get_current_user
 from app.services.article_fetch import fetch_article_text
 from app.services.finnhub_mcp import fetch_basic_metrics, fetch_recommendations
 from app.services.market_data import fetch_index_quotes, fetch_yf_info_metrics
@@ -35,7 +36,8 @@ from app.services.llm import summarize_news
 from app.services.market_calendar import market_status
 from app.services.volume_stats import volume_context
 
-router = APIRouter(prefix="/api")
+public_router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 def _require_watched_ticker(db: Session, ticker: str) -> str:
@@ -45,12 +47,12 @@ def _require_watched_ticker(db: Session, ticker: str) -> str:
     return value
 
 
-@router.get("/health")
+@public_router.get("/health")
 def health():
     return {"status": "ok"}
 
 
-@router.get("/readiness")
+@public_router.get("/readiness")
 def readiness(db: Session = Depends(get_db)):
     db.execute(select(1))
     return {"status": "ready"}

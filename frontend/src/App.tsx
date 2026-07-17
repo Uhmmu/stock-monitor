@@ -36,32 +36,51 @@ const formatDate = (value:string) => new Date(value).toLocaleString('zh-CN')
 const typeNames:Record<string,string> = {premarket:'盘前',postmarket:'盘后',movement:'价格异动',earnings_before:'财报前',earnings_after:'财报后'}
 
 export default function App() {
+  const [token,setToken] = useState(()=>localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')||'')
+  const [authUser,setAuthUser] = useState<{username:string;role:string}|null>(null)
+  const [authLoading,setAuthLoading] = useState(()=>!!(localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')))
   const [tab,setTab] = useState('overview')
   const [ticker,setTicker] = useState('')
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
   const client = useQueryClient()
-  const dashboard = useQuery({queryKey:['dashboard'],queryFn:()=>api<Dashboard>('/dashboard'),refetchInterval:30000})
-  const indices = useQuery({queryKey:['indices'],queryFn:()=>api<Indices>('/indices'),refetchInterval:60000})
+  const dashboard = useQuery({queryKey:['dashboard'],queryFn:()=>api<Dashboard>('/dashboard'),refetchInterval:30000,enabled:!!authUser})
+  const indices = useQuery({queryKey:['indices'],queryFn:()=>api<Indices>('/indices'),refetchInterval:60000,enabled:!!authUser})
   const watchlist = useQuery({queryKey:['watchlist'],queryFn:()=>api<WatchItem[]>('/watchlist')})
-  const alerts = useQuery({queryKey:['alerts'],queryFn:()=>api<Alert[]>('/alerts'),refetchInterval:30000})
-  const investigations = useQuery({queryKey:['investigations'],queryFn:()=>api<Investigation[]>('/investigations'),refetchInterval:30000})
+  const alerts = useQuery({queryKey:['alerts'],queryFn:()=>api<Alert[]>('/alerts'),refetchInterval:30000,enabled:!!authUser})
+  const investigations = useQuery({queryKey:['investigations'],queryFn:()=>api<Investigation[]>('/investigations'),refetchInterval:30000,enabled:!!authUser})
   const reports = useQuery({queryKey:['reports'],queryFn:()=>api<Report[]>('/reports')})
   const report = useQuery({queryKey:['report',selectedReport],queryFn:()=>api<ReportDetail>(`/reports/${selectedReport}`),enabled:selectedReport!==null})
   const settings = useQuery({queryKey:['settings'],queryFn:()=>api<Settings>('/settings')})
   const add = useMutation({mutationFn:()=>post('/watchlist',{ticker}),onSuccess:()=>{setTicker('');client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}})
   const remove = useMutation({mutationFn:(id:number)=>api(`/watchlist/${id}`,{method:'DELETE'}),onSuccess:()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}})
 
+  useEffect(()=>{
+    if(!token){setAuthUser(null);setAuthLoading(false);return}
+    setAuthLoading(true)
+    api<{username:string;role:string}>('/auth/me')
+      .then(u=>{setAuthUser(u);setAuthLoading(false)})
+      .catch(()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setToken('');setAuthUser(null);setAuthLoading(false)})
+  },[token])
+
+  useEffect(()=>{
+    const onLogout=()=>{setToken('');setAuthUser(null)}
+    window.addEventListener('auth:logout',onLogout)
+    return ()=>window.removeEventListener('auth:logout',onLogout)
+  },[])
+
+  if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
+  if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser}/>
+
   const submitTicker = (event:FormEvent) => { event.preventDefault(); if(ticker.trim()) add.mutate() }
   return <div className="app">
     <aside>
-      <div className="brand"><img src="/logo.png" className="mark-logo" alt="logo"/><div><strong>小日向美香监视器</strong><small>Powered by 和泉妃爱</small></div></div>
-      <nav>{[['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['sec','SEC 公告'],['congress','名人持仓'],['charts','图表'],['reports','报告中心'],['settings','监控设置']].map(([key,label])=><button className={tab===key?'active':''} onClick={()=>setTab(key)} key={key}>{label}</button>)}</nav>
+      <div className="brand"><img src="/logo.png" className="brand-logo" alt="logo"/><div><strong>小日向美香</strong><small>powered by 和泉妃爱 · v0.2.1</small></div></div>
+      <nav>{[['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['sec','SEC 公告'],['congress','名人持仓'],['charts','图表'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']].map(([key,label])=><button className={tab===key?'active':''} onClick={()=>setTab(key)} key={key}>{label}</button>)}</nav>
       <div className="side-status"><i className={dashboard.data?.market.is_open?'online':''}/><span>{dashboard.data?.market.is_open?'美股交易中':'当前休市'}</span></div>
-    </aside>
+      <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setToken('');setAuthUser(null)}}>退出 {authUser.username}</button></aside>
     <main>
-      <header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面与财报'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['charts','实时图表'],['reports','智能报告'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]}</h1></div><div className="clock">更新于 {dashboard.data ? formatDate(dashboard.data.market.checked_at) : '—'}</div></header>
+      <header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面与财报'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['charts','实时图表'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]}</h1></div><div className="clock">更新于 {dashboard.data ? formatDate(dashboard.data.market.checked_at) : '—'}</div></header>
       {(dashboard.error||watchlist.error)&&<div className="error">后端暂不可用，请确认服务已启动。</div>}
-      <div className="tab-view" key={tab}>
       {tab==='overview'&&<>
         <section className="hero index-hero"><span className={`badge${indices.data?.market.is_open?'':' closed'}`}>{indices.data?.market.is_open?'LIVE':'CLOSED'}</span><div className="index-row">{(indices.data?.indices||[{symbol:'^GSPC',name:'标普500'},{symbol:'^IXIC',name:'纳斯达克'},{symbol:'^DJI',name:'道琼斯'}] as IndexQuote[]).map(idx=>{const up=idx.change_percent!=null&&idx.change_percent>=0;return <div className="index-card" key={idx.symbol}><span className="index-name">{idx.name}</span><strong>{idx.price!=null?idx.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}</strong><span className={idx.change_percent==null?'':up?'positive':'negative'}>{idx.change_points==null||idx.change_percent==null?'数据不足':`${up?'+':''}${idx.change_points.toFixed(2)} (${up?'+':''}${idx.change_percent.toFixed(2)}%)`}</span></div>})}</div></section>
         <section><div className="section-title"><h2>市场快照</h2><button onClick={()=>setTab('watchlist')}>管理自选股</button></div><div className="stock-grid">{dashboard.data?.stocks.map(stock=>{const change=stock.price&&stock.previous_close?(stock.price-stock.previous_close)/stock.previous_close*100:null;return <article className="stock-card" key={stock.ticker}><div><span className="ticker">{stock.ticker}</span><small>{stock.updated_at?formatDate(stock.updated_at):'等待首次采集'}</small></div><strong>{formatPrice(stock.price)}</strong><span className={change!=null&&change<0?'negative':'positive'}>{change==null?'—':`${change>=0?'+':''}${change.toFixed(2)}% 今日`}</span>{stock.volume_label&&stock.volume_label!=='正常'&&<span className={`vol-tag ${stock.volume_label==='放量'?'heavy':'light'}`} title={stock.volume_ratio?`预估全天量 / 30日均量 ≈ ${stock.volume_ratio.toFixed(2)}倍`:''}>{stock.volume_label}{stock.volume_ratio!=null?` ${stock.volume_ratio>=1?'+':''}${((stock.volume_ratio-1)*100).toFixed(0)}%`:''}</span>}</article>})}{!dashboard.data?.stocks.length&&<div className="empty">添加第一只股票，开始建立你的市场雷达。</div>}</div></section>
@@ -75,8 +94,8 @@ export default function App() {
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
       {tab==='congress'&&<CongressCenter/>}
       {tab==='charts'&&<ChartsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
-      {tab==='settings'&&settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}
-      </div>
+      {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
+      {tab==='settings'&&settings.data&&<><SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>{authUser.role==='admin'&&<AdminPanel/>}</> }
     </main>
     {tab==='overview'&&dashboard.data&&<PipCard><div className="pip-inner"><div className="pip-head"><i className={dashboard.data.market.is_open?'online':''}/><span>{dashboard.data.market.is_open?'美股交易中':'当前休市'}</span></div><strong>{dashboard.data.stocks.length}<small> 只监控</small></strong><div className="pip-foot"><span>{alerts.data?.length||0} 异动</span><span>{investigations.data?.filter(i=>i.status==='active').length||0} 调查</span></div></div></PipCard>}
     <Sheet open={selectedReport!==null} onClose={()=>setSelectedReport(null)} title={report.data?typeNames[report.data.report_type]||report.data.report_type:'报告'}>
@@ -191,10 +210,6 @@ function ChartsCenter({tickers}:{tickers:string[]}) {
   const [active,setActive] = useState(tickers[0]||'')
   const current = active||tickers[0]||''
   const container = useRef<HTMLDivElement>(null)
-  // 触屏设备:图表默认盖一层遮罩,手指划过时滚动页面而非被 TradingView iframe 吞掉;
-  // 点一下遮罩才"进入"图表交互(缩放/平移)。桌面(精确指针)不需要,遮罩不出现。
-  const isTouch = typeof matchMedia==='function' && matchMedia('(hover:none) and (pointer:coarse)').matches
-  const [chartOn,setChartOn] = useState(false)   // 图表是否已激活(接管触摸)
   useEffect(()=>{
     if(!current||!container.current) return
     const host = container.current
@@ -221,22 +236,11 @@ function ChartsCenter({tickers}:{tickers:string[]}) {
     host.appendChild(script)
     return ()=>{ host.innerHTML = '' }
   },[current])
-  // 切换标的时重新盖上遮罩;激活后滚动页面则自动退出交互态,把控制权交还给页面滚动。
-  useEffect(()=>{ setChartOn(false) },[current])
-  useEffect(()=>{
-    if(!isTouch||!chartOn) return
-    const onScroll = () => setChartOn(false)
-    window.addEventListener('scroll',onScroll,{passive:true})
-    return ()=>window.removeEventListener('scroll',onScroll)
-  },[isTouch,chartOn])
   if(!tickers.length) return <div className="empty">请先在自选股中添加股票。</div>
   return <div className="news-center">
     <div className="news-tickers">{tickers.map(t=><button key={t} className={t===current?'active':''} onClick={()=>setActive(t)}>{t}</button>)}</div>
-    <div className="section-title"><h2>{current} 实时图表</h2><small className="chart-note">数据由 TradingView 提供，仅供参考{isTouch&&'（点击图表以缩放/平移，滑出后恢复页面滚动）'}</small></div>
-    <div className={`chart-shell${chartOn?' chart-active':''}`}>
-      <div className="tradingview-widget-container" ref={container} style={{height:'100%',width:'100%'}}/>
-      {isTouch&&!chartOn&&<button className="chart-mask" onClick={()=>setChartOn(true)} aria-label="点击进入图表交互"><span>点击操作图表</span></button>}
-    </div>
+    <div className="section-title"><h2>{current} 实时图表</h2><small className="chart-note">数据由 TradingView 提供，仅供参考</small></div>
+    <div className="chart-shell"><div className="tradingview-widget-container" ref={container} style={{height:'100%',width:'100%'}}/></div>
   </div>
 }
 
@@ -369,4 +373,103 @@ function SettingsForm({initial,onSaved}:{initial:Settings;onSaved:()=>void}) {
   const save=useMutation({mutationFn:()=>patch<Settings>('/settings',form),onSuccess:onSaved})
   const fields:[keyof Settings,string][]=[['threshold_20m','20 分钟涨跌阈值 (%)'],['threshold_1h','1 小时涨跌阈值 (%)'],['threshold_day','当日涨跌阈值 (%)'],['alert_cooldown_minutes','同类警报冷却时间 (分钟)'],['investigation_interval_minutes','异动新闻搜索间隔 (分钟)'],['investigation_duration_minutes','异动调查持续时间 (分钟)']]
   return <section className="settings-card"><h2>监控规则</h2><p>修改后将影响新触发的监控任务。API 密钥只在服务器环境变量中配置。</p><div className="settings-grid">{fields.map(([key,label])=><label key={key}>{label}<input type="number" value={form[key]} onChange={e=>setForm({...form,[key]:Number(e.target.value)})}/></label>)}</div><div className="readonly">行情轮询间隔：{form.price_poll_minutes} 分钟（通过环境变量配置）</div><button onClick={()=>save.mutate()} disabled={save.isPending}>{save.isPending?'保存中…':'保存设置'}</button>{save.isSuccess&&<span className="saved">已保存</span>}</section>
+}
+
+
+// ── 登录 / 注册 ──────────────────────────────────────────────────
+function AuthGate({setToken,setAuthUser}:{setToken:(t:string)=>void;setAuthUser:(u:{username:string;role:string}|null)=>void}) {
+  const [mode,setMode] = useState<'login'|'register'>('login')
+  const [username,setUsername] = useState('')
+  const [password,setPassword] = useState('')
+  const [remember,setRemember] = useState(false)
+  const [msg,setMsg] = useState('')
+  const [ok,setOk] = useState(false)
+
+  const handleLogin = async (e:React.FormEvent) => {
+    e.preventDefault(); setMsg('')
+    try {
+      const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password,remember})})
+      const data = await res.json()
+      if(!res.ok){setMsg(data.detail||'登录失败');return}
+      if(remember) localStorage.setItem('auth_token',data.token)
+      else sessionStorage.setItem('auth_token',data.token)
+      setToken(data.token)
+      setAuthUser({username:data.username,role:data.role})
+    } catch{setMsg('网络错误')}
+  }
+
+  const handleRegister = async (e:React.FormEvent) => {
+    e.preventDefault(); setMsg('')
+    try {
+      const res = await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})})
+      const data = await res.json()
+      if(!res.ok){setMsg(data.detail||'注册失败');return}
+      setOk(true); setMsg('注册申请已提交，等待管理员审核')
+    } catch{setMsg('网络错误')}
+  }
+
+  return <div className="auth-gate">
+    <div className="auth-card">
+      <div className="brand" style={{justifyContent:'center',marginBottom:24}}><img src="/logo.png" className="brand-logo" alt="logo"/><div><strong>小日向美香</strong><small>powered by 和泉妃爱</small></div></div>
+      <div className="auth-tabs">
+        <button className={mode==='login'?'active':''} onClick={()=>{setMode('login');setMsg('');setOk(false)}}>登录</button>
+        <button className={mode==='register'?'active':''} onClick={()=>{setMode('register');setMsg('');setOk(false)}}>申请注册</button>
+      </div>
+      {mode==='login'
+        ?<form onSubmit={handleLogin} className="auth-form">
+          <input placeholder="用户名" value={username} onChange={e=>setUsername(e.target.value)} autoFocus/>
+          <input type="password" placeholder="密码" value={password} onChange={e=>setPassword(e.target.value)}/>
+          <label className="remember-label"><input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}/> 记住我（30天）</label>
+          {msg&&<p className="auth-msg">{msg}</p>}
+          <button type="submit" className="auth-submit">登录</button>
+        </form>
+        :ok
+          ?<p className="auth-msg ok">{msg}</p>
+          :<form onSubmit={handleRegister} className="auth-form">
+            <input placeholder="用户名（至少2位）" value={username} onChange={e=>setUsername(e.target.value)} autoFocus/>
+            <input type="password" placeholder="密码（至少6位）" value={password} onChange={e=>setPassword(e.target.value)}/>
+            <p className="auth-hint">注册后需等待管理员审核激活</p>
+            {msg&&<p className="auth-msg">{msg}</p>}
+            <button type="submit" className="auth-submit">提交申请</button>
+          </form>}
+    </div>
+  </div>
+}
+
+// ── 交易日志（占位）──────────────────────────────────────────────
+function JournalSection({username}:{username:string}) {
+  return <div style={{padding:'60px 0',textAlign:'center'}}>
+    <p style={{fontSize:32,marginBottom:8}}>📒</p>
+    <h2 style={{marginBottom:8}}>交易日志</h2>
+    <p style={{opacity:.6}}>Hi {username}，该功能正在建设中，敬请期待。</p>
+    <p style={{opacity:.4,fontSize:12,marginTop:8}}>每位用户的日志数据完全独立</p>
+  </div>
+}
+
+// ── 管理员用户管理 ────────────────────────────────────────────────
+type UserRow = {id:number;username:string;role:string;status:string;created_at:string}
+
+function AdminPanel() {
+  const client = useQueryClient()
+  const users = useQuery({queryKey:['admin-users'],queryFn:()=>api<UserRow[]>('/auth/admin/users')})
+  const approve = useMutation({mutationFn:(id:number)=>post<unknown>(`/auth/admin/users/${id}/approve`,{}),onSuccess:()=>client.invalidateQueries({queryKey:['admin-users']})})
+  const del = useMutation({mutationFn:(id:number)=>api<unknown>(`/auth/admin/users/${id}`,{method:'DELETE'}),onSuccess:()=>client.invalidateQueries({queryKey:['admin-users']})})
+  const statusLabel:Record<string,string> = {active:'已激活',pending:'待审核'}
+  return <div style={{marginTop:32}}>
+    <div className="section-title"><h2>用户管理</h2></div>
+    <div className="table">
+      <div className="table-head"><span>用户名</span><span>角色</span><span>状态</span><span>注册时间</span><span/></div>
+      {users.data?.map(u=><div className="table-row" key={u.id}>
+        <b>{u.username}</b>
+        <span>{u.role==='admin'?'管理员':'普通用户'}</span>
+        <span className={u.status==='active'?'positive':''}>{statusLabel[u.status]||u.status}</span>
+        <span>{new Date(u.created_at).toLocaleDateString('zh-CN')}</span>
+        <span style={{display:'flex',gap:6}}>
+          {u.status==='pending'&&<button onClick={()=>approve.mutate(u.id)}>激活</button>}
+          {u.role!=='admin'&&<button className="danger" onClick={()=>del.mutate(u.id)}>删除</button>}
+        </span>
+      </div>)}
+      {!users.data?.length&&<div className="empty">暂无用户数据。</div>}
+    </div>
+  </div>
 }

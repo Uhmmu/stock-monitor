@@ -9,12 +9,8 @@
   --shadow-m:0 2px 6px rgba(0,0,0,.05),0 12px 32px rgba(0,0,0,.08);
   --shadow-l:0 8px 24px rgba(0,0,0,.08),0 24px 64px rgba(0,0,0,.10);
   --r-s:12px; --r-m:18px; --r-l:24px;
-  /* 动效曲线令牌:强 ease-out 给 UI 进出,iOS 抽屉曲线给可拖拽面。skill §3/review-animations */
-  --spring:cubic-bezier(.32,.72,0,1);          /* iOS 抽屉/移动曲线 */
-  --ease-out:cubic-bezier(.23,1,.32,1);        /* 强 ease-out:进出、悬浮抬升 */
-  --ease-in-out:cubic-bezier(.77,0,.175,1);    /* 强 ease-in-out:屏内位移 */
+  --spring:cubic-bezier(.32,.72,0,1);
   font-family:var(--font); color:var(--ink); font-synthesis:none;
-  font-optical-sizing:auto;
   -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
 }
 *{box-sizing:border-box}
@@ -35,8 +31,6 @@ aside{position:fixed;width:248px;height:100vh;padding:26px 16px;z-index:20;
 .mark{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;
   background:linear-gradient(160deg,#0a84ff,#0071e3);color:#fff;font-weight:700;
   box-shadow:0 4px 12px rgba(0,113,227,.35)}
-.mark-logo{width:42px;height:42px;border-radius:12px;object-fit:cover;
-  box-shadow:0 4px 12px rgba(0,0,0,.18);flex-shrink:0}
 .brand strong{display:block;font-size:15px;letter-spacing:-.01em}
 .brand small{display:block;color:var(--ink-4);font-size:11px;margin-top:3px}
 nav{display:flex;flex-direction:column;gap:3px}
@@ -55,10 +49,7 @@ header{position:sticky;top:0;z-index:10;display:flex;justify-content:space-betwe
   align-items:flex-end;margin:-40px calc(-1*clamp(24px,4.5vw,72px)) 30px;
   padding:22px clamp(24px,4.5vw,72px) 18px;
   background:var(--glass-2);backdrop-filter:blur(24px) saturate(180%);
-  -webkit-backdrop-filter:blur(24px) saturate(180%)}
-/* 滚动边缘效果:不用 1px 硬分割线,在浮动头部与内容交界处渐隐一道柔和阴影(skill §12) */
-header::after{content:'';position:absolute;left:0;right:0;bottom:-18px;height:18px;pointer-events:none;
-  background:linear-gradient(rgba(0,0,0,.05),transparent)}
+  -webkit-backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid var(--line-2)}
 .eyebrow{color:var(--accent-ink);letter-spacing:.14em;font-size:11px;font-weight:600;
   margin:0 0 6px;text-transform:uppercase}
 h1{font-size:clamp(26px,3vw,34px);margin:0;letter-spacing:-.028em;font-weight:700;line-height:1.08}
@@ -94,6 +85,7 @@ h2{letter-spacing:-.02em;font-weight:600}
   background:var(--solid);border:1px solid var(--line);box-shadow:var(--shadow-s);
   display:flex;flex-direction:column;
   transition:transform .3s var(--spring),box-shadow .3s var(--spring)}
+.stock-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-m)}
 .stock-card>div{display:flex;justify-content:space-between}
 .stock-card small{font-size:10px;color:var(--ink-4)}
 .stock-card>strong{font-size:30px;margin:auto 0 6px;letter-spacing:-.03em;font-weight:700}
@@ -148,7 +140,7 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .table-head,.table-row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 70px;
   align-items:center;padding:14px 18px}
 .table-head{font-size:11px;color:var(--ink-4);background:#fafafa;font-weight:600;
-  text-transform:uppercase;letter-spacing:.05em}
+  text-transform:uppercase;letter-spacing:.03em}
 .table-row{border-top:1px solid var(--line-2);transition:background .18s}
 .table-row:hover{background:rgba(0,0,0,.02)}
 .table button{border:0;background:none;cursor:pointer}
@@ -161,6 +153,7 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .investigations article{display:grid;grid-template-columns:1fr auto;gap:12px;padding:24px;
   border:1px solid var(--line);background:var(--solid);border-radius:var(--r-m);
   box-shadow:var(--shadow-s);transition:box-shadow .3s var(--spring)}
+.investigations article:hover{box-shadow:var(--shadow-m)}
 .investigations h2{margin:10px 0 4px;font-size:19px}
 .investigations p{color:var(--ink-3);margin:0;font-size:13px}
 .investigations strong{font-size:30px;letter-spacing:-.03em}
@@ -174,6 +167,7 @@ input:focus{background:var(--solid);border-color:var(--accent);
   padding:16px;border:1px solid var(--line);background:var(--solid);color:inherit;
   border-radius:var(--r-s);text-align:left;cursor:pointer;box-shadow:var(--shadow-s);
   transition:transform .18s var(--spring),box-shadow .25s,border-color .2s}
+.report-list button:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
 .report-list button:active{transform:scale(.99)}
 .report-list button.selected{border-color:var(--accent);
   box-shadow:0 0 0 3px rgba(0,113,227,.14),var(--shadow-m)}
@@ -217,6 +211,7 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .news-card{padding:20px;border:1px solid var(--line);background:var(--solid);
   border-radius:var(--r-m);box-shadow:var(--shadow-s);
   transition:box-shadow .3s var(--spring),transform .3s var(--spring)}
+.news-card:hover{box-shadow:var(--shadow-m);transform:translateY(-2px)}
 .news-body{min-width:0}
 .news-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:var(--ink-4);
   font-size:11px;margin-bottom:9px}
@@ -240,6 +235,7 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .metric-card{padding:18px 20px;border:1px solid var(--line);background:var(--solid);
   border-radius:var(--r-s);display:flex;flex-direction:column;gap:6px;box-shadow:var(--shadow-s);
   transition:transform .25s var(--spring),box-shadow .25s}
+.metric-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
 .metric-card span{color:var(--ink-4);font-size:12px;font-weight:500}
 .metric-card strong{font-size:23px;letter-spacing:-.025em;font-weight:700}
 .rating-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
@@ -271,19 +267,8 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .sec-prio.normal{background:rgba(0,113,227,.14);color:var(--accent-ink)}
 .sec-form{color:var(--ink-3);font-weight:600}
 .sec-event-tag{padding:4px 10px;border-radius:8px;background:#f0f0f2;color:var(--ink-2);font-size:12px}
-.chart-shell{position:relative;height:640px;border:1px solid var(--line);border-radius:var(--r-m);
+.chart-shell{height:640px;border:1px solid var(--line);border-radius:var(--r-m);
   overflow:hidden;background:var(--solid);box-shadow:var(--shadow-s)}
-/* 触屏遮罩:盖住 TradingView iframe,让手指上下滑动滚动页面而非被图表吞掉;
-   点一下才进入图表交互态。桌面不渲染此元素(见 App.tsx isTouch 判断)。 */
-.chart-mask{position:absolute;inset:0;z-index:2;border:0;cursor:pointer;
-  display:flex;align-items:flex-end;justify-content:center;padding-bottom:20px;
-  background:linear-gradient(transparent 60%,rgba(0,0,0,.04));
-  transition:opacity .2s var(--ease-out)}
-.chart-mask span{padding:8px 18px;border-radius:999px;font-size:13px;font-weight:600;color:var(--ink-2);
-  background:var(--glass);backdrop-filter:blur(20px) saturate(180%);
-  -webkit-backdrop-filter:blur(20px) saturate(180%);
-  border:1px solid rgba(255,255,255,.5);box-shadow:var(--shadow-s)}
-.chart-active{box-shadow:0 0 0 3px rgba(0,113,227,.22),var(--shadow-m)}
 .sec-summary-pending{opacity:.55;font-style:italic}
 .sec-original{margin:6px 0}
 .sec-original>summary{cursor:pointer;color:var(--accent-ink);font-size:13px;user-select:none;font-weight:500}
@@ -296,40 +281,12 @@ input:focus{background:var(--solid);border-color:var(--accent);
   border:1px solid var(--line);background:var(--solid);color:inherit;border-radius:var(--r-m);
   text-align:left;cursor:pointer;box-shadow:var(--shadow-s);
   transition:transform .28s var(--spring),box-shadow .28s var(--spring),border-color .2s}
+.report-tile:hover{transform:translateY(-3px);box-shadow:var(--shadow-m)}
 .report-tile:active{transform:scale(.98)}
 .report-tile.selected{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,113,227,.14),var(--shadow-m)}
 .report-tile span{color:var(--accent-ink);font-size:11px;font-weight:600}
 .report-tile b{font-weight:600;line-height:1.4}
 .report-tile small{color:var(--ink-4);font-size:12px}
-
-/* tab 切换:内容整体轻交叉淡入 + 微上移,给栏目切换一点空间连续性。skill §7
-   key={tab} 使容器重挂载触发动画;只动 transform+opacity(GPU)。 */
-@keyframes tab-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-.tab-view{animation:tab-in .32s var(--ease-out) both}
-
-/* 首屏卡片错峰进场:装饰性,30-80ms 递进,只做 transform+opacity(GPU)。skill §7/§11
-   纯 CSS 进入动画不阻塞交互;reduced-motion 下整体禁用(见文末媒体查询)。 */
-@keyframes card-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.stock-grid>.stock-card,.news-list>.news-card,.report-grid>.report-tile,.metric-grid>.metric-card{
-  animation:card-in .42s var(--ease-out) both}
-.stock-grid>.stock-card:nth-child(1),.news-list>.news-card:nth-child(1),.report-grid>.report-tile:nth-child(1),.metric-grid>.metric-card:nth-child(1){animation-delay:0ms}
-.stock-grid>.stock-card:nth-child(2),.news-list>.news-card:nth-child(2),.report-grid>.report-tile:nth-child(2),.metric-grid>.metric-card:nth-child(2){animation-delay:45ms}
-.stock-grid>.stock-card:nth-child(3),.news-list>.news-card:nth-child(3),.report-grid>.report-tile:nth-child(3),.metric-grid>.metric-card:nth-child(3){animation-delay:90ms}
-.stock-grid>.stock-card:nth-child(4),.news-list>.news-card:nth-child(4),.report-grid>.report-tile:nth-child(4),.metric-grid>.metric-card:nth-child(4){animation-delay:135ms}
-.stock-grid>.stock-card:nth-child(5),.news-list>.news-card:nth-child(5),.report-grid>.report-tile:nth-child(5),.metric-grid>.metric-card:nth-child(5){animation-delay:180ms}
-.stock-grid>.stock-card:nth-child(n+6),.news-list>.news-card:nth-child(n+6),.report-grid>.report-tile:nth-child(n+6),.metric-grid>.metric-card:nth-child(n+6){animation-delay:210ms}
-
-/* 悬浮抬升仅对精确指针(鼠标)生效:触屏点按会触发假 hover,导致点一下卡片"卡住"在抬起态。
-   review-animations 硬标准:@media (hover:hover) and (pointer:fine) 门控所有 :hover 位移。 */
-@media (hover:hover) and (pointer:fine){
-  .stock-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-m)}
-  .news-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
-  .metric-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
-  .report-tile:hover{transform:translateY(-3px);box-shadow:var(--shadow-m)}
-  .report-list button:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
-  .investigations article:hover{box-shadow:var(--shadow-m)}
-  .hit-row:hover{border-color:var(--accent);box-shadow:var(--shadow-s)}
-}
 
 /* ===== 底部弹窗:毛玻璃分层,体现前后级纵深 ===== */
 .sheet-root{position:fixed;inset:0;z-index:1000;display:flex;align-items:flex-end;justify-content:center}
@@ -374,12 +331,7 @@ input:focus{background:var(--solid);border-color:var(--accent);
 @media(prefers-reduced-motion:reduce){
   *{transition-duration:.01ms!important;animation-duration:.01ms!important}
   .stock-card:hover,.news-card:hover,.metric-card:hover,.report-list button:hover,
-  .report-tile:hover,.investigations article:hover{transform:none}
-  /* 禁用错峰进场的位移,只留最终静态态(§14:去掉前庭性位移,保留可读性) */
-  .stock-grid>.stock-card,.news-list>.news-card,.report-grid>.report-tile,.metric-grid>.metric-card{
-    animation:none!important;opacity:1;transform:none}
-  /* Sheet 背板已由 JS 直接落位,这里确保面板不残留位移 */
-  .sheet-panel{transition:opacity .18s ease}
+  .investigations article:hover{transform:none}
 }
 @media(prefers-reduced-transparency:reduce){
   aside,header,.sheet-panel,.pip-card{background:var(--solid);
@@ -414,9 +366,7 @@ input:focus{background:var(--solid);border-color:var(--accent);
 /* 名人持仓栏目 */
 .search-hits{display:flex;flex-direction:column;gap:6px;margin:10px 0}
 .hit-row{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--line);
-  border-radius:var(--r-s);background:var(--solid);cursor:pointer;text-align:left;font:inherit;
-  transition:border-color .2s var(--spring),box-shadow .2s var(--spring),transform .12s var(--spring)}
-.hit-row:active{transform:scale(.99)}
+  border-radius:var(--r-s);background:var(--solid);cursor:pointer;text-align:left;font:inherit;transition:.2s var(--spring)}
 .hit-row:hover{border-color:var(--accent);box-shadow:var(--shadow-s)}
 .hit-row b{flex:0 0 auto}
 .hit-row span{color:var(--ink-4);font-size:12px}
@@ -451,3 +401,187 @@ input:focus{background:var(--solid);border-color:var(--accent);
 @media(max-width:900px){.moves-board{grid-template-columns:1fr}
   .tl-row{grid-template-columns:96px 52px 68px;gap:8px}
   .tl-amount,.tl-asset{display:none}}
+
+/* ── 认证页面 ─────────────────────────────────────── */
+.auth-gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+.auth-card {
+  width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+}
+.auth-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 3px;
+}
+.auth-tabs button {
+  flex: 1;
+  padding: 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.auth-tabs button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.auth-form input {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+.auth-submit {
+  padding: 11px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+.auth-submit:hover { opacity: .88; }
+.remember-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.auth-msg { font-size: 13px; color: var(--negative); margin: 0; }
+.auth-msg.ok { color: var(--positive); }
+.auth-hint { font-size: 12px; color: var(--text-muted); margin: 0; }
+.logout-btn {
+  margin: 12px 12px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: color .15s;
+}
+.logout-btn:hover { color: var(--negative); border-color: var(--negative); }
+
+/* ── 认证页面 ─────────────────────────────────────── */
+.auth-gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+.auth-card {
+  width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+}
+.auth-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 3px;
+}
+.auth-tabs button {
+  flex: 1;
+  padding: 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.auth-tabs button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.auth-form input {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+.auth-submit {
+  padding: 11px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+.auth-submit:hover { opacity: .88; }
+.remember-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.auth-msg { font-size: 13px; color: var(--negative); margin: 0; }
+.auth-msg.ok { color: var(--positive); }
+.auth-hint { font-size: 12px; color: var(--text-muted); margin: 0; }
+.logout-btn {
+  margin: 12px 12px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: color .15s;
+}
+.logout-btn:hover { color: var(--negative); border-color: var(--negative); }
+
+.brand-logo {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
