@@ -37,6 +37,7 @@ services:
     env_file: .env
     volumes:
       - archive_data:/data/archive
+      - edgar_data:/data/edgar
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,6 +55,12 @@ services:
   worker:
     <<: *backend
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    healthcheck:
+      disable: true
+
+  sec-worker:
+    <<: *backend
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 -Q sec_heavy -n sec@%h
     healthcheck:
       disable: true
 
@@ -92,3 +99,4 @@ volumes:
   caddy_config:
   archive_data:
   finnhub_data:
+  edgar_data:

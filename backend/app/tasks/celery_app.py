@@ -9,8 +9,10 @@ import hashlib
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import (
+    CongressTrade,
     DailyNewsArchive,
     EarningsEvent,
+    FigurePosition,
     Investigation,
     InvestigationStatus,
     NewsItem,
@@ -18,11 +20,19 @@ from app.models import (
     QuarterlyFinancial,
     Report,
     ReportType,
+    Sec13FHolding,
+    SecCusipMap,
+    SecEvent,
+    SecFiling,
+    SecFinancialPeriod,
+    SecInsiderTrade,
+    TrackedFigure,
     WatchlistItem,
 )
 from app.services import archive
 from app.services.alerting import evaluate_quote
 from app.services.financials import quarters_from_yf
+from app.services.sec_edgar import fetch_filings
 from app.services.market_context import build_market_context
 from app.services.llm import curate_daily_news, generate_analysis
 from app.services.market_calendar import market_status
@@ -48,6 +58,16 @@ celery_app.conf.beat_schedule = {
     "curate-daily-news": {"task": "app.tasks.celery_app.curate_daily_archives", "schedule": 1800},
     "sync-financials": {"task": "app.tasks.celery_app.sync_financials", "schedule": 43200},
     "translate-news-titles": {"task": "app.tasks.celery_app.translate_news_titles", "schedule": 60},
+    "summarize-sec-events": {"task": "app.tasks.celery_app.summarize_sec_events", "schedule": 120},
+    "sync-sec-filings": {"task": "app.tasks.celery_app.sync_sec_filings", "schedule": 21600},
+    "sync-sec-events": {"task": "app.tasks.celery_app.sync_sec_events", "schedule": 21600},
+    "sync-sec-insider": {"task": "app.tasks.celery_app.sync_sec_insider", "schedule": 21600},
+    "sync-sec-financials": {"task": "app.tasks.celery_app.sync_sec_financials", "schedule": 43200},
+    # 13F 每季度才发布一次，每天跑一次即可（任务内部靠数据集内容判重，无新数据则空转）
+    "sync-sec-13f": {"task": "app.tasks.celery_app.sync_sec_13f", "schedule": 86400},
+    # 政客交易：按自选股拉相关交易（6h）；追踪名人全量交易+持仓叠加（12h）
+    "sync-congress-trades": {"task": "app.tasks.celery_app.sync_congress_trades", "schedule": 21600},
+    "sync-tracked-figures": {"task": "app.tasks.celery_app.sync_tracked_figures", "schedule": 43200},
 }
 
 
@@ -261,6 +281,82 @@ def translate_news_titles():
     return {"claimed": len(claimed), "translated": translated, "failed": failed}
 
 
+@celery_app.task(name="app.tasks.celery_app.summarize_sec_events")
+def summarize_sec_events():
+    """对已入库的 8-K/6-K 事件正文做 Haiku 中文翻译+总结（默认队列，纯 API 调用）。"""
+    if not settings.translation_api_key:
+        return {"skipped": "translation_api_key_missing"}
+
+    from app.services.sec_extract import summarize_sec_event
+
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        rows = db.scalars(
+            select(SecEvent)
+            .where(
+                SecEvent.text.isnot(None),
+                SecEvent.text != "",
+                or_(
+                    SecEvent.summary_status == "pending",
+                    (SecEvent.summary_status == "failed")
+                    & (SecEvent.summary_attempts < settings.translation_max_attempts)
+                    & (
+                        (SecEvent.summary_next_retry_at.is_(None))
+                        | (SecEvent.summary_next_retry_at <= now)
+                    ),
+                    (SecEvent.summary_status == "processing")
+                    & (SecEvent.summary_next_retry_at <= now),
+                ),
+            )
+            .order_by(SecEvent.id)
+            .limit(settings.translation_batch_size)
+            .with_for_update(skip_locked=True)
+        ).all()
+        claimed = [(r.id, r.item_label, r.form, r.text) for r in rows]
+        for row in rows:
+            row.summary_status = "processing"
+            row.summary_attempts += 1
+            row.summary_next_retry_at = now + timedelta(minutes=5)
+        db.commit()
+
+    summarized = 0
+    failed = 0
+    for event_id, item_label, form, text in claimed:
+        input_hash = hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+        try:
+            value, model = summarize_sec_event(item_label, form, text)
+        except Exception as error:
+            with SessionLocal() as db:
+                item = db.get(SecEvent, event_id)
+                if item and item.text == text:
+                    retryable = _translation_retryable(error)
+                    exhausted = item.summary_attempts >= settings.translation_max_attempts
+                    item.summary_status = "failed"
+                    item.summary_last_error = str(error)[:1000]
+                    item.summary_next_retry_at = (
+                        now + timedelta(minutes=2 ** item.summary_attempts)
+                        if retryable and not exhausted
+                        else None
+                    )
+                    db.commit()
+            failed += 1
+            continue
+
+        with SessionLocal() as db:
+            item = db.get(SecEvent, event_id)
+            if not item or item.text != text:
+                continue
+            item.summary_zh = value or None
+            item.summary_model = model
+            item.summary_input_hash = input_hash
+            item.summary_status = "completed" if model else "skipped"
+            item.summary_last_error = None
+            item.summary_next_retry_at = None
+            db.commit()
+            summarized += 1
+    return {"claimed": len(claimed), "summarized": summarized, "failed": failed}
+
+
 @celery_app.task(name="app.tasks.celery_app.poll_news")
 def poll_news(ticker: str | None = None):
     market_date = market_status()["checked_at"][:10]
@@ -407,6 +503,337 @@ def sync_ticker_financials(ticker: str):
         return {"ticker": ticker, "synced": ok}
 
 
+def _sync_ticker_filings(db, ticker: str) -> int:
+    """同步单只 SEC filing 到 DB（按 accession 去重 upsert）。返回新增/更新条数。"""
+    try:
+        filings = fetch_filings(ticker)
+    except Exception:
+        return 0
+    changed = 0
+    for dto in filings:
+        if not dto.accession_number:
+            continue
+        row = db.scalar(
+            select(SecFiling).where(
+                SecFiling.ticker == dto.ticker,
+                SecFiling.accession_number == dto.accession_number,
+            )
+        )
+        if not row:
+            row = SecFiling(ticker=dto.ticker, accession_number=dto.accession_number)
+            db.add(row)
+        row.cik = dto.cik
+        row.form = dto.form
+        row.form_label = dto.form_label
+        row.items = dto.items
+        row.event_labels = dto.event_labels
+        row.priority = dto.priority
+        row.filing_date = dto.filing_date
+        row.report_date = dto.report_date
+        row.primary_document = dto.primary_document
+        row.filing_url = dto.filing_url
+        row.raw_payload = dto.raw_payload
+        changed += 1
+    return changed
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_sec_filings")
+def sync_sec_filings():
+    with SessionLocal() as db:
+        tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        total = sum(_sync_ticker_filings(db, ticker) for ticker in tickers)
+        db.commit()
+        return {"tickers": len(tickers), "filings": total}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_ticker_filings")
+def sync_ticker_filings(ticker: str):
+    with SessionLocal() as db:
+        changed = _sync_ticker_filings(db, ticker)
+        db.commit()
+        return {"ticker": ticker, "filings": changed}
+
+
+# ---------------------------------------------------------------- SEC edgartools 深挖抽取
+# 以下任务经 edgartools 解析 XBRL/正文，内存开销大，统一路由到 sec_heavy 队列
+# （独立 --concurrency=1 worker），保证永不并发解析，规避 2.9G VPS 的 OOM。
+
+_SEC_EVENT_FORMS = ("8-K", "6-K")
+
+
+def _recent_accessions(db, ticker: str, forms: tuple[str, ...], limit: int = 15):
+    """从 sec_filings 索引取某 ticker 指定 form 的近期 filing。"""
+    rows = db.scalars(
+        select(SecFiling)
+        .where(SecFiling.ticker == ticker, SecFiling.form.in_(forms))
+        .order_by(SecFiling.filing_date.desc(), SecFiling.id.desc())
+        .limit(limit)
+    ).all()
+    return rows
+
+
+def _sync_ticker_sec_events(db, ticker: str) -> int:
+    from app.services.sec_extract import extract_events
+
+    filings = _recent_accessions(db, ticker, _SEC_EVENT_FORMS)
+    if not filings:
+        return 0
+    cik = filings[0].cik
+    rows = [(f.accession_number, f.form, f.filing_date, f.filing_url) for f in filings]
+    try:
+        events = extract_events(ticker, cik, rows)
+    except Exception:
+        return 0
+    changed = 0
+    for dto in events:
+        row = db.scalar(
+            select(SecEvent).where(
+                SecEvent.accession_number == dto.accession_number,
+                SecEvent.item_code == dto.item_code,
+            )
+        )
+        if not row:
+            row = SecEvent(accession_number=dto.accession_number, item_code=dto.item_code)
+            db.add(row)
+        row.ticker = dto.ticker
+        row.cik = dto.cik
+        row.form = dto.form
+        row.item_label = dto.item_label
+        row.priority = dto.priority
+        if row.text != dto.text:
+            # 正文变化才重置总结状态，避免每次重扫都重新翻译
+            row.text = dto.text
+            row.summary_status = "pending"
+            row.summary_next_retry_at = None
+            row.summary_attempts = 0
+        row.filing_date = dto.filing_date
+        row.filing_url = dto.filing_url
+        changed += 1
+    return changed
+
+
+def _sync_ticker_sec_insider(db, ticker: str) -> int:
+    from app.services.sec_extract import extract_insider
+
+    filings = _recent_accessions(db, ticker, ("4",), limit=20)
+    if not filings:
+        return 0
+    cik = filings[0].cik
+    rows = [(f.accession_number, f.filing_url) for f in filings]
+    try:
+        trades = extract_insider(ticker, cik, rows)
+    except Exception:
+        return 0
+    changed = 0
+    for dto in trades:
+        row = db.scalar(
+            select(SecInsiderTrade).where(
+                SecInsiderTrade.accession_number == dto.accession_number,
+                SecInsiderTrade.insider_name == dto.insider_name,
+                SecInsiderTrade.transaction_date == dto.transaction_date,
+                SecInsiderTrade.transaction_code == dto.transaction_code,
+                SecInsiderTrade.shares == dto.shares,
+            )
+        )
+        if not row:
+            row = SecInsiderTrade(
+                accession_number=dto.accession_number, insider_name=dto.insider_name,
+                transaction_date=dto.transaction_date, transaction_code=dto.transaction_code,
+                shares=dto.shares,
+            )
+            db.add(row)
+        row.ticker = dto.ticker
+        row.cik = dto.cik
+        row.insider_title = dto.insider_title
+        row.price = dto.price
+        row.value = dto.value
+        row.shares_owned_after = dto.shares_owned_after
+        row.flag = dto.flag
+        row.filing_url = dto.filing_url
+        changed += 1
+    return changed
+
+
+def _sync_ticker_sec_financials(db, ticker: str) -> int:
+    """XBRL 解析昂贵：仅当出现未入库的新 10-K/10-Q 时才解析。"""
+    from app.services.sec_extract import extract_financials
+
+    latest = db.scalar(
+        select(SecFiling)
+        .where(SecFiling.ticker == ticker, SecFiling.form.in_(("10-K", "10-Q", "20-F")))
+        .order_by(SecFiling.filing_date.desc(), SecFiling.id.desc())
+        .limit(1)
+    )
+    if latest is None:
+        return 0
+    already = db.scalar(
+        select(SecFinancialPeriod.id).where(
+            SecFinancialPeriod.ticker == ticker,
+            SecFinancialPeriod.accession_number == latest.accession_number,
+        )
+    )
+    if already:
+        return 0  # 无新财报，跳过昂贵解析
+    try:
+        periods = extract_financials(ticker, form=latest.form)
+    except Exception:
+        return 0
+    changed = 0
+    for dto in periods:
+        row = db.scalar(
+            select(SecFinancialPeriod).where(
+                SecFinancialPeriod.ticker == dto.ticker,
+                SecFinancialPeriod.fiscal_year == dto.fiscal_year,
+                SecFinancialPeriod.fiscal_period == dto.fiscal_period,
+                SecFinancialPeriod.form == dto.form,
+            )
+        )
+        if not row:
+            row = SecFinancialPeriod(
+                ticker=dto.ticker, fiscal_year=dto.fiscal_year,
+                fiscal_period=dto.fiscal_period, form=dto.form,
+            )
+            db.add(row)
+        row.period_end = dto.period_end
+        row.filed_at = dto.filed_at
+        row.accession_number = latest.accession_number
+        row.revenue = dto.revenue
+        row.net_income = dto.net_income
+        row.operating_income = dto.operating_income
+        row.gross_profit = dto.gross_profit
+        row.eps_basic = dto.eps_basic
+        row.eps_diluted = dto.eps_diluted
+        row.cash_and_equivalents = dto.cash_and_equivalents
+        row.total_debt = dto.total_debt
+        row.shares_outstanding = dto.shares_outstanding
+        row.operating_cash_flow = dto.operating_cash_flow
+        row.currency = dto.currency
+        row.raw_payload = dto.raw_payload
+        changed += 1
+    return changed
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_sec_events", queue="sec_heavy")
+def sync_sec_events():
+    with SessionLocal() as db:
+        tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        total = 0
+        for ticker in tickers:
+            total += _sync_ticker_sec_events(db, ticker)
+            db.commit()
+        return {"tickers": len(tickers), "events": total}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_sec_insider", queue="sec_heavy")
+def sync_sec_insider():
+    with SessionLocal() as db:
+        tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        total = 0
+        for ticker in tickers:
+            total += _sync_ticker_sec_insider(db, ticker)
+            db.commit()
+        return {"tickers": len(tickers), "insider_trades": total}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_sec_financials", queue="sec_heavy")
+def sync_sec_financials():
+    with SessionLocal() as db:
+        tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        total = 0
+        for ticker in tickers:
+            total += _sync_ticker_sec_financials(db, ticker)
+            db.commit()
+        return {"tickers": len(tickers), "periods": total}
+
+
+def _known_cusip_map(db) -> dict[str, str]:
+    """已持久化的 cusip→ticker 映射（供 13F 精确过滤）。"""
+    rows = db.scalars(select(SecCusipMap)).all()
+    return {r.cusip: r.ticker for r in rows}
+
+
+def _sync_13f(db, force: bool = False) -> dict:
+    """下载最新 13F 数据集，按 CUSIP 反查自选股持仓并 upsert。
+
+    幂等：若最新季度持仓已入库且非强制，则跳过下载（13F 季度才更新，避免每天重下 90MB）。
+    """
+    from app.services.sec_13f import collect_13f_holdings, latest_dataset_url
+
+    tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+    if not tickers:
+        return {"skipped": "no_watchlist"}
+    if not force:
+        # 若已有任意持仓在近 80 天内同步过，说明本季度已采集，跳过（13F 季度才更新，避免每天重下 90MB）
+        recent = db.scalar(
+            select(Sec13FHolding.id).where(Sec13FHolding.synced_at >= datetime.now(UTC) - timedelta(days=80)).limit(1)
+        )
+        if recent:
+            return {"skipped": "already_synced_this_quarter"}
+    known = _known_cusip_map(db)
+    holdings, discovered = collect_13f_holdings(tickers, known)
+    # 回写新发现的 CUSIP 映射
+    for cusip, (ticker, issuer) in discovered.items():
+        exists = db.scalar(select(SecCusipMap.id).where(SecCusipMap.ticker == ticker, SecCusipMap.cusip == cusip))
+        if not exists:
+            db.add(SecCusipMap(ticker=ticker, cusip=cusip, issuer_name=issuer[:200], source="issuer_match"))
+    db.flush()
+    # upsert 持仓（唯一键 ticker+accession+report_period）
+    inserted = 0
+    for h in holdings:
+        if h.report_period is None:
+            continue
+        existing = db.scalar(
+            select(Sec13FHolding).where(
+                Sec13FHolding.ticker == h.ticker,
+                Sec13FHolding.accession_number == h.accession_number,
+                Sec13FHolding.report_period == h.report_period,
+            )
+        )
+        if existing:
+            existing.manager_name = h.manager_name
+            existing.value_usd = h.value_usd
+            existing.shares = h.shares
+            existing.put_call = h.put_call
+            existing.filing_date = h.filing_date
+            existing.synced_at = datetime.now(UTC)
+        else:
+            db.add(
+                Sec13FHolding(
+                    ticker=h.ticker, cusip=h.cusip, manager_name=h.manager_name,
+                    accession_number=h.accession_number, report_period=h.report_period,
+                    filing_date=h.filing_date, value_usd=h.value_usd, shares=h.shares,
+                    put_call=h.put_call,
+                )
+            )
+            inserted += 1
+    return {"tickers": len(tickers), "holdings": len(holdings), "inserted": inserted, "new_cusips": len(discovered)}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_sec_13f", queue="sec_heavy")
+def sync_sec_13f(force: bool = False):
+    with SessionLocal() as db:
+        result = _sync_13f(db, force=force)
+        db.commit()
+        return result
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_ticker_sec_all", queue="sec_heavy")
+def sync_ticker_sec_all(ticker: str):
+    """单只串行深挖：先确保 filing 索引已入库，再抽 events + insider + financials。"""
+    with SessionLocal() as db:
+        _sync_ticker_filings(db, ticker)
+        db.commit()
+        events = _sync_ticker_sec_events(db, ticker)
+        db.commit()
+        insider = _sync_ticker_sec_insider(db, ticker)
+        db.commit()
+        periods = _sync_ticker_sec_financials(db, ticker)
+        db.commit()
+        if events:
+            summarize_sec_events.delay()
+        return {"ticker": ticker, "events": events, "insider_trades": insider, "periods": periods}
+
+
 def _financials_text(db, ticker: str) -> str:
     rows = db.scalars(
         select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker).order_by(QuarterlyFinancial.period_end.desc()).limit(4)
@@ -453,3 +880,198 @@ def earnings_reports():
                 continue
         db.commit()
         return {"events": len(events)}
+
+
+def _upsert_congress_trade(db, raw: dict, filer_meta: dict | None = None) -> bool:
+    """把一条 kadoa 交易 upsert 进 congress_trades（按 source_uid 去重）。返回是否新增。"""
+    from app.services import congress as cg
+
+    uid = raw.get("id")
+    if not uid:
+        return False
+    existing = db.scalar(select(CongressTrade).where(CongressTrade.source_uid == uid))
+    if existing:
+        return False
+    low, high, label = cg.amount_bounds(raw)
+    meta = filer_meta or {}
+    ticker = (raw.get("ticker") or "").strip().upper() or None
+    db.add(CongressTrade(
+        source_uid=uid,
+        filer_id=raw.get("filer_id") or meta.get("id") or "",
+        filer_name=meta.get("full_name") or raw.get("filer_name") or raw.get("filer_id") or "",
+        chamber=meta.get("chamber"),
+        branch=meta.get("branch"),
+        party=meta.get("party"),
+        state=meta.get("state"),
+        ticker=ticker,
+        asset_name=raw.get("asset_name"),
+        asset_type=raw.get("asset_type"),
+        transaction_type=raw.get("transaction_type"),
+        transaction_date=cg.parse_date(raw.get("transaction_date")),
+        filing_date=cg.parse_date(raw.get("filing_date")),
+        amount_low=low,
+        amount_high=high,
+        amount_label=label,
+        is_late=bool(raw.get("is_late")),
+        comment=raw.get("comment"),
+    ))
+    return True
+
+
+def _sync_ticker_congress(db, ticker: str) -> int:
+    """按 ticker 拉 kadoa 相关交易入库。返回新增条数。"""
+    from app.services import congress as cg
+
+    try:
+        trades = cg.fetch_ticker_trades(ticker)
+    except Exception:
+        return 0
+    added = 0
+    for raw in trades:
+        if not raw.get("filer_name") and raw.get("filer_id"):
+            raw = {**raw, "filer_name": raw.get("filer_id")}
+        if _upsert_congress_trade(db, raw):
+            added += 1
+    return added
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_congress_trades")
+def sync_congress_trades():
+    with SessionLocal() as db:
+        tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        total = sum(_sync_ticker_congress(db, t) for t in tickers)
+        db.commit()
+        return {"tickers": len(tickers), "added": total}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_ticker_congress")
+def sync_ticker_congress(ticker: str):
+    with SessionLocal() as db:
+        added = _sync_ticker_congress(db, ticker)
+        db.commit()
+        return {"ticker": ticker, "added": added}
+
+
+def _seed_figures_and_positions(db) -> None:
+    """把种子人物档案 + 持仓基线写入 DB（幂等：已存在则跳过档案，持仓重置基线）。"""
+    from app.data import figure_seed as fs
+
+    for f in fs.FIGURES:
+        row = db.scalar(select(TrackedFigure).where(TrackedFigure.slug == f["slug"]))
+        if not row:
+            row = TrackedFigure(slug=f["slug"])
+            db.add(row)
+        row.display_name = f["display_name"]
+        row.kind = f["kind"]
+        row.kadoa_filer_id = f["kadoa_filer_id"]
+        row.photo_url = f["photo_url"]
+        row.note = f["note"]
+        row.is_seed = True
+        row.extra = {"baseline_date": f.get("baseline_date")}
+    positions = fs.all_positions()
+    for slug, (rows, is_percent) in positions.items():
+        for ticker, name, cat, value, note in rows:
+            pos = db.scalar(select(FigurePosition).where(
+                FigurePosition.figure_slug == slug,
+                FigurePosition.ticker.is_(ticker) if ticker is None else FigurePosition.ticker == ticker,
+                FigurePosition.asset_name == name,
+            ))
+            if not pos:
+                pos = FigurePosition(figure_slug=slug, ticker=ticker, asset_name=name)
+                db.add(pos)
+            pos.category = cat
+            pos.baseline_value = float(value)
+            pos.adjusted_value = float(value)  # 叠加时从基线重算
+            pos.is_percent = is_percent
+            pos.note = note
+    if fs.CATHIE_MOVES:
+        cw = db.scalar(select(TrackedFigure).where(TrackedFigure.slug == "cathie_wood"))
+        if cw:
+            cw.extra = {**(cw.extra or {}), "moves": fs.CATHIE_MOVES}
+
+
+def _apply_trades_to_positions(db, slug: str, filer_id: str, baseline_date) -> None:
+    """把基线日期后的交易叠加到该 slug 的股票持仓（Full→归零/Partial→减/Purchase→加/Exchange→跳过）。"""
+    from app.services import congress as cg
+
+    positions = {
+        p.ticker: p for p in db.scalars(select(FigurePosition).where(FigurePosition.figure_slug == slug)).all()
+        if p.ticker
+    }
+    # 先把 adjusted 重置回基线，避免重复叠加
+    for p in positions.values():
+        p.adjusted_value = p.baseline_value
+    trades = db.scalars(
+        select(CongressTrade).where(CongressTrade.filer_id == filer_id).order_by(CongressTrade.transaction_date)
+    ).all()
+    base = cg.parse_date(baseline_date) if isinstance(baseline_date, str) else baseline_date
+    for t in trades:
+        if not t.ticker or t.ticker not in positions:
+            continue
+        if base and t.transaction_date and t.transaction_date <= base:
+            continue
+        pos = positions[t.ticker]
+        mid = ((t.amount_low or 0) + (t.amount_high or 0)) / 2 if (t.amount_low or t.amount_high) else 0
+        tt = (t.transaction_type or "").lower()
+        if "purchase" in tt:
+            pos.adjusted_value += mid
+        elif "full" in tt:
+            pos.adjusted_value = 0.0
+        elif "partial" in tt or "sale" in tt:
+            pos.adjusted_value = max(0.0, pos.adjusted_value - mid)
+        # exchange 跳过
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_subscribed_figure")
+def sync_subscribed_figure(filer_id: str):
+    """订阅新政客后立即拉其全部交易入库（非种子，不做持仓叠加）。"""
+    from app.services import congress as cg
+
+    with SessionLocal() as db:
+        try:
+            data = cg.fetch_filer(filer_id)
+        except Exception:
+            return {"filer_id": filer_id, "added": 0, "error": "fetch_failed"}
+        if not data:
+            return {"filer_id": filer_id, "added": 0}
+        meta = data.get("filer") or {}
+        added = 0
+        for raw in data.get("trades", []):
+            raw = {**raw, "filer_id": filer_id}
+            if _upsert_congress_trade(db, raw, meta):
+                added += 1
+        db.commit()
+        return {"filer_id": filer_id, "added": added}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_tracked_figures")
+def sync_tracked_figures():
+    from app.services import congress as cg
+
+    with SessionLocal() as db:
+        _seed_figures_and_positions(db)
+        db.commit()
+        figures = db.scalars(select(TrackedFigure)).all()
+        result = {}
+        for fig in figures:
+            if not fig.kadoa_filer_id:
+                continue
+            try:
+                data = cg.fetch_filer(fig.kadoa_filer_id)
+            except Exception:
+                continue
+            if not data:
+                continue
+            meta = data.get("filer") or {}
+            added = 0
+            for raw in data.get("trades", []):
+                raw = {**raw, "filer_id": fig.kadoa_filer_id}
+                if _upsert_congress_trade(db, raw, meta):
+                    added += 1
+            db.commit()
+            if fig.is_seed:
+                baseline_date = (fig.extra or {}).get("baseline_date")
+                _apply_trades_to_positions(db, fig.slug, fig.kadoa_filer_id, baseline_date)
+                db.commit()
+            result[fig.slug] = added
+        return result

@@ -84,6 +84,34 @@ def fetch_yf_quarterly(ticker: str) -> list[dict]:
     return rows
 
 
+_MARKET_INDICES = [("^GSPC", "标普500"), ("^IXIC", "纳斯达克"), ("^DJI", "道琼斯")]
+
+
+def fetch_index_quotes() -> list[dict]:
+    """三大指数实时点位与涨跌（yfinance 免费源）。单个失败标 None，绝不编造。"""
+    out: list[dict] = []
+    for symbol, name in _MARKET_INDICES:
+        price = previous = None
+        try:
+            info = yf.Ticker(symbol).fast_info
+            last, prev = info.last_price, info.previous_close
+            price = float(last) if last else None
+            previous = float(prev) if prev else None
+        except Exception:
+            pass
+        change_points = (price - previous) if (price is not None and previous) else None
+        change_percent = (change_points / previous * 100) if (change_points is not None and previous) else None
+        out.append({
+            "symbol": symbol,
+            "name": name,
+            "price": price,
+            "previous_close": previous,
+            "change_points": change_points,
+            "change_percent": change_percent,
+        })
+    return out
+
+
 def fetch_quotes(tickers: list[str]) -> list[Quote]:
     quotes: list[Quote] = []
     for ticker in tickers:

@@ -9,8 +9,12 @@
   --shadow-m:0 2px 6px rgba(0,0,0,.05),0 12px 32px rgba(0,0,0,.08);
   --shadow-l:0 8px 24px rgba(0,0,0,.08),0 24px 64px rgba(0,0,0,.10);
   --r-s:12px; --r-m:18px; --r-l:24px;
-  --spring:cubic-bezier(.32,.72,0,1);
+  /* 动效曲线令牌:强 ease-out 给 UI 进出,iOS 抽屉曲线给可拖拽面。skill §3/review-animations */
+  --spring:cubic-bezier(.32,.72,0,1);          /* iOS 抽屉/移动曲线 */
+  --ease-out:cubic-bezier(.23,1,.32,1);        /* 强 ease-out:进出、悬浮抬升 */
+  --ease-in-out:cubic-bezier(.77,0,.175,1);    /* 强 ease-in-out:屏内位移 */
   font-family:var(--font); color:var(--ink); font-synthesis:none;
+  font-optical-sizing:auto;
   -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
 }
 *{box-sizing:border-box}
@@ -31,6 +35,8 @@ aside{position:fixed;width:248px;height:100vh;padding:26px 16px;z-index:20;
 .mark{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;
   background:linear-gradient(160deg,#0a84ff,#0071e3);color:#fff;font-weight:700;
   box-shadow:0 4px 12px rgba(0,113,227,.35)}
+.mark-logo{width:42px;height:42px;border-radius:12px;object-fit:cover;
+  box-shadow:0 4px 12px rgba(0,0,0,.18);flex-shrink:0}
 .brand strong{display:block;font-size:15px;letter-spacing:-.01em}
 .brand small{display:block;color:var(--ink-4);font-size:11px;margin-top:3px}
 nav{display:flex;flex-direction:column;gap:3px}
@@ -49,7 +55,10 @@ header{position:sticky;top:0;z-index:10;display:flex;justify-content:space-betwe
   align-items:flex-end;margin:-40px calc(-1*clamp(24px,4.5vw,72px)) 30px;
   padding:22px clamp(24px,4.5vw,72px) 18px;
   background:var(--glass-2);backdrop-filter:blur(24px) saturate(180%);
-  -webkit-backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid var(--line-2)}
+  -webkit-backdrop-filter:blur(24px) saturate(180%)}
+/* 滚动边缘效果:不用 1px 硬分割线,在浮动头部与内容交界处渐隐一道柔和阴影(skill §12) */
+header::after{content:'';position:absolute;left:0;right:0;bottom:-18px;height:18px;pointer-events:none;
+  background:linear-gradient(rgba(0,0,0,.05),transparent)}
 .eyebrow{color:var(--accent-ink);letter-spacing:.14em;font-size:11px;font-weight:600;
   margin:0 0 6px;text-transform:uppercase}
 h1{font-size:clamp(26px,3vw,34px);margin:0;letter-spacing:-.028em;font-weight:700;line-height:1.08}
@@ -67,6 +76,14 @@ h2{letter-spacing:-.02em;font-weight:600}
   align-items:center;justify-content:center}
 .hero-stat strong{font-size:34px;letter-spacing:-.03em;font-weight:700}
 .hero-stat span{color:var(--ink-4);font-size:12px;font-weight:500;margin-top:2px}
+.index-hero{display:flex;flex-direction:column;gap:18px;align-items:flex-start}
+.index-hero .badge{align-self:flex-start}
+.index-row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;width:100%}
+.index-card{display:flex;flex-direction:column;gap:6px;padding:16px 20px;border-radius:var(--r-m);
+  background:var(--solid);border:1px solid var(--line)}
+.index-card .index-name{color:var(--ink-4);font-size:12px;font-weight:600;letter-spacing:.02em}
+.index-card strong{font-size:30px;letter-spacing:-.03em;font-weight:700}
+.index-card>span:last-child{font-size:14px;font-weight:600}
 .section-title{display:flex;justify-content:space-between;align-items:center;margin:30px 0 14px}
 .section-title h2{font-size:17px;margin:0}
 .section-title button{border:0;background:transparent;color:var(--accent-ink);cursor:pointer;
@@ -77,13 +94,21 @@ h2{letter-spacing:-.02em;font-weight:600}
   background:var(--solid);border:1px solid var(--line);box-shadow:var(--shadow-s);
   display:flex;flex-direction:column;
   transition:transform .3s var(--spring),box-shadow .3s var(--spring)}
-.stock-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-m)}
 .stock-card>div{display:flex;justify-content:space-between}
 .stock-card small{font-size:10px;color:var(--ink-4)}
 .stock-card>strong{font-size:30px;margin:auto 0 6px;letter-spacing:-.03em;font-weight:700}
 .ticker{font-weight:700;letter-spacing:.02em;font-size:15px}
 .positive{color:var(--up);font-weight:600}
 .negative{color:var(--down);font-weight:600}
+.vol-tag{margin-top:4px;align-self:flex-start;font-size:10px;font-weight:600;
+  padding:1px 7px;border-radius:999px;letter-spacing:.02em}
+.vol-tag.heavy{color:var(--up);background:color-mix(in srgb,var(--up) 14%,transparent)}
+.vol-tag.light{color:var(--ink-4);background:color-mix(in srgb,var(--ink-4) 12%,transparent)}
+.explainer{margin:10px 0 4px;padding:14px 16px;border-radius:var(--r-m);
+  background:color-mix(in srgb,var(--accent,#4a7dff) 6%,var(--solid));
+  border:1px solid var(--line)}
+.explainer b{font-size:13px}
+.explainer p{margin:6px 0 0;font-size:12px;line-height:1.7;color:var(--ink-3,var(--ink-4))}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:28px}
 .split>div{background:var(--solid);border:1px solid var(--line);border-radius:var(--r-m);
   padding:8px 22px 16px;box-shadow:var(--shadow-s)}
@@ -123,7 +148,7 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .table-head,.table-row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 70px;
   align-items:center;padding:14px 18px}
 .table-head{font-size:11px;color:var(--ink-4);background:#fafafa;font-weight:600;
-  text-transform:uppercase;letter-spacing:.03em}
+  text-transform:uppercase;letter-spacing:.05em}
 .table-row{border-top:1px solid var(--line-2);transition:background .18s}
 .table-row:hover{background:rgba(0,0,0,.02)}
 .table button{border:0;background:none;cursor:pointer}
@@ -136,7 +161,6 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .investigations article{display:grid;grid-template-columns:1fr auto;gap:12px;padding:24px;
   border:1px solid var(--line);background:var(--solid);border-radius:var(--r-m);
   box-shadow:var(--shadow-s);transition:box-shadow .3s var(--spring)}
-.investigations article:hover{box-shadow:var(--shadow-m)}
 .investigations h2{margin:10px 0 4px;font-size:19px}
 .investigations p{color:var(--ink-3);margin:0;font-size:13px}
 .investigations strong{font-size:30px;letter-spacing:-.03em}
@@ -150,7 +174,6 @@ input:focus{background:var(--solid);border-color:var(--accent);
   padding:16px;border:1px solid var(--line);background:var(--solid);color:inherit;
   border-radius:var(--r-s);text-align:left;cursor:pointer;box-shadow:var(--shadow-s);
   transition:transform .18s var(--spring),box-shadow .25s,border-color .2s}
-.report-list button:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
 .report-list button:active{transform:scale(.99)}
 .report-list button.selected{border-color:var(--accent);
   box-shadow:0 0 0 3px rgba(0,113,227,.14),var(--shadow-m)}
@@ -194,7 +217,6 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .news-card{padding:20px;border:1px solid var(--line);background:var(--solid);
   border-radius:var(--r-m);box-shadow:var(--shadow-s);
   transition:box-shadow .3s var(--spring),transform .3s var(--spring)}
-.news-card:hover{box-shadow:var(--shadow-m);transform:translateY(-2px)}
 .news-body{min-width:0}
 .news-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:var(--ink-4);
   font-size:11px;margin-bottom:9px}
@@ -218,7 +240,6 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .metric-card{padding:18px 20px;border:1px solid var(--line);background:var(--solid);
   border-radius:var(--r-s);display:flex;flex-direction:column;gap:6px;box-shadow:var(--shadow-s);
   transition:transform .25s var(--spring),box-shadow .25s}
-.metric-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
 .metric-card span{color:var(--ink-4);font-size:12px;font-weight:500}
 .metric-card strong{font-size:23px;letter-spacing:-.025em;font-weight:700}
 .rating-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
@@ -229,6 +250,16 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .rt.hold{background:#eef0f4;color:var(--ink-3)}
 .rt.sell{background:rgba(255,59,48,.10);color:#c1271d}
 .rt.strong-sell{background:rgba(255,59,48,.18);color:#b0221a}
+.rating-gauge{padding:26px 6px 6px}
+.rg-track{position:relative;height:14px;border-radius:8px;background:linear-gradient(90deg,#0a8d43 0%,#5bc46a 25%,#e7c14a 50%,#f08a4b 75%,#d62b1f 100%)}
+.rg-pointer{position:absolute;top:-22px;transform:translateX(-50%);white-space:nowrap}
+.rg-pointer b{display:inline-block;background:var(--ink-1,#1c1c1e);color:#fff;font-size:12px;font-weight:600;padding:3px 8px;border-radius:6px}
+.rg-pointer::after{content:'';position:absolute;left:50%;top:100%;transform:translateX(-50%);border:6px solid transparent;border-top-color:var(--ink-1,#1c1c1e)}
+.rg-ticks{display:flex;margin-top:10px}
+.rg-tick{flex:1;text-align:center;display:flex;flex-direction:column;gap:2px}
+.rg-tick em{font-style:normal;font-size:12px;color:var(--ink-3)}
+.rg-tick small{font-size:13px;font-weight:600;color:var(--ink-2,#333)}
+.rg-period{margin-top:8px;font-size:12px;color:var(--ink-4)}
 .table-head.fin,.table-row.fin{grid-template-columns:.9fr 1fr 1.2fr 1.2fr 1.2fr .7fr .8fr 1.2fr}
 .chart-note{color:var(--ink-4);font-size:12px}
 .news-card.sec-urgent{border-left:3px solid var(--down)}
@@ -240,20 +271,120 @@ input:focus{background:var(--solid);border-color:var(--accent);
 .sec-prio.normal{background:rgba(0,113,227,.14);color:var(--accent-ink)}
 .sec-form{color:var(--ink-3);font-weight:600}
 .sec-event-tag{padding:4px 10px;border-radius:8px;background:#f0f0f2;color:var(--ink-2);font-size:12px}
-.chart-shell{height:640px;border:1px solid var(--line);border-radius:var(--r-m);
+.chart-shell{position:relative;height:640px;border:1px solid var(--line);border-radius:var(--r-m);
   overflow:hidden;background:var(--solid);box-shadow:var(--shadow-s)}
+/* 触屏遮罩:盖住 TradingView iframe,让手指上下滑动滚动页面而非被图表吞掉;
+   点一下才进入图表交互态。桌面不渲染此元素(见 App.tsx isTouch 判断)。 */
+.chart-mask{position:absolute;inset:0;z-index:2;border:0;cursor:pointer;
+  display:flex;align-items:flex-end;justify-content:center;padding-bottom:20px;
+  background:linear-gradient(transparent 60%,rgba(0,0,0,.04));
+  transition:opacity .2s var(--ease-out)}
+.chart-mask span{padding:8px 18px;border-radius:999px;font-size:13px;font-weight:600;color:var(--ink-2);
+  background:var(--glass);backdrop-filter:blur(20px) saturate(180%);
+  -webkit-backdrop-filter:blur(20px) saturate(180%);
+  border:1px solid rgba(255,255,255,.5);box-shadow:var(--shadow-s)}
+.chart-active{box-shadow:0 0 0 3px rgba(0,113,227,.22),var(--shadow-m)}
 .sec-summary-pending{opacity:.55;font-style:italic}
 .sec-original{margin:6px 0}
 .sec-original>summary{cursor:pointer;color:var(--accent-ink);font-size:13px;user-select:none;font-weight:500}
 .sec-original[open]>summary{margin-bottom:6px}
 .badge.closed{background:var(--ink-4)}
+
+/* 报告网格(详情改由底部弹窗呈现) */
+.report-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.report-tile{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:18px;
+  border:1px solid var(--line);background:var(--solid);color:inherit;border-radius:var(--r-m);
+  text-align:left;cursor:pointer;box-shadow:var(--shadow-s);
+  transition:transform .28s var(--spring),box-shadow .28s var(--spring),border-color .2s}
+.report-tile:active{transform:scale(.98)}
+.report-tile.selected{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,113,227,.14),var(--shadow-m)}
+.report-tile span{color:var(--accent-ink);font-size:11px;font-weight:600}
+.report-tile b{font-weight:600;line-height:1.4}
+.report-tile small{color:var(--ink-4);font-size:12px}
+
+/* tab 切换:内容整体轻交叉淡入 + 微上移,给栏目切换一点空间连续性。skill §7
+   key={tab} 使容器重挂载触发动画;只动 transform+opacity(GPU)。 */
+@keyframes tab-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.tab-view{animation:tab-in .32s var(--ease-out) both}
+
+/* 首屏卡片错峰进场:装饰性,30-80ms 递进,只做 transform+opacity(GPU)。skill §7/§11
+   纯 CSS 进入动画不阻塞交互;reduced-motion 下整体禁用(见文末媒体查询)。 */
+@keyframes card-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.stock-grid>.stock-card,.news-list>.news-card,.report-grid>.report-tile,.metric-grid>.metric-card{
+  animation:card-in .42s var(--ease-out) both}
+.stock-grid>.stock-card:nth-child(1),.news-list>.news-card:nth-child(1),.report-grid>.report-tile:nth-child(1),.metric-grid>.metric-card:nth-child(1){animation-delay:0ms}
+.stock-grid>.stock-card:nth-child(2),.news-list>.news-card:nth-child(2),.report-grid>.report-tile:nth-child(2),.metric-grid>.metric-card:nth-child(2){animation-delay:45ms}
+.stock-grid>.stock-card:nth-child(3),.news-list>.news-card:nth-child(3),.report-grid>.report-tile:nth-child(3),.metric-grid>.metric-card:nth-child(3){animation-delay:90ms}
+.stock-grid>.stock-card:nth-child(4),.news-list>.news-card:nth-child(4),.report-grid>.report-tile:nth-child(4),.metric-grid>.metric-card:nth-child(4){animation-delay:135ms}
+.stock-grid>.stock-card:nth-child(5),.news-list>.news-card:nth-child(5),.report-grid>.report-tile:nth-child(5),.metric-grid>.metric-card:nth-child(5){animation-delay:180ms}
+.stock-grid>.stock-card:nth-child(n+6),.news-list>.news-card:nth-child(n+6),.report-grid>.report-tile:nth-child(n+6),.metric-grid>.metric-card:nth-child(n+6){animation-delay:210ms}
+
+/* 悬浮抬升仅对精确指针(鼠标)生效:触屏点按会触发假 hover,导致点一下卡片"卡住"在抬起态。
+   review-animations 硬标准:@media (hover:hover) and (pointer:fine) 门控所有 :hover 位移。 */
+@media (hover:hover) and (pointer:fine){
+  .stock-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-m)}
+  .news-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
+  .metric-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
+  .report-tile:hover{transform:translateY(-3px);box-shadow:var(--shadow-m)}
+  .report-list button:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
+  .investigations article:hover{box-shadow:var(--shadow-m)}
+  .hit-row:hover{border-color:var(--accent);box-shadow:var(--shadow-s)}
+}
+
+/* ===== 底部弹窗:毛玻璃分层,体现前后级纵深 ===== */
+.sheet-root{position:fixed;inset:0;z-index:1000;display:flex;align-items:flex-end;justify-content:center}
+.sheet-scrim{position:absolute;inset:0;background:rgba(0,0,0,.32);
+  backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
+  opacity:0;will-change:opacity;cursor:pointer}
+.sheet-panel{position:relative;width:min(760px,100%);max-height:92vh;display:flex;flex-direction:column;
+  border-radius:22px 22px 0 0;overflow:hidden;will-change:transform;
+  background:var(--glass);backdrop-filter:blur(40px) saturate(200%);
+  -webkit-backdrop-filter:blur(40px) saturate(200%);
+  border:1px solid rgba(255,255,255,.5);border-bottom:0;
+  box-shadow:0 -8px 40px rgba(0,0,0,.18),0 -1px 0 rgba(255,255,255,.6) inset}
+.sheet-grip-zone{flex-shrink:0;padding:10px 0 8px;cursor:grab;touch-action:none;
+  user-select:none;-webkit-user-select:none}
+.sheet-grip-zone:active{cursor:grabbing}
+.sheet-grip{width:38px;height:5px;border-radius:999px;background:rgba(0,0,0,.18);margin:0 auto}
+.sheet-title{text-align:center;font-size:13px;font-weight:600;color:var(--ink-3);
+  margin-top:8px;letter-spacing:.02em}
+.sheet-scroll{overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+  padding:6px 26px 34px}
+.sheet-report{border:0;background:transparent;box-shadow:none;padding:0;min-height:0}
+.sheet-report>h2{margin-top:10px}
+
+/* ===== 画中画浮卡:悬浮于内容之上的独立层级 ===== */
+.pip-card{position:fixed;top:0;left:0;z-index:900;width:150px;
+  border-radius:20px;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;
+  will-change:transform;
+  background:var(--glass);backdrop-filter:blur(32px) saturate(190%);
+  -webkit-backdrop-filter:blur(32px) saturate(190%);
+  border:1px solid rgba(255,255,255,.55);
+  box-shadow:var(--shadow-l),0 1px 0 rgba(255,255,255,.6) inset;
+  transition:box-shadow .3s var(--spring)}
+.pip-card:active,.pip-card.dragging{cursor:grabbing;box-shadow:0 16px 48px rgba(0,0,0,.22),0 1px 0 rgba(255,255,255,.6) inset}
+.pip-card.dragging{transition:none}
+.pip-inner{padding:16px 18px;display:flex;flex-direction:column;gap:8px}
+.pip-head{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--ink-3)}
+.pip-head i{width:8px;height:8px;border-radius:50%;background:var(--ink-4)}
+.pip-head i.online{background:var(--up);box-shadow:0 0 0 4px rgba(52,199,89,.18)}
+.pip-inner>strong{font-size:26px;font-weight:700;letter-spacing:-.03em}
+.pip-inner>strong small{font-size:12px;color:var(--ink-4);font-weight:500}
+.pip-foot{display:flex;gap:14px;font-size:12px;color:var(--ink-3);font-weight:500}
 @media(prefers-reduced-motion:reduce){
   *{transition-duration:.01ms!important;animation-duration:.01ms!important}
   .stock-card:hover,.news-card:hover,.metric-card:hover,.report-list button:hover,
-  .investigations article:hover{transform:none}
+  .report-tile:hover,.investigations article:hover{transform:none}
+  /* 禁用错峰进场的位移,只留最终静态态(§14:去掉前庭性位移,保留可读性) */
+  .stock-grid>.stock-card,.news-list>.news-card,.report-grid>.report-tile,.metric-grid>.metric-card{
+    animation:none!important;opacity:1;transform:none}
+  /* Sheet 背板已由 JS 直接落位,这里确保面板不残留位移 */
+  .sheet-panel{transition:opacity .18s ease}
 }
 @media(prefers-reduced-transparency:reduce){
-  aside,header{background:var(--solid);backdrop-filter:none;-webkit-backdrop-filter:none}
+  aside,header,.sheet-panel,.pip-card{background:var(--solid);
+    backdrop-filter:none;-webkit-backdrop-filter:none}
+  .sheet-scrim{backdrop-filter:none;-webkit-backdrop-filter:none;background:rgba(0,0,0,.45)}
 }
 @media(prefers-contrast:more){
   :root{--line:rgba(0,0,0,.25);--line-2:rgba(0,0,0,.2);--ink-3:#48484a;--ink-4:#5a5a5f}
@@ -272,9 +403,51 @@ input:focus{background:var(--solid);border-color:var(--accent);
     -webkit-backdrop-filter:none;align-items:flex-start}
   .hero{grid-template-columns:1fr 1fr}
   .hero>div:first-child{grid-column:1/-1}
+  .index-row{grid-template-columns:1fr}
   .split,.report-layout{grid-template-columns:1fr}
   .table{overflow:auto}
   .table-head,.table-row{min-width:750px}
   .settings-grid{grid-template-columns:1fr}
   .clock{display:none}
 }
+
+/* 名人持仓栏目 */
+.search-hits{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.hit-row{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--line);
+  border-radius:var(--r-s);background:var(--solid);cursor:pointer;text-align:left;font:inherit;
+  transition:border-color .2s var(--spring),box-shadow .2s var(--spring),transform .12s var(--spring)}
+.hit-row:active{transform:scale(.99)}
+.hit-row:hover{border-color:var(--accent);box-shadow:var(--shadow-s)}
+.hit-row b{flex:0 0 auto}
+.hit-row span{color:var(--ink-4);font-size:12px}
+.hit-row em{margin-left:auto;color:var(--accent-ink);font-size:12px;font-style:normal}
+.pie-wrap{display:flex;gap:28px;align-items:center;flex-wrap:wrap;margin:12px 0 6px;
+  padding:18px;background:var(--solid);border:1px solid var(--line);border-radius:var(--r-m)}
+.pie-svg{flex:0 0 auto}
+.pie-legend{flex:1;min-width:260px;display:flex;flex-direction:column;gap:5px}
+.legend-row{display:flex;align-items:center;gap:9px;font-size:13px}
+.legend-row i{width:12px;height:12px;border-radius:3px;flex:0 0 auto}
+.legend-row b{flex:0 0 auto;min-width:56px}
+.legend-row span{color:var(--ink-4);font-size:11px}
+.legend-row em{margin-left:auto;font-style:normal;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.moves-board{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
+.moves-col{background:var(--solid);border:1px solid var(--line);border-radius:var(--r-m);padding:14px 16px}
+.moves-col h3{margin:0 0 10px;font-size:14px}
+.move-row{padding:7px 10px;border-radius:8px;font-size:13px;margin-bottom:5px;background:var(--glass-2)}
+.move-row.positive{color:var(--up)}
+.move-row.negative{color:var(--down)}
+.timeline{display:flex;flex-direction:column;gap:2px}
+.tl-row{display:grid;grid-template-columns:120px 64px 76px 130px 1fr;gap:10px;align-items:center;
+  padding:9px 12px;border-bottom:1px solid var(--line-2);font-size:13px}
+.tl-row:hover{background:var(--glass-2)}
+.tl-date{color:var(--ink-4);font-size:12px;font-variant-numeric:tabular-nums}
+.tl-date .late{color:var(--down);font-style:normal;font-size:11px}
+.tl-ticker{font-weight:600}
+.tl-type{font-weight:500}
+.tl-type.positive{color:var(--up)}
+.tl-type.negative{color:var(--down)}
+.tl-amount{color:var(--ink-3);font-variant-numeric:tabular-nums}
+.tl-asset{color:var(--ink-4);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:900px){.moves-board{grid-template-columns:1fr}
+  .tl-row{grid-template-columns:96px 52px 68px;gap:8px}
+  .tl-amount,.tl-asset{display:none}}

@@ -1,0 +1,28 @@
+# 本地预览专用覆盖文件：直接使用从 VPS 搬来的镜像，跳过构建。
+# 用法：docker compose up -d   （不要加 --build，否则会尝试重新构建）
+# caddy 归入 prod profile，本地默认不启动；改用 frontend 直接暴露端口预览。
+services:
+  finnhub-mcp:
+    image: stock-monitor-finnhub-mcp:latest
+    pull_policy: never
+
+  api:
+    image: stock-monitor-api:latest
+    pull_policy: never
+
+  worker:
+    image: stock-monitor-worker:latest
+    pull_policy: never
+
+  beat:
+    image: stock-monitor-beat:latest
+    pull_policy: never
+
+  frontend:
+    image: stock-monitor-frontend:latest
+    pull_policy: never
+    ports:
+      - "127.0.0.1:8080:80"
+
+  caddy:
+    profiles: ["prod"]

@@ -19,9 +19,9 @@ class Settings(BaseSettings):
     translation_max_attempts: int = 3
     market_timezone: str = "America/New_York"
     price_poll_minutes: int = 5
-    default_threshold_20m: float = 2.0
-    default_threshold_1h: float = 4.0
-    default_threshold_day: float = 6.0
+    default_threshold_20m: float = 5.0
+    default_threshold_1h: float = 5.0
+    default_threshold_day: float = 5.0
     alert_cooldown_minutes: int = 60
     investigation_interval_minutes: int = 20
     investigation_duration_minutes: int = 120
@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     archive_dir: str = "/data/archive"
     news_poll_minutes: int = 15
     news_relevance_threshold: float = 0.15
+    sec_user_agent: str = "stockMonitor/1.0 self-hosted@example.com"
+    edgar_local_data_dir: str = "/data/edgar"
+    sec_insider_heavy_sell_value: float = 1_000_000.0
+    # 13F ticker→CUSIP 手动兜底覆盖，形如 "IREN:45840M108,ABC:012345678"
+    sec_13f_cusip_overrides: str = ""
+    # 13F 数据集下载页（运行时解析真实 zip 链接，避免猜文件命名）
+    sec_13f_index_url: str = "https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
