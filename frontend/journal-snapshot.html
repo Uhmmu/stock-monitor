@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>交易日志快照</title>
+  <link rel="stylesheet" href="./src/styles.css" />
+  <style>
+    body{min-width:0}
+    .snapshot-main{grid-column:2;padding:40px clamp(24px,4.5vw,72px)}
+    .snapshot-card{background:linear-gradient(135deg,#f8fbff,#fff);border:1px solid var(--line);border-radius:var(--r-m);padding:18px;margin-bottom:22px;color:var(--ink-3)}
+    @media(max-width:860px){.snapshot-main{grid-column:1;padding:22px 18px}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="mobile-open">
+      <div class="brand"><img src="./public/logo.png" class="brand-logo" alt="logo"/><div><strong>小日向美香</strong><small>powered by 和泉妃爱 · v0.2.1</small></div><button class="mobile-menu-btn">关闭</button></div>
+      <nav>
+        <button>总览</button><button>自选股</button><button>异动中心</button><button>新闻中心</button>
+        <button>基本面</button><button>SEC 公告</button><button>名人持仓</button><button>图表</button>
+        <button>报告中心</button><button class="active">交易日志</button><button>监控设置</button>
+      </nav>
+      <div class="side-status"><i></i><span>当前休市</span></div>
+      <button class="logout-btn">退出 demo</button>
+    </aside>
+    <main class="snapshot-main">
+      <header>
+        <div><p class="eyebrow">MARKET INTELLIGENCE</p><h1>交易日志</h1></div>
+        <div class="clock">快照预览</div>
+      </header>
+      <div class="snapshot-card">这是静态快照：真实页面会从当前登录用户读取自己的日志，AI 优化总结只在点击按钮后调用 Claude Haiku。</div>
+      <div class="journal">
+        <div class="journal-shell">
+          <form class="journal-editor">
+            <div class="section-title"><h2>新建交易日志</h2><span>当前用户：demo</span></div>
+            <div class="journal-fields">
+              <label>日期<input type="date" value="2026-07-18"/></label>
+              <label>主标的<input value="NVDA"/></label>
+              <label>方向<select><option>买入</option></select></label>
+              <label>数量<input type="number" value="20"/></label>
+              <label>价格<input type="number" value="132.4"/></label>
+            </div>
+            <label class="journal-note">简短备注<input value="开盘回踩后按计划试仓，尾盘没有追高。"/></label>
+            <label class="journal-note">文字记录<textarea>盘前计划等待第一波量能释放后再进场。
+实际执行：看到回踩不破后分批买入，仓位控制在计划内。
+问题：止盈条件写得不够明确，盘中有犹豫。</textarea></label>
+            <div class="journal-table">
+              <div class="journal-table-head"><span>标的</span><span>方向</span><span>数量</span><span>价格</span><span>费用</span><span>策略</span><span>结果</span><span></span></div>
+              <div class="journal-table-row">
+                <input value="NVDA"/><input value="买入"/><input value="20"/><input value="132.4"/><input value="1.2"/><input value="回踩承接"/><input value="按计划执行"/><button type="button" class="danger">删</button>
+              </div>
+              <div class="journal-table-row">
+                <input value="AAPL"/><input value="观望"/><input/><input/><input/><input value="等待突破"/><input value="未触发"/><button type="button" class="danger">删</button>
+              </div>
+              <button type="button" class="ghost-btn">添加表格行</button>
+            </div>
+            <div class="photo-uploader">
+              <label>照片<input type="file"/></label>
+              <div class="photo-grid">
+                <div class="photo-thumb"><svg viewBox="0 0 160 110" xmlns="http://www.w3.org/2000/svg"><rect width="160" height="110" fill="#f5f5f7"/><path d="M16 82L58 45l27 24 20-18 39 31" fill="none" stroke="#0071e3" stroke-width="8"/><circle cx="117" cy="32" r="12" fill="#34c759"/></svg><button type="button">移除</button></div>
+              </div>
+            </div>
+            <div class="journal-actions"><button>保存日志</button></div>
+          </form>
+          <div class="journal-list">
+            <div class="section-title"><h2>我的日志</h2><span>2 条</span></div>
+            <article class="journal-card">
+              <div class="journal-card-head"><div><b>2026-07-18</b><span>NVDA · 买入</span></div><small>2026/7/18 16:45:00</small></div>
+              <p>开盘回踩后按计划试仓，尾盘没有追高。</p>
+              <p class="journal-content">盘前计划等待第一波量能释放后再进场。实际执行基本符合计划，但止盈规则还需要写清楚。</p>
+              <div class="journal-mini-table"><span>NVDA 买入 20 @ 132.4</span><span>AAPL 观望 — @ —</span></div>
+              <div class="ai-summary"><span class="ai-tag">AI · claude-haiku-4-5-20251001</span>
+                <h3>交易复盘整理</h3>
+                <p><strong>执行情况：</strong>本次交易按回踩承接计划执行，仓位控制在计划范围内。</p>
+                <p><strong>纪律问题：</strong>止盈条件记录不够明确，盘中出现犹豫。</p>
+                <p><strong>待补充：</strong>数据不足，建议补充入场触发条件、止损位和复盘截图。</p>
+              </div>
+              <div class="journal-card-actions"><button>AI 优化总结</button><button>编辑</button><button class="danger">删除</button></div>
+            </article>
+            <article class="journal-card">
+              <div class="journal-card-head"><div><b>2026-07-17</b><span>TSLA · 减仓</span></div><small>2026/7/17 22:10:00</small></div>
+              <p>冲高后减掉一半，保留观察仓。</p>
+              <div class="journal-card-actions"><button>AI 优化总结</button><button>编辑</button><button class="danger">删除</button></div>
+            </article>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

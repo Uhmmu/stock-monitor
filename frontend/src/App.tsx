@@ -30,6 +30,8 @@ type CongressTradeRow = {id:number;filer_id:string;filer_name:string;chamber:str
 type Position = {ticker:string|null;asset_name:string;category:string;value:number;is_percent:boolean;note:string|null}
 type FigureDetail = {slug:string;display_name:string;kind:string;photo_url:string|null;note:string|null;is_seed:boolean;positions:Position[];positions_are_percent:boolean;trades:CongressTradeRow[];moves:{buys:string[];sells:string[]}|null}
 type FilerHit = {filer_id:string;full_name:string;chamber:string|null;branch:string|null;party:string|null;state:string|null;trade_count:number|null}
+type TradeLogRow = {ticker:string;direction:string;quantity:number|null;price:number|null;fee:number|null;strategy:string;result:string}
+type TradeLog = {id:number;trade_date:string;ticker:string|null;direction:string|null;quantity:number|null;price:number|null;note:string|null;content:string|null;table_rows:TradeLogRow[];photo_urls:string[];ai_summary:string|null;ai_summary_model:string|null;ai_summary_created_at:string|null;created_at:string}
 
 const formatPrice = (value:number|null) => value == null ? '等待行情' : `$${value.toFixed(2)}`
 const formatDate = (value:string) => new Date(value).toLocaleString('zh-CN')
@@ -40,6 +42,7 @@ export default function App() {
   const [authUser,setAuthUser] = useState<{username:string;role:string}|null>(null)
   const [authLoading,setAuthLoading] = useState(()=>!!(localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')))
   const [tab,setTab] = useState('overview')
+  const [mobileNavOpen,setMobileNavOpen] = useState(false)
   const [ticker,setTicker] = useState('')
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
   const client = useQueryClient()
@@ -72,14 +75,17 @@ export default function App() {
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser}/>
 
   const submitTicker = (event:FormEvent) => { event.preventDefault(); if(ticker.trim()) add.mutate() }
+  const tabs = [['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['sec','SEC 公告'],['congress','名人持仓'],['charts','图表'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面与财报'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['charts','实时图表'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
   return <div className="app">
-    <aside>
-      <div className="brand"><img src="/logo.png" className="brand-logo" alt="logo"/><div><strong>小日向美香</strong><small>powered by 和泉妃爱 · v0.2.1</small></div></div>
-      <nav>{[['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['sec','SEC 公告'],['congress','名人持仓'],['charts','图表'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']].map(([key,label])=><button className={tab===key?'active':''} onClick={()=>setTab(key)} key={key}>{label}</button>)}</nav>
+    <aside className={mobileNavOpen?'mobile-open':''}>
+      <div className="brand"><img src="/logo.png" className="brand-logo" alt="logo"/><div><strong>小日向美香</strong><small>powered by 和泉妃爱 · v0.2.1</small></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
+      <nav>{tabs.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{label}</button>)}</nav>
       <div className="side-status"><i className={dashboard.data?.market.is_open?'online':''}/><span>{dashboard.data?.market.is_open?'美股交易中':'当前休市'}</span></div>
       <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setToken('');setAuthUser(null)}}>退出 {authUser.username}</button></aside>
+    {mobileNavOpen&&<button className="mobile-nav-scrim" onClick={()=>setMobileNavOpen(false)} aria-label="关闭菜单"/>}
     <main>
-      <header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面与财报'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['charts','实时图表'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]}</h1></div><div className="clock">更新于 {dashboard.data ? formatDate(dashboard.data.market.checked_at) : '—'}</div></header>
+      <header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tabTitle}</h1></div><div className="clock">更新于 {dashboard.data ? formatDate(dashboard.data.market.checked_at) : '—'}</div></header>
       {(dashboard.error||watchlist.error)&&<div className="error">后端暂不可用，请确认服务已启动。</div>}
       {tab==='overview'&&<>
         <section className="hero index-hero"><span className={`badge${indices.data?.market.is_open?'':' closed'}`}>{indices.data?.market.is_open?'LIVE':'CLOSED'}</span><div className="index-row">{(indices.data?.indices||[{symbol:'^GSPC',name:'标普500'},{symbol:'^IXIC',name:'纳斯达克'},{symbol:'^DJI',name:'道琼斯'}] as IndexQuote[]).map(idx=>{const up=idx.change_percent!=null&&idx.change_percent>=0;return <div className="index-card" key={idx.symbol}><span className="index-name">{idx.name}</span><strong>{idx.price!=null?idx.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}</strong><span className={idx.change_percent==null?'':up?'positive':'negative'}>{idx.change_points==null||idx.change_percent==null?'数据不足':`${up?'+':''}${idx.change_points.toFixed(2)} (${up?'+':''}${idx.change_percent.toFixed(2)}%)`}</span></div>})}</div></section>
@@ -436,13 +442,105 @@ function AuthGate({setToken,setAuthUser}:{setToken:(t:string)=>void;setAuthUser:
   </div>
 }
 
-// ── 交易日志（占位）──────────────────────────────────────────────
+// ── 交易日志 ───────────────────────────────────────────────
+const emptyTradeRow = ():TradeLogRow => ({ticker:'',direction:'',quantity:null,price:null,fee:null,strategy:'',result:''})
+
 function JournalSection({username}:{username:string}) {
-  return <div style={{padding:'60px 0',textAlign:'center'}}>
-    <p style={{fontSize:32,marginBottom:8}}>📒</p>
-    <h2 style={{marginBottom:8}}>交易日志</h2>
-    <p style={{opacity:.6}}>Hi {username}，该功能正在建设中，敬请期待。</p>
-    <p style={{opacity:.4,fontSize:12,marginTop:8}}>每位用户的日志数据完全独立</p>
+  const client = useQueryClient()
+  const today = new Date().toISOString().slice(0,10)
+  const logs = useQuery({queryKey:['trade-logs'],queryFn:()=>api<TradeLog[]>('/trade-logs')})
+  const [editing,setEditing] = useState<TradeLog|null>(null)
+  const [form,setForm] = useState({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[] as string[]})
+  const payload = () => ({
+    trade_date:form.trade_date,
+    ticker:form.ticker||null,
+    direction:form.direction||null,
+    quantity:form.quantity===''?null:Number(form.quantity),
+    price:form.price===''?null:Number(form.price),
+    note:form.note||null,
+    content:form.content||null,
+    table_rows:form.table_rows.filter(r=>r.ticker||r.direction||r.quantity!=null||r.price!=null||r.fee!=null||r.strategy||r.result),
+    photo_urls:form.photo_urls,
+  })
+  const reset = () => {setEditing(null);setForm({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[]})}
+  const save = useMutation({
+    mutationFn:()=>editing?patch<TradeLog>(`/trade-logs/${editing.id}`,payload()):post<TradeLog>('/trade-logs',payload()),
+    onSuccess:()=>{reset();client.invalidateQueries({queryKey:['trade-logs']})},
+  })
+  const del = useMutation({mutationFn:(id:number)=>api<unknown>(`/trade-logs/${id}`,{method:'DELETE'}),onSuccess:()=>client.invalidateQueries({queryKey:['trade-logs']})})
+  const summarize = useMutation({mutationFn:(id:number)=>post<TradeLog>(`/trade-logs/${id}/summarize`,{}),onSuccess:()=>client.invalidateQueries({queryKey:['trade-logs']})})
+  const edit = (log:TradeLog) => {
+    setEditing(log)
+    setForm({
+      trade_date:log.trade_date,
+      ticker:log.ticker||'',
+      direction:log.direction||'',
+      quantity:log.quantity==null?'':String(log.quantity),
+      price:log.price==null?'':String(log.price),
+      note:log.note||'',
+      content:log.content||'',
+      table_rows:log.table_rows.length?log.table_rows:[emptyTradeRow()],
+      photo_urls:log.photo_urls||[],
+    })
+  }
+  const updateRow = (index:number, patch:Partial<TradeLogRow>) => setForm(f=>({...f,table_rows:f.table_rows.map((row,i)=>i===index?{...row,...patch}:row)}))
+  const addPhotos = (files:FileList|null) => {
+    if(!files) return
+    Array.from(files).slice(0,6).forEach(file=>{
+      const reader = new FileReader()
+      reader.onload = () => setForm(f=>({...f,photo_urls:[...f.photo_urls,String(reader.result)].slice(0,12)}))
+      reader.readAsDataURL(file)
+    })
+  }
+  return <div className="journal">
+    <div className="journal-shell">
+      <form className="journal-editor" onSubmit={event=>{event.preventDefault();save.mutate()}}>
+        <div className="section-title"><h2>{editing?'编辑交易日志':'新建交易日志'}</h2><span>当前用户：{username}</span></div>
+        <div className="journal-fields">
+          <label>日期<input type="date" value={form.trade_date} onChange={e=>setForm({...form,trade_date:e.target.value})} required/></label>
+          <label>主标的<input value={form.ticker} onChange={e=>setForm({...form,ticker:e.target.value.toUpperCase()})} placeholder="NVDA"/></label>
+          <label>方向<select value={form.direction} onChange={e=>setForm({...form,direction:e.target.value})}><option value="">未填写</option><option>买入</option><option>卖出</option><option>加仓</option><option>减仓</option><option>观望</option></select></label>
+          <label>数量<input type="number" min="0" step="any" value={form.quantity} onChange={e=>setForm({...form,quantity:e.target.value})}/></label>
+          <label>价格<input type="number" min="0" step="any" value={form.price} onChange={e=>setForm({...form,price:e.target.value})}/></label>
+        </div>
+        <label className="journal-note">简短备注<input value={form.note} onChange={e=>setForm({...form,note:e.target.value})} placeholder="一句话记录当天最重要的交易背景"/></label>
+        <label className="journal-note">文字记录<textarea value={form.content} onChange={e=>setForm({...form,content:e.target.value})} placeholder="记录交易计划、执行、情绪、复盘和明天要验证的条件"/></label>
+        <div className="journal-table">
+          <div className="journal-table-head"><span>标的</span><span>方向</span><span>数量</span><span>价格</span><span>费用</span><span>策略</span><span>结果</span><span/></div>
+          {form.table_rows.map((row,index)=><div className="journal-table-row" key={index}>
+            <input value={row.ticker} onChange={e=>updateRow(index,{ticker:e.target.value.toUpperCase()})}/>
+            <input value={row.direction} onChange={e=>updateRow(index,{direction:e.target.value})}/>
+            <input type="number" min="0" step="any" value={row.quantity??''} onChange={e=>updateRow(index,{quantity:e.target.value===''?null:Number(e.target.value)})}/>
+            <input type="number" min="0" step="any" value={row.price??''} onChange={e=>updateRow(index,{price:e.target.value===''?null:Number(e.target.value)})}/>
+            <input type="number" min="0" step="any" value={row.fee??''} onChange={e=>updateRow(index,{fee:e.target.value===''?null:Number(e.target.value)})}/>
+            <input value={row.strategy} onChange={e=>updateRow(index,{strategy:e.target.value})}/>
+            <input value={row.result} onChange={e=>updateRow(index,{result:e.target.value})}/>
+            <button type="button" className="danger" onClick={()=>setForm(f=>({...f,table_rows:f.table_rows.filter((_,i)=>i!==index)}))}>删</button>
+          </div>)}
+          <button type="button" className="ghost-btn" onClick={()=>setForm(f=>({...f,table_rows:[...f.table_rows,emptyTradeRow()]}))}>添加表格行</button>
+        </div>
+        <div className="photo-uploader">
+          <label>照片<input type="file" accept="image/*" multiple onChange={e=>addPhotos(e.target.files)}/></label>
+          <div className="photo-grid">{form.photo_urls.map((src,index)=><div className="photo-thumb" key={index}><img src={src} alt={`交易截图 ${index+1}`}/><button type="button" onClick={()=>setForm(f=>({...f,photo_urls:f.photo_urls.filter((_,i)=>i!==index)}))}>移除</button></div>)}</div>
+        </div>
+        {save.error&&<p className="error">{save.error.message}</p>}
+        <div className="journal-actions"><button disabled={save.isPending}>{save.isPending?'保存中…':'保存日志'}</button>{editing&&<button type="button" className="ghost-btn" onClick={reset}>取消编辑</button>}</div>
+      </form>
+      <div className="journal-list">
+        <div className="section-title"><h2>我的日志</h2><span>{logs.data?.length||0} 条</span></div>
+        {logs.data?.map(log=><article className="journal-card" key={log.id}>
+          <div className="journal-card-head"><div><b>{log.trade_date}</b><span>{[log.ticker,log.direction].filter(Boolean).join(' · ')||'未填写标的'}</span></div><small>{formatDate(log.created_at)}</small></div>
+          {log.note&&<p>{log.note}</p>}
+          {log.content&&<p className="journal-content">{log.content}</p>}
+          {log.table_rows.length>0&&<div className="journal-mini-table">{log.table_rows.map((row,i)=><span key={i}>{row.ticker||'—'} {row.direction||''} {row.quantity??'—'} @ {row.price??'—'}</span>)}</div>}
+          {log.photo_urls.length>0&&<div className="photo-strip">{log.photo_urls.map((src,i)=><img src={src} alt={`交易截图 ${i+1}`} key={i}/>)}</div>}
+          {log.ai_summary&&<div className="ai-summary"><span className="ai-tag">AI · {log.ai_summary_model}</span><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{log.ai_summary}</ReactMarkdown></div>}
+          <div className="journal-card-actions"><button onClick={()=>summarize.mutate(log.id)} disabled={summarize.isPending}>{summarize.isPending?'处理中…':'AI 优化总结'}</button><button onClick={()=>edit(log)}>编辑</button><button className="danger" onClick={()=>del.mutate(log.id)}>删除</button></div>
+        </article>)}
+        {logs.isLoading&&<div className="empty">加载交易日志中…</div>}
+        {!logs.isLoading&&!logs.data?.length&&<div className="empty">还没有日志。每天收盘后写一条，数据只对当前登录用户可见。</div>}
+      </div>
+    </div>
   </div>
 }
 

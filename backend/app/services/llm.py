@@ -187,6 +187,17 @@ NEWS_SUMMARY_SYSTEM_PROMPT = """# Role
 - 只输出 Markdown 正文，不要代码块包裹。
 """
 
+TRADE_LOG_SUMMARY_SYSTEM_PROMPT = """# Role
+你是一位严谨的交易复盘整理助手。请把用户输入的交易日志整理成更清晰的中文 Markdown 复盘。
+
+# 要求
+- 仅依据输入日志内容整理，不得补充不存在的成交价、仓位、盈亏、日期、情绪或结论。
+- 保留用户的原意，把零散记录优化为条理清楚、便于日后复盘的格式。
+- 如果输入缺少关键信息，明确写“数据不足”，并列出建议补充的字段。
+- 不提供买卖建议，不评价未来行情，只整理当天执行、纪律、情绪、问题和待改进点。
+- 只输出 Markdown 正文，不要寒暄，不要用 Markdown 代码块包裹。
+"""
+
 
 def _client_and_model(tier: str):
     settings = get_settings()
@@ -194,6 +205,21 @@ def _client_and_model(tier: str):
         raise RuntimeError("尚未配置 OPENAI_API_KEY")
     model = getattr(settings, MODEL_TIERS[tier])
     return OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url), model
+
+
+def _translation_client_and_model():
+    settings = get_settings()
+    if not settings.translation_api_key:
+        raise RuntimeError("尚未配置 TRANSLATION_API_KEY")
+    return (
+        OpenAI(
+            api_key=settings.translation_api_key,
+            base_url=settings.translation_base_url,
+            timeout=60,
+            max_retries=0,
+        ),
+        settings.translation_model,
+    )
 
 
 def generate_analysis(title: str, evidence: str, tier: str = "medium", report_type: str | None = None) -> tuple[str, str]:
@@ -233,3 +259,19 @@ def summarize_news(title: str, content: str) -> tuple[str, str]:
         ],
     )
     return response.choices[0].message.content or "", model
+
+
+def summarize_trade_log(evidence: str) -> tuple[str, str]:
+    client, model = _translation_client_and_model()
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": TRADE_LOG_SUMMARY_SYSTEM_PROMPT},
+            {"role": "user", "content": evidence},
+        ],
+        temperature=0,
+    )
+    summary = (response.choices[0].message.content or "").strip()
+    if not summary:
+        raise ValueError("交易日志总结响应为空")
+    return summary, model

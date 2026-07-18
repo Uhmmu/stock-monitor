@@ -25,14 +25,25 @@ from app.models import (
     SecFinancialPeriod,
     SecInsiderTrade,
     TrackedFigure,
+    TradeLog,
+    User,
     WatchlistItem,
 )
-from app.schemas import SettingsOut, SettingsUpdate, WatchlistCreate, WatchlistOut, WatchlistUpdate
+from app.schemas import (
+    SettingsOut,
+    SettingsUpdate,
+    TradeLogCreate,
+    TradeLogOut,
+    TradeLogUpdate,
+    WatchlistCreate,
+    WatchlistOut,
+    WatchlistUpdate,
+)
 from app.auth import get_current_user
 from app.services.article_fetch import fetch_article_text
 from app.services.finnhub_mcp import fetch_basic_metrics, fetch_recommendations
 from app.services.market_data import fetch_index_quotes, fetch_yf_info_metrics
-from app.services.llm import summarize_news
+from app.services.llm import summarize_news, summarize_trade_log
 from app.services.market_calendar import market_status
 from app.services.volume_stats import volume_context
 
@@ -561,6 +572,134 @@ def _trade_dict(t: CongressTrade) -> dict:
         "amount_label": t.amount_label,
         "is_late": t.is_late,
     }
+
+
+def _trade_log_out(row: TradeLog) -> dict:
+    return {
+        "id": row.id,
+        "trade_date": row.trade_date,
+        "ticker": row.ticker,
+        "direction": row.direction,
+        "quantity": row.quantity,
+        "price": row.price,
+        "note": row.note,
+        "content": row.content,
+        "table_rows": row.table_rows or [],
+        "photo_urls": row.photo_urls or [],
+        "ai_summary": row.ai_summary,
+        "ai_summary_model": row.ai_summary_model,
+        "ai_summary_created_at": row.ai_summary_created_at,
+        "created_at": row.created_at,
+    }
+
+
+def _trade_log_evidence(row: TradeLog) -> str:
+    table_lines = []
+    for index, item in enumerate(row.table_rows or [], 1):
+        table_lines.append(
+            f"{index}. 标的={item.get('ticker') or '数据不足'}，方向={item.get('direction') or '数据不足'}，"
+            f"数量={item.get('quantity') if item.get('quantity') is not None else '数据不足'}，"
+            f"价格={item.get('price') if item.get('price') is not None else '数据不足'}，"
+            f"费用={item.get('fee') if item.get('fee') is not None else '数据不足'}，"
+            f"策略={item.get('strategy') or '数据不足'}，结果={item.get('result') or '数据不足'}"
+        )
+    return "\n".join(
+        [
+            f"日期：{row.trade_date}",
+            f"主标的：{row.ticker or '数据不足'}",
+            f"方向：{row.direction or '数据不足'}",
+            f"数量：{row.quantity if row.quantity is not None else '数据不足'}",
+            f"价格：{row.price if row.price is not None else '数据不足'}",
+            f"简短备注：{row.note or '数据不足'}",
+            f"文字记录：\n{row.content or '数据不足'}",
+            "表格记录：\n" + ("\n".join(table_lines) if table_lines else "数据不足"),
+            f"照片数量：{len(row.photo_urls or [])}",
+        ]
+    )
+
+
+@router.get("/trade-logs", response_model=list[TradeLogOut])
+def list_trade_logs(
+    date: date_type | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    query = select(TradeLog).where(TradeLog.user_id == user.id)
+    if date:
+        query = query.where(TradeLog.trade_date == date)
+    rows = db.scalars(query.order_by(TradeLog.trade_date.desc(), TradeLog.created_at.desc()).limit(200)).all()
+    return [_trade_log_out(row) for row in rows]
+
+
+@router.post("/trade-logs", response_model=TradeLogOut, status_code=status.HTTP_201_CREATED)
+def create_trade_log(
+    payload: TradeLogCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = TradeLog(user_id=user.id, **payload.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _trade_log_out(row)
+
+
+@router.patch("/trade-logs/{log_id}", response_model=TradeLogOut)
+def update_trade_log(
+    log_id: int,
+    payload: TradeLogUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(select(TradeLog).where(TradeLog.id == log_id, TradeLog.user_id == user.id))
+    if not row:
+        raise HTTPException(404, "未找到交易日志")
+    for key, value in payload.model_dump().items():
+        setattr(row, key, value)
+    row.ai_summary = None
+    row.ai_summary_model = None
+    row.ai_summary_input_hash = None
+    row.ai_summary_created_at = None
+    db.commit()
+    db.refresh(row)
+    return _trade_log_out(row)
+
+
+@router.delete("/trade-logs/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_trade_log(
+    log_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(select(TradeLog).where(TradeLog.id == log_id, TradeLog.user_id == user.id))
+    if not row:
+        raise HTTPException(404, "未找到交易日志")
+    db.delete(row)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/trade-logs/{log_id}/summarize", response_model=TradeLogOut)
+def summarize_trade_log_route(
+    log_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(select(TradeLog).where(TradeLog.id == log_id, TradeLog.user_id == user.id))
+    if not row:
+        raise HTTPException(404, "未找到交易日志")
+    evidence = _trade_log_evidence(row)
+    input_hash = hashlib.sha256(evidence.encode("utf-8")).hexdigest()[:64]
+    if row.ai_summary and row.ai_summary_input_hash == input_hash:
+        return _trade_log_out(row)
+    summary, model = summarize_trade_log(evidence)
+    row.ai_summary = summary
+    row.ai_summary_model = model
+    row.ai_summary_input_hash = input_hash
+    row.ai_summary_created_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(row)
+    return _trade_log_out(row)
 
 
 @router.get("/congress/trades")

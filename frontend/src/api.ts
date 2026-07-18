@@ -15,6 +15,7 @@ export async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
     throw new Error('Unauthorized')
   }
   if (!res.ok) throw new Error(await res.text())
+  if (res.status === 204) return undefined as T
   return res.json()
 }
 
