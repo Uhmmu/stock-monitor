@@ -1,10 +1,10 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import rehypeSanitize from 'rehype-sanitize'
 import { api, patch, post } from './api'
 import { Sheet } from './Sheet'
-import { PipCard } from './PipCard'
 
 type WatchItem = { id:number; ticker:string; enabled:boolean; threshold_20m:number|null; threshold_1h:number|null; threshold_day:number|null }
 type Dashboard = { market:{is_open:boolean; checked_at:string}; stocks:{ticker:string;price:number|null;previous_close:number|null;updated_at:string|null;volume:number|null;volume_ratio:number|null;volume_label:string|null}[] }
@@ -37,33 +37,79 @@ const formatPrice = (value:number|null) => value == null ? '等待行情' : `$${
 const formatDate = (value:string) => new Date(value).toLocaleString('zh-CN')
 const typeNames:Record<string,string> = {premarket:'盘前',postmarket:'盘后',movement:'价格异动',earnings_before:'财报前',earnings_after:'财报后'}
 
+const demoDashboard:Dashboard = {
+  market:{is_open:true,checked_at:new Date().toISOString()},
+  stocks:[
+    {ticker:'AAPL',price:214.37,previous_close:211.18,updated_at:new Date().toISOString(),volume:52180300,volume_ratio:1.18,volume_label:'放量'},
+    {ticker:'NVDA',price:141.22,previous_close:143.61,updated_at:new Date().toISOString(),volume:183410200,volume_ratio:.91,volume_label:'正常'},
+    {ticker:'MSFT',price:468.91,previous_close:465.82,updated_at:new Date().toISOString(),volume:19284600,volume_ratio:1.04,volume_label:'正常'},
+    {ticker:'TSLA',price:322.05,previous_close:315.63,updated_at:new Date().toISOString(),volume:84630200,volume_ratio:1.31,volume_label:'放量'},
+  ],
+}
+const demoIndices:Indices = {market:demoDashboard.market,indices:[
+  {symbol:'^GSPC',name:'标普 500',price:6216.44,previous_close:6198.01,change_points:18.43,change_percent:.30},
+  {symbol:'^IXIC',name:'纳斯达克',price:20273.46,previous_close:20192.18,change_points:81.28,change_percent:.40},
+  {symbol:'^DJI',name:'道琼斯',price:44484.49,previous_close:44502.12,change_points:-17.63,change_percent:-.04},
+]}
+const demoAlerts:Alert[] = [
+  {id:-1,ticker:'TSLA',period:'20 分钟',change_percent:2.04,triggered_at:new Date().toISOString()},
+  {id:-2,ticker:'NVDA',period:'1 小时',change_percent:-1.66,triggered_at:new Date().toISOString()},
+  {id:-3,ticker:'AAPL',period:'当日',change_percent:1.51,triggered_at:new Date().toISOString()},
+]
+const demoReports:Report[] = [
+  {id:-1,ticker:'AAPL',report_type:'movement',title:'Apple 盘中放量上行：关键驱动与风险观察',model:'preview',created_at:new Date().toISOString()},
+  {id:-2,ticker:'TSLA',report_type:'movement',title:'Tesla 短线动量增强，市场在交易什么？',model:'preview',created_at:new Date(Date.now()-36e5).toISOString()},
+]
+
+function NavIcon({name}:{name:string}) {
+  const paths:Record<string,React.ReactNode> = {
+    overview:<><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
+    watchlist:<><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></>,
+    alerts:<><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></>,
+    news:<><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></>,
+    fundamentals:<><path d="m3 17 5-5 4 3 8-9"/><path d="M15 6h5v5"/></>,
+    sec:<><path d="M6 2h9l4 4v16H6z"/><path d="M14 2v5h5M9 12h6M9 16h6"/></>,
+    congress:<><circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 4-7 8-7s7 2 8 7"/></>,
+    charts:<><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/></>,
+    reports:<><path d="M5 3h14v18H5z"/><path d="M9 8h6M9 12h6M9 16h4"/></>,
+    journal:<><path d="M5 4h14v16H5z"/><path d="M9 4v16M12 8h4M12 12h4"/></>,
+    settings:<><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></>,
+  }
+  return <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
+}
+
 export default function App() {
+  const previewRequested = new URLSearchParams(window.location.search).get('preview')==='1'
   const [token,setToken] = useState(()=>localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')||'')
-  const [authUser,setAuthUser] = useState<{username:string;role:string}|null>(null)
+  const [demoMode,setDemoMode] = useState(previewRequested)
+  const [authUser,setAuthUser] = useState<{username:string;role:string}|null>(()=>previewRequested?{username:'访客',role:'viewer'}:null)
   const [authLoading,setAuthLoading] = useState(()=>!!(localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')))
-  const [tab,setTab] = useState('overview')
+  const [tab,setTab] = useState(()=>new URLSearchParams(window.location.search).get('tab')||'overview')
   const [mobileNavOpen,setMobileNavOpen] = useState(false)
   const [ticker,setTicker] = useState('')
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
+  const [stocksExpanded,setStocksExpanded] = useState(false)
   const client = useQueryClient()
-  const dashboard = useQuery({queryKey:['dashboard'],queryFn:()=>api<Dashboard>('/dashboard'),refetchInterval:30000,enabled:!!authUser})
-  const indices = useQuery({queryKey:['indices'],queryFn:()=>api<Indices>('/indices'),refetchInterval:60000,enabled:!!authUser})
-  const watchlist = useQuery({queryKey:['watchlist'],queryFn:()=>api<WatchItem[]>('/watchlist')})
-  const alerts = useQuery({queryKey:['alerts'],queryFn:()=>api<Alert[]>('/alerts'),refetchInterval:30000,enabled:!!authUser})
-  const investigations = useQuery({queryKey:['investigations'],queryFn:()=>api<Investigation[]>('/investigations'),refetchInterval:30000,enabled:!!authUser})
-  const reports = useQuery({queryKey:['reports'],queryFn:()=>api<Report[]>('/reports')})
-  const report = useQuery({queryKey:['report',selectedReport],queryFn:()=>api<ReportDetail>(`/reports/${selectedReport}`),enabled:selectedReport!==null})
-  const settings = useQuery({queryKey:['settings'],queryFn:()=>api<Settings>('/settings')})
+  const live = !!authUser&&!demoMode
+  const dashboard = useQuery({queryKey:['dashboard'],queryFn:()=>api<Dashboard>('/dashboard'),refetchInterval:30000,enabled:live})
+  const indices = useQuery({queryKey:['indices'],queryFn:()=>api<Indices>('/indices'),refetchInterval:60000,enabled:live})
+  const watchlist = useQuery({queryKey:['watchlist'],queryFn:()=>api<WatchItem[]>('/watchlist'),enabled:live})
+  const alerts = useQuery({queryKey:['alerts'],queryFn:()=>api<Alert[]>('/alerts'),refetchInterval:30000,enabled:live})
+  const investigations = useQuery({queryKey:['investigations'],queryFn:()=>api<Investigation[]>('/investigations'),refetchInterval:30000,enabled:live})
+  const reports = useQuery({queryKey:['reports'],queryFn:()=>api<Report[]>('/reports'),enabled:live})
+  const report = useQuery({queryKey:['report',selectedReport],queryFn:()=>api<ReportDetail>(`/reports/${selectedReport}`),enabled:live&&selectedReport!==null})
+  const settings = useQuery({queryKey:['settings'],queryFn:()=>api<Settings>('/settings'),enabled:live})
   const add = useMutation({mutationFn:()=>post('/watchlist',{ticker}),onSuccess:()=>{setTicker('');client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}})
   const remove = useMutation({mutationFn:(id:number)=>api(`/watchlist/${id}`,{method:'DELETE'}),onSuccess:()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}})
 
   useEffect(()=>{
+    if(demoMode){setAuthLoading(false);return}
     if(!token){setAuthUser(null);setAuthLoading(false);return}
     setAuthLoading(true)
     api<{username:string;role:string}>('/auth/me')
       .then(u=>{setAuthUser(u);setAuthLoading(false)})
       .catch(()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setToken('');setAuthUser(null);setAuthLoading(false)})
-  },[token])
+  },[token,demoMode])
 
   useEffect(()=>{
     const onLogout=()=>{setToken('');setAuthUser(null)}
@@ -72,27 +118,38 @@ export default function App() {
   },[])
 
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
-  if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser}/>
+  if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
   const submitTicker = (event:FormEvent) => { event.preventDefault(); if(ticker.trim()) add.mutate() }
   const tabs = [['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['sec','SEC 公告'],['congress','名人持仓'],['charts','图表'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
   const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面与财报'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['charts','实时图表'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
+  const viewDashboard = demoMode ? demoDashboard : dashboard.data
+  const viewIndices = demoMode ? demoIndices : indices.data
+  const viewAlerts = demoMode ? demoAlerts : alerts.data
+  const viewReports = demoMode ? demoReports : reports.data
+  const overviewStocks = [...(viewDashboard?.stocks||[])].sort((a,b)=>{
+    const change = (stock:typeof a) => stock.price!=null&&stock.previous_close ? Math.abs((stock.price-stock.previous_close)/stock.previous_close*100) : -1
+    return change(b)-change(a)
+  })
   return <div className="app">
+    <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
     <aside className={mobileNavOpen?'mobile-open':''}>
-      <div className="brand"><img src="/logo.png" className="brand-logo" alt="logo"/><div><strong>小日向美香</strong><small>powered by 和泉妃爱 · v0.2.1</small></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
-      <nav>{tabs.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{label}</button>)}</nav>
-      <div className="side-status"><i className={dashboard.data?.market.is_open?'online':''}/><span>{dashboard.data?.market.is_open?'美股交易中':'当前休市'}</span></div>
-      <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setToken('');setAuthUser(null)}}>退出 {authUser.username}</button></aside>
+      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Market Intelligence</small></div><div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{investigations.data?.length||0}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
+      <nav>{tabs.map(([key,label],index)=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{index===8&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
+      <div className="account-card"><span className="account-avatar">{authUser.username.slice(0,1)}</span><span><b>{demoMode?'演示空间':authUser.username}</b><small>{demoMode?'本地预览模式':'已安全连接'}</small></span><i className={viewDashboard?.market.is_open?'online':''}/></div>
+      <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setDemoMode(false);setToken('');setAuthUser(null)}}>{demoMode?'退出预览':'退出登录'}</button></aside>
     {mobileNavOpen&&<button className="mobile-nav-scrim" onClick={()=>setMobileNavOpen(false)} aria-label="关闭菜单"/>}
     <main>
-      <header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tabTitle}</h1></div><div className="clock">更新于 {dashboard.data ? formatDate(dashboard.data.market.checked_at) : '—'}</div></header>
-      {(dashboard.error||watchlist.error)&&<div className="error">后端暂不可用，请确认服务已启动。</div>}
+      <header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tabTitle}</h1></div><div className="header-tools"><span className="market-pill"><i className={viewDashboard?.market.is_open?'online':''}/>{viewDashboard?.market.is_open?'市场开放':'市场休市'}</span><div className="clock">{viewDashboard ? formatDate(viewDashboard.market.checked_at) : '等待同步'}</div></div></header>
+      {demoMode&&<div className="preview-banner"><span><b>演示预览</b> 当前展示本地示例行情，所有真实数据仍以服务端为准。</span><button onClick={()=>{setDemoMode(false);setAuthUser(null)}}>连接账户</button></div>}
+      {!demoMode&&(dashboard.error||watchlist.error)&&<div className="error">后端暂不可用，请确认服务已启动。</div>}
+      <div className="view-stage" key={tab}>
       {tab==='overview'&&<>
-        <section className="hero index-hero"><span className={`badge${indices.data?.market.is_open?'':' closed'}`}>{indices.data?.market.is_open?'LIVE':'CLOSED'}</span><div className="index-row">{(indices.data?.indices||[{symbol:'^GSPC',name:'标普500'},{symbol:'^IXIC',name:'纳斯达克'},{symbol:'^DJI',name:'道琼斯'}] as IndexQuote[]).map(idx=>{const up=idx.change_percent!=null&&idx.change_percent>=0;return <div className="index-card" key={idx.symbol}><span className="index-name">{idx.name}</span><strong>{idx.price!=null?idx.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}</strong><span className={idx.change_percent==null?'':up?'positive':'negative'}>{idx.change_points==null||idx.change_percent==null?'数据不足':`${up?'+':''}${idx.change_points.toFixed(2)} (${up?'+':''}${idx.change_percent.toFixed(2)}%)`}</span></div>})}</div></section>
-        <section><div className="section-title"><h2>市场快照</h2><button onClick={()=>setTab('watchlist')}>管理自选股</button></div><div className="stock-grid">{dashboard.data?.stocks.map(stock=>{const change=stock.price&&stock.previous_close?(stock.price-stock.previous_close)/stock.previous_close*100:null;return <article className="stock-card" key={stock.ticker}><div><span className="ticker">{stock.ticker}</span><small>{stock.updated_at?formatDate(stock.updated_at):'等待首次采集'}</small></div><strong>{formatPrice(stock.price)}</strong><span className={change!=null&&change<0?'negative':'positive'}>{change==null?'—':`${change>=0?'+':''}${change.toFixed(2)}% 今日`}</span>{stock.volume_label&&stock.volume_label!=='正常'&&<span className={`vol-tag ${stock.volume_label==='放量'?'heavy':'light'}`} title={stock.volume_ratio?`预估全天量 / 30日均量 ≈ ${stock.volume_ratio.toFixed(2)}倍`:''}>{stock.volume_label}{stock.volume_ratio!=null?` ${stock.volume_ratio>=1?'+':''}${((stock.volume_ratio-1)*100).toFixed(0)}%`:''}</span>}</article>})}{!dashboard.data?.stocks.length&&<div className="empty">添加第一只股票，开始建立你的市场雷达。</div>}</div></section>
-        <section className="split"><div><div className="section-title"><h2>最近异动</h2></div>{alerts.data?.slice(0,5).map(a=><div className="list-row" key={a.id}><b>{a.ticker}</b><span>{a.period}</span><em className={a.change_percent<0?'negative':'positive'}>{a.change_percent.toFixed(2)}%</em></div>)}</div><div><div className="section-title"><h2>最新报告</h2></div>{reports.data?.slice(0,5).map(r=><button className="report-row" key={r.id} onClick={()=>setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}</div></section>
+        <section className="hero index-hero"><div className="hero-copy"><span className={`badge${viewIndices?.market.is_open?'':' closed'}`}><i/>{viewIndices?.market.is_open?'LIVE MARKET':'MARKET CLOSED'}</span><h2>早上好，{authUser.username}</h2><p>你的市场雷达保持安静。我们只在真正值得注意时打扰你。</p></div><div className="index-row">{(viewIndices?.indices||[{symbol:'^GSPC',name:'标普500'},{symbol:'^IXIC',name:'纳斯达克'},{symbol:'^DJI',name:'道琼斯'}] as IndexQuote[]).map(idx=>{const up=idx.change_percent!=null&&idx.change_percent>=0;return <div className="index-card" key={idx.symbol}><span className="index-name">{idx.name}</span><strong>{idx.price!=null?idx.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}</strong><span className={idx.change_percent==null?'':up?'positive':'negative'}>{idx.change_points==null||idx.change_percent==null?'数据不足':`${up?'+':''}${idx.change_points.toFixed(2)} (${up?'+':''}${idx.change_percent.toFixed(2)}%)`}</span></div>})}</div></section>
+        <section><div className="section-title"><div><p>WATCHLIST</p><h2>市场快照</h2></div><div className="section-actions"><button className="stock-collapse-btn" onClick={()=>setStocksExpanded(v=>!v)}>{stocksExpanded?'收起':'展开更多'} <span>{stocksExpanded?'↑':'↓'}</span></button><button onClick={()=>setTab('watchlist')}>管理自选股 <span>→</span></button></div></div><div className={`stock-grid${stocksExpanded?' is-expanded':' is-collapsed'}`}>{overviewStocks.map(stock=>{const change=stock.price&&stock.previous_close?(stock.price-stock.previous_close)/stock.previous_close*100:null;return <article className="stock-card" key={stock.ticker}><div><span className="ticker">{stock.ticker}</span><small>{stock.updated_at?'刚刚更新':'等待首次采集'}</small></div><strong>{formatPrice(stock.price)}</strong><span className={change!=null&&change<0?'negative':'positive'}>{change==null?'—':`${change>=0?'+':''}${change.toFixed(2)}% 今日`}</span>{stock.volume_label&&stock.volume_label!=='正常'&&<span className={`vol-tag ${stock.volume_label==='放量'?'heavy':'light'}`}>{stock.volume_label} · {stock.volume_ratio?.toFixed(2)}×</span>}<div className="card-glow"/></article>})}{!overviewStocks.length&&<div className="empty">添加第一只股票，开始建立你的市场雷达。</div>}</div></section>
+        <section className="split"><div><div className="section-title"><div><p>SIGNALS</p><h2>最近异动</h2></div></div>{viewAlerts?.slice(0,5).map(a=><div className="list-row" key={a.id}><span className="signal-symbol">{a.ticker.slice(0,1)}</span><b>{a.ticker}</b><span>{a.period}</span><em className={a.change_percent<0?'negative':'positive'}>{a.change_percent>=0?'+':''}{a.change_percent.toFixed(2)}%</em></div>)}</div><div><div className="section-title"><div><p>INTELLIGENCE</p><h2>最新报告</h2></div></div>{viewReports?.slice(0,5).map(r=><button className="report-row" key={r.id} onClick={()=>!demoMode&&setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{demoMode?'刚刚生成':formatDate(r.created_at)}</small></button>)}</div></section>
       </>}
-      {tab==='watchlist'&&<><form className="add-form" onSubmit={submitTicker}><div><label>股票代码</label><input value={ticker} onChange={e=>setTicker(e.target.value.toUpperCase())} placeholder="例如 AAPL、NVDA" maxLength={16}/></div><button disabled={add.isPending}>添加监控</button></form>{add.error&&<p className="error">{add.error.message}</p>}<div className="table"><div className="table-head"><span>代码</span><span>状态</span><span>20 分钟阈值</span><span>1 小时阈值</span><span>当日阈值</span><span/></div>{watchlist.data?.map(item=><div className="table-row" key={item.id}><b>{item.ticker}</b><button className="toggle" onClick={()=>patch(`/watchlist/${item.id}`,{enabled:!item.enabled}).then(()=>client.invalidateQueries({queryKey:['watchlist']}))}>{item.enabled?'监控中':'已暂停'}</button><ThresholdCell item={item} field="threshold_20m" onSaved={()=>client.invalidateQueries({queryKey:['watchlist']})}/><ThresholdCell item={item} field="threshold_1h" onSaved={()=>client.invalidateQueries({queryKey:['watchlist']})}/><ThresholdCell item={item} field="threshold_day" onSaved={()=>client.invalidateQueries({queryKey:['watchlist']})}/><button className="danger" onClick={()=>remove.mutate(item.id)}>删除</button></div>)}</div></>}
+      {tab==='watchlist'&&<><form className="add-form" onSubmit={submitTicker}><div><label>股票代码</label><input value={ticker} onChange={e=>setTicker(e.target.value.toUpperCase())} placeholder="例如 AAPL、NVDA" maxLength={16}/></div><button disabled={add.isPending}>添加监控</button></form>{add.error&&<p className="error">{add.error.message}</p>}<div className="watchlist-stack">{watchlist.data?.map(item=><article className="watch-item-card" key={item.id}><div className="watch-item-head"><div><b>{item.ticker}</b><small>价格异动阈值</small></div><button className="watch-delete" aria-label={`删除 ${item.ticker}`} onClick={()=>remove.mutate(item.id)}><TrashIcon/></button></div><div className="threshold-tags"><ThresholdCell item={item} field="threshold_20m" onSaved={()=>client.invalidateQueries({queryKey:['watchlist']})}/><ThresholdCell item={item} field="threshold_1h" onSaved={()=>client.invalidateQueries({queryKey:['watchlist']})}/><ThresholdCell item={item} field="threshold_day" onSaved={()=>client.invalidateQueries({queryKey:['watchlist']})}/></div></article>)}</div></>}
       {tab==='alerts'&&<div className="investigations">{investigations.data?.map(item=><article key={item.id}><div><span className={`status ${item.status}`}>{item.status}</span><h2>{item.ticker} 异动调查</h2><p>{formatDate(item.started_at)} — {formatDate(item.ends_at)}</p></div><strong>{item.news_count}<small> 条新闻线索</small></strong>{item.last_error&&<p className="error">{item.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}
       {tab==='reports'&&<div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div>}
       {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
@@ -102,8 +159,8 @@ export default function App() {
       {tab==='charts'&&<ChartsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
       {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
       {tab==='settings'&&settings.data&&<><SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>{authUser.role==='admin'&&<AdminPanel/>}</> }
+      </div>
     </main>
-    {tab==='overview'&&dashboard.data&&<PipCard><div className="pip-inner"><div className="pip-head"><i className={dashboard.data.market.is_open?'online':''}/><span>{dashboard.data.market.is_open?'美股交易中':'当前休市'}</span></div><strong>{dashboard.data.stocks.length}<small> 只监控</small></strong><div className="pip-foot"><span>{alerts.data?.length||0} 异动</span><span>{investigations.data?.filter(i=>i.status==='active').length||0} 调查</span></div></div></PipCard>}
     <Sheet open={selectedReport!==null} onClose={()=>setSelectedReport(null)} title={report.data?typeNames[report.data.report_type]||report.data.report_type:'报告'}>
       {report.data?<article className="report-detail sheet-report"><p className="eyebrow">{typeNames[report.data.report_type]} · {report.data.model}</p><h2>{report.data.title}</h2><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{report.data.content}</ReactMarkdown></div><h3>信息来源</h3>{report.data.sources.map((s,i)=><a href={s.url} target="_blank" rel="noreferrer" key={i}>{i+1}. {s.title}</a>)}</article>:<div className="empty">加载中…</div>}
     </Sheet>
@@ -355,6 +412,8 @@ function CongressDetail({detail,loading,onUnsub,fmtMoney}:{detail:FigureDetail|u
   </>
 }
 
+function TrashIcon() { return <svg className="trash-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/></svg> }
+
 function ThresholdCell({item,field,onSaved}:{item:WatchItem;field:'threshold_20m'|'threshold_1h'|'threshold_day';onSaved:()=>void}) {
   const [editing,setEditing] = useState(false)
   const [value,setValue] = useState('')
@@ -367,23 +426,25 @@ function ThresholdCell({item,field,onSaved}:{item:WatchItem;field:'threshold_20m
     if(!Number.isFinite(num)||num<=0){ setEditing(false); return }
     save.mutate({[field]:num})
   }
-  if(editing) return <span className="th-edit"><input autoFocus type="number" min="0" step="0.1" value={value} placeholder="默认"
-    onChange={e=>setValue(e.target.value)}
-    onBlur={commit}
-    onKeyDown={e=>{if(e.key==='Enter')commit();if(e.key==='Escape')setEditing(false)}}/></span>
-  return <span className="th-view" onClick={begin} title="点击编辑，清空则回退全局默认">{item[field]==null?'默认':`${item[field]}%`}</span>
+  const labels:Record<string,string> = {threshold_20m:'20 分钟',threshold_1h:'1 小时',threshold_day:'当日'}
+  return <>
+    <button type="button" className="threshold-chip" onClick={begin}><span>{labels[field]}</span><b>{item[field]==null?'默认':`${item[field]}%`}</b></button>
+    {createPortal(<Sheet open={editing} onClose={()=>setEditing(false)} title={`${labels[field]}涨跌阈值`}>
+      <div className="threshold-drawer"><p>设置 <b>{labels[field]}</b> 内触发异动提醒的涨跌幅。清空后恢复系统默认值。</p><label>涨跌阈值 (%)<input autoFocus type="number" inputMode="decimal" min="0" step="0.1" value={value} placeholder="默认" onChange={e=>setValue(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')commit();if(e.key==='Escape')setEditing(false)}}/></label><div className="threshold-drawer-actions"><button type="button" className="ghost-btn" onClick={()=>setEditing(false)}>取消</button><button type="button" onClick={commit} disabled={save.isPending}>{save.isPending?'保存中…':'保存阈值'}</button></div></div>
+    </Sheet>, document.body)}
+  </>
 }
 
 function SettingsForm({initial,onSaved}:{initial:Settings;onSaved:()=>void}) {
   const [form,setForm]=useState(initial)
   const save=useMutation({mutationFn:()=>patch<Settings>('/settings',form),onSuccess:onSaved})
   const fields:[keyof Settings,string][]=[['threshold_20m','20 分钟涨跌阈值 (%)'],['threshold_1h','1 小时涨跌阈值 (%)'],['threshold_day','当日涨跌阈值 (%)'],['alert_cooldown_minutes','同类警报冷却时间 (分钟)'],['investigation_interval_minutes','异动新闻搜索间隔 (分钟)'],['investigation_duration_minutes','异动调查持续时间 (分钟)']]
-  return <section className="settings-card"><h2>监控规则</h2><p>修改后将影响新触发的监控任务。API 密钥只在服务器环境变量中配置。</p><div className="settings-grid">{fields.map(([key,label])=><label key={key}>{label}<input type="number" value={form[key]} onChange={e=>setForm({...form,[key]:Number(e.target.value)})}/></label>)}</div><div className="readonly">行情轮询间隔：{form.price_poll_minutes} 分钟（通过环境变量配置）</div><button onClick={()=>save.mutate()} disabled={save.isPending}>{save.isPending?'保存中…':'保存设置'}</button>{save.isSuccess&&<span className="saved">已保存</span>}</section>
+  return <section className="settings-card"><h2>监控规则</h2><p>修改后将影响新触发的监控任务。API 密钥只在服务器环境变量中配置。</p><div className="settings-grid">{fields.map(([key,label])=><label key={key}>{label}<input type="number" inputMode="decimal" value={form[key]} onChange={e=>setForm({...form,[key]:Number(e.target.value)})}/></label>)}</div><div className="readonly">行情轮询间隔：{form.price_poll_minutes} 分钟（通过环境变量配置）</div><button onClick={()=>save.mutate()} disabled={save.isPending}>{save.isPending?'保存中…':'保存设置'}</button>{save.isSuccess&&<span className="saved">已保存</span>}</section>
 }
 
 
 // ── 登录 / 注册 ──────────────────────────────────────────────────
-function AuthGate({setToken,setAuthUser}:{setToken:(t:string)=>void;setAuthUser:(u:{username:string;role:string}|null)=>void}) {
+function AuthGate({setToken,setAuthUser,onPreview}:{setToken:(t:string)=>void;setAuthUser:(u:{username:string;role:string}|null)=>void;onPreview:()=>void}) {
   const [mode,setMode] = useState<'login'|'register'>('login')
   const [username,setUsername] = useState('')
   const [password,setPassword] = useState('')
@@ -415,8 +476,10 @@ function AuthGate({setToken,setAuthUser}:{setToken:(t:string)=>void;setAuthUser:
   }
 
   return <div className="auth-gate">
+    <div className="auth-aurora auth-aurora-one"/><div className="auth-aurora auth-aurora-two"/>
+    <div className="auth-intro"><span className="auth-kicker">MARKET INTELLIGENCE</span><h1>看见波动背后的<br/>真正信号。</h1><p>把行情、公告与新闻凝聚成清晰判断，<br/>让每一次关注都有意义。</p><div className="auth-signal"><span><i/> AAPL</span><b>214.37</b><em>+1.51%</em></div></div>
     <div className="auth-card">
-      <div className="brand" style={{justifyContent:'center',marginBottom:24}}><img src="/logo.png" className="brand-logo" alt="logo"/><div><strong>小日向美香</strong><small>powered by 和泉妃爱</small></div></div>
+      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div><strong>小日向美香</strong><small>欢迎回来</small></div></div>
       <div className="auth-tabs">
         <button className={mode==='login'?'active':''} onClick={()=>{setMode('login');setMsg('');setOk(false)}}>登录</button>
         <button className={mode==='register'?'active':''} onClick={()=>{setMode('register');setMsg('');setOk(false)}}>申请注册</button>
@@ -427,7 +490,7 @@ function AuthGate({setToken,setAuthUser}:{setToken:(t:string)=>void;setAuthUser:
           <input type="password" placeholder="密码" value={password} onChange={e=>setPassword(e.target.value)}/>
           <label className="remember-label"><input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}/> 记住我（30天）</label>
           {msg&&<p className="auth-msg">{msg}</p>}
-          <button type="submit" className="auth-submit">登录</button>
+          <button type="submit" className="auth-submit">登录 <span>→</span></button>
         </form>
         :ok
           ?<p className="auth-msg ok">{msg}</p>
@@ -436,8 +499,9 @@ function AuthGate({setToken,setAuthUser}:{setToken:(t:string)=>void;setAuthUser:
             <input type="password" placeholder="密码（至少6位）" value={password} onChange={e=>setPassword(e.target.value)}/>
             <p className="auth-hint">注册后需等待管理员审核激活</p>
             {msg&&<p className="auth-msg">{msg}</p>}
-            <button type="submit" className="auth-submit">提交申请</button>
+            <button type="submit" className="auth-submit">提交申请 <span>→</span></button>
           </form>}
+      <button className="preview-btn" onClick={onPreview}><span className="preview-icon">⌁</span><span><b>浏览演示界面</b><small>无需账户 · 使用本地示例数据</small></span><em>→</em></button>
     </div>
   </div>
 }
@@ -450,19 +514,20 @@ function JournalSection({username}:{username:string}) {
   const today = new Date().toISOString().slice(0,10)
   const logs = useQuery({queryKey:['trade-logs'],queryFn:()=>api<TradeLog[]>('/trade-logs')})
   const [editing,setEditing] = useState<TradeLog|null>(null)
+  const [editorOpen,setEditorOpen] = useState(()=>new URLSearchParams(window.location.search).get('journal')==='new')
   const [form,setForm] = useState({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[] as string[]})
   const payload = () => ({
     trade_date:form.trade_date,
-    ticker:form.ticker||null,
-    direction:form.direction||null,
-    quantity:form.quantity===''?null:Number(form.quantity),
-    price:form.price===''?null:Number(form.price),
+    ticker:null,
+    direction:null,
+    quantity:null,
+    price:null,
     note:form.note||null,
     content:form.content||null,
-    table_rows:form.table_rows.filter(r=>r.ticker||r.direction||r.quantity!=null||r.price!=null||r.fee!=null||r.strategy||r.result),
+    table_rows:form.table_rows.filter(r=>r.ticker||r.direction||r.quantity!=null||r.price!=null||r.strategy||r.result).map(r=>({...r,fee:null})),
     photo_urls:form.photo_urls,
   })
-  const reset = () => {setEditing(null);setForm({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[]})}
+  const reset = () => {setEditing(null);setEditorOpen(false);setForm({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[]})}
   const save = useMutation({
     mutationFn:()=>editing?patch<TradeLog>(`/trade-logs/${editing.id}`,payload()):post<TradeLog>('/trade-logs',payload()),
     onSuccess:()=>{reset();client.invalidateQueries({queryKey:['trade-logs']})},
@@ -482,6 +547,7 @@ function JournalSection({username}:{username:string}) {
       table_rows:log.table_rows.length?log.table_rows:[emptyTradeRow()],
       photo_urls:log.photo_urls||[],
     })
+    setEditorOpen(true)
   }
   const updateRow = (index:number, patch:Partial<TradeLogRow>) => setForm(f=>({...f,table_rows:f.table_rows.map((row,i)=>i===index?{...row,...patch}:row)}))
   const addPhotos = (files:FileList|null) => {
@@ -492,42 +558,11 @@ function JournalSection({username}:{username:string}) {
       reader.readAsDataURL(file)
     })
   }
+  const beginNew = () => {setEditing(null);setForm({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[]});setEditorOpen(true)}
+  const removeRow = (index:number) => setForm(f=>({...f,table_rows:f.table_rows.length>1?f.table_rows.filter((_,i)=>i!==index):[emptyTradeRow()]}))
   return <div className="journal">
-    <div className="journal-shell">
-      <form className="journal-editor" onSubmit={event=>{event.preventDefault();save.mutate()}}>
-        <div className="section-title"><h2>{editing?'编辑交易日志':'新建交易日志'}</h2><span>当前用户：{username}</span></div>
-        <div className="journal-fields">
-          <label>日期<input type="date" value={form.trade_date} onChange={e=>setForm({...form,trade_date:e.target.value})} required/></label>
-          <label>主标的<input value={form.ticker} onChange={e=>setForm({...form,ticker:e.target.value.toUpperCase()})} placeholder="NVDA"/></label>
-          <label>方向<select value={form.direction} onChange={e=>setForm({...form,direction:e.target.value})}><option value="">未填写</option><option>买入</option><option>卖出</option><option>加仓</option><option>减仓</option><option>观望</option></select></label>
-          <label>数量<input type="number" min="0" step="any" value={form.quantity} onChange={e=>setForm({...form,quantity:e.target.value})}/></label>
-          <label>价格<input type="number" min="0" step="any" value={form.price} onChange={e=>setForm({...form,price:e.target.value})}/></label>
-        </div>
-        <label className="journal-note">简短备注<input value={form.note} onChange={e=>setForm({...form,note:e.target.value})} placeholder="一句话记录当天最重要的交易背景"/></label>
-        <label className="journal-note">文字记录<textarea value={form.content} onChange={e=>setForm({...form,content:e.target.value})} placeholder="记录交易计划、执行、情绪、复盘和明天要验证的条件"/></label>
-        <div className="journal-table">
-          <div className="journal-table-head"><span>标的</span><span>方向</span><span>数量</span><span>价格</span><span>费用</span><span>策略</span><span>结果</span><span/></div>
-          {form.table_rows.map((row,index)=><div className="journal-table-row" key={index}>
-            <input value={row.ticker} onChange={e=>updateRow(index,{ticker:e.target.value.toUpperCase()})}/>
-            <input value={row.direction} onChange={e=>updateRow(index,{direction:e.target.value})}/>
-            <input type="number" min="0" step="any" value={row.quantity??''} onChange={e=>updateRow(index,{quantity:e.target.value===''?null:Number(e.target.value)})}/>
-            <input type="number" min="0" step="any" value={row.price??''} onChange={e=>updateRow(index,{price:e.target.value===''?null:Number(e.target.value)})}/>
-            <input type="number" min="0" step="any" value={row.fee??''} onChange={e=>updateRow(index,{fee:e.target.value===''?null:Number(e.target.value)})}/>
-            <input value={row.strategy} onChange={e=>updateRow(index,{strategy:e.target.value})}/>
-            <input value={row.result} onChange={e=>updateRow(index,{result:e.target.value})}/>
-            <button type="button" className="danger" onClick={()=>setForm(f=>({...f,table_rows:f.table_rows.filter((_,i)=>i!==index)}))}>删</button>
-          </div>)}
-          <button type="button" className="ghost-btn" onClick={()=>setForm(f=>({...f,table_rows:[...f.table_rows,emptyTradeRow()]}))}>添加表格行</button>
-        </div>
-        <div className="photo-uploader">
-          <label>照片<input type="file" accept="image/*" multiple onChange={e=>addPhotos(e.target.files)}/></label>
-          <div className="photo-grid">{form.photo_urls.map((src,index)=><div className="photo-thumb" key={index}><img src={src} alt={`交易截图 ${index+1}`}/><button type="button" onClick={()=>setForm(f=>({...f,photo_urls:f.photo_urls.filter((_,i)=>i!==index)}))}>移除</button></div>)}</div>
-        </div>
-        {save.error&&<p className="error">{save.error.message}</p>}
-        <div className="journal-actions"><button disabled={save.isPending}>{save.isPending?'保存中…':'保存日志'}</button>{editing&&<button type="button" className="ghost-btn" onClick={reset}>取消编辑</button>}</div>
-      </form>
       <div className="journal-list">
-        <div className="section-title"><h2>我的日志</h2><span>{logs.data?.length||0} 条</span></div>
+        <div className="section-title journal-list-title"><div><p>TRADING JOURNAL</p><h2>我的日志</h2></div><div className="journal-list-actions"><span>{logs.data?.length||0} 条</span><button className="journal-new-btn" onClick={beginNew}><span>＋</span> 新建日志</button></div></div>
         {logs.data?.map(log=><article className="journal-card" key={log.id}>
           <div className="journal-card-head"><div><b>{log.trade_date}</b><span>{[log.ticker,log.direction].filter(Boolean).join(' · ')||'未填写标的'}</span></div><small>{formatDate(log.created_at)}</small></div>
           {log.note&&<p>{log.note}</p>}
@@ -535,12 +570,30 @@ function JournalSection({username}:{username:string}) {
           {log.table_rows.length>0&&<div className="journal-mini-table">{log.table_rows.map((row,i)=><span key={i}>{row.ticker||'—'} {row.direction||''} {row.quantity??'—'} @ {row.price??'—'}</span>)}</div>}
           {log.photo_urls.length>0&&<div className="photo-strip">{log.photo_urls.map((src,i)=><img src={src} alt={`交易截图 ${i+1}`} key={i}/>)}</div>}
           {log.ai_summary&&<div className="ai-summary"><span className="ai-tag">AI · {log.ai_summary_model}</span><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{log.ai_summary}</ReactMarkdown></div>}
-          <div className="journal-card-actions"><button onClick={()=>summarize.mutate(log.id)} disabled={summarize.isPending}>{summarize.isPending?'处理中…':'AI 优化总结'}</button><button onClick={()=>edit(log)}>编辑</button><button className="danger" onClick={()=>del.mutate(log.id)}>删除</button></div>
+          <div className="journal-card-actions"><button onClick={()=>summarize.mutate(log.id)} disabled={summarize.isPending}>{summarize.isPending?'处理中…':'AI 优化总结'}</button><button onClick={()=>edit(log)}>编辑</button><button className="danger" aria-label="删除日志" onClick={()=>del.mutate(log.id)}><TrashIcon/></button></div>
         </article>)}
         {logs.isLoading&&<div className="empty">加载交易日志中…</div>}
         {!logs.isLoading&&!logs.data?.length&&<div className="empty">还没有日志。每天收盘后写一条，数据只对当前登录用户可见。</div>}
       </div>
-    </div>
+    {createPortal(<Sheet open={editorOpen} onClose={reset} title={editing?'编辑交易日志':'新建交易日志'}>
+      <form className="journal-editor" onSubmit={event=>{event.preventDefault();save.mutate()}}>
+        <div className="journal-editor-intro"><div><p className="eyebrow">{editing?'EDIT ENTRY':'NEW ENTRY'}</p><h2>{editing?'编辑交易日志':'把这次交易留下来'}</h2></div><span>当前用户：{username}</span></div>
+        <label className="journal-date-field">日期<input type="date" value={form.trade_date} onChange={e=>setForm({...form,trade_date:e.target.value})} required/></label>
+        <label className="journal-note">简短备注<input value={form.note} onChange={e=>setForm({...form,note:e.target.value})} placeholder="一句话记录当天最重要的交易背景"/></label>
+        <label className="journal-note">文字记录<textarea value={form.content} onChange={e=>setForm({...form,content:e.target.value})} placeholder="记录交易计划、执行、情绪、复盘和明天要验证的条件"/></label>
+        <div className="journal-table">
+          <div className="journal-table-heading"><div><b>交易明细</b><span>{form.table_rows.length} 张便签</span></div><small>每张便签可以记录一笔交易</small></div>
+          {form.table_rows.map((row,index)=><div className="journal-row-note" key={index}>
+            <div className="journal-row-top"><label><span>标的</span><input value={row.ticker} onChange={e=>updateRow(index,{ticker:e.target.value.toUpperCase()})} placeholder="NVDA"/></label><label><span>方向</span><select value={row.direction} onChange={e=>updateRow(index,{direction:e.target.value})}><option value="">选择方向</option><option>买入</option><option>卖出</option><option>观望</option><option>挂单</option></select></label><button type="button" className="row-delete" aria-label="删除这笔交易" onClick={()=>removeRow(index)}><TrashIcon/></button></div>
+            <div className="journal-row-bottom"><label><span>数量</span><input type="number" inputMode="decimal" min="0" step="any" value={row.quantity??''} onChange={e=>updateRow(index,{quantity:e.target.value===''?null:Number(e.target.value)})} placeholder="0"/></label><label><span>价格</span><input type="number" inputMode="decimal" min="0" step="any" value={row.price??''} onChange={e=>updateRow(index,{price:e.target.value===''?null:Number(e.target.value)})} placeholder="0.00"/></label><label><span>自定义标签</span><input value={row.strategy} onChange={e=>updateRow(index,{strategy:e.target.value})} placeholder="突破 / 试仓"/></label><label><span>其他</span><input value={row.result} onChange={e=>updateRow(index,{result:e.target.value})} placeholder="补充说明"/></label></div>
+          </div>)}
+          <button type="button" className="add-note-btn" onClick={()=>setForm(f=>({...f,table_rows:[...f.table_rows,emptyTradeRow()]}))}><span>＋</span> 添加交易便签</button>
+        </div>
+        <div className="photo-uploader"><label>照片<input type="file" accept="image/*" multiple onChange={e=>addPhotos(e.target.files)}/></label><div className="photo-grid">{form.photo_urls.map((src,index)=><div className="photo-thumb" key={index}><img src={src} alt={`交易截图 ${index+1}`}/><button type="button" onClick={()=>setForm(f=>({...f,photo_urls:f.photo_urls.filter((_,i)=>i!==index)}))}>移除</button></div>)}</div></div>
+        {save.error&&<p className="error">{save.error.message}</p>}
+        <div className="journal-actions"><button disabled={save.isPending}>{save.isPending?'保存中…':'保存日志'}</button>{editing&&<button type="button" className="ghost-btn" onClick={reset}>取消编辑</button>}</div>
+      </form>
+    </Sheet>, document.body)}
   </div>
 }
 
