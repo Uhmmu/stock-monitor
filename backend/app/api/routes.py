@@ -27,6 +27,7 @@ from app.models import (
     TrackedFigure,
     TradeLog,
     User,
+    ValuationSnapshot,
     WatchlistItem,
 )
 from app.schemas import (
@@ -85,12 +86,13 @@ def add_watchlist(payload: WatchlistCreate, db: Session = Depends(get_db)):
         raise HTTPException(409, "该股票已在自选列表中")
     db.refresh(item)
     if item.enabled:
-        from app.tasks.celery_app import sync_ticker_congress, sync_ticker_filings, sync_ticker_financials, sync_ticker_sec_all
+        from app.tasks.celery_app import sync_ticker_congress, sync_ticker_filings, sync_ticker_financials, sync_ticker_sec_all, sync_ticker_valuation
 
         sync_ticker_financials.delay(item.ticker)
         sync_ticker_filings.delay(item.ticker)
         sync_ticker_sec_all.delay(item.ticker)
         sync_ticker_congress.delay(item.ticker)
+        sync_ticker_valuation.delay(item.ticker)
     return item
 
 
@@ -320,6 +322,27 @@ def financials(ticker: str = Query(...), db: Session = Depends(get_db)):
         }
         for r in rows
     ]
+
+
+@router.get("/cross-model")
+def cross_model(ticker: str = Query(...), db: Session = Depends(get_db)):
+    """读取最新每日估值快照；页面不在请求期间实时打外部数据源。"""
+    value = _require_watched_ticker(db, ticker)
+    row = db.scalar(
+        select(ValuationSnapshot).where(ValuationSnapshot.ticker == value)
+        .order_by(ValuationSnapshot.snapshot_date.desc(), ValuationSnapshot.id.desc()).limit(1)
+    )
+    if not row:
+        raise HTTPException(404, "估值快照尚未生成，请先触发刷新")
+    return {**row.payload, "snapshot_date": row.snapshot_date, "generated_at": row.updated_at, "ai_model": row.ai_model}
+
+
+@router.post("/cross-model/refresh")
+def refresh_cross_model(ticker: str = Query(...), db: Session = Depends(get_db)):
+    value = _require_watched_ticker(db, ticker)
+    from app.tasks.celery_app import sync_ticker_valuation
+    sync_ticker_valuation.delay(value)
+    return {"status": "queued", "ticker": value}
 
 
 # 每项按候选 key 依次取第一个有值的（不同股票 Finnhub 填充的字段不一）

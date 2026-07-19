@@ -275,3 +275,30 @@ def summarize_trade_log(evidence: str) -> tuple[str, str]:
     if not summary:
         raise ValueError("交易日志总结响应为空")
     return summary, model
+
+
+CROSS_MODEL_OPINION_PROMPT = """你是一名严谨的美股估值分析师。系统已经完成全部数值计算，你只负责解释，不得重新计算、改写或虚构数值。
+请用中文写 3 到 5 句紧凑分析，必须：
+1. 指出估值主要由成长、现金流或资产质量中的什么驱动；
+2. 比较公司指标与同行中位数；
+3. 明确说明 DCF、相对估值、PEG 等模型是否存在分歧及原因；
+4. 提醒 DCF 对增长率、折现率或终值假设的敏感性；
+5. 数据不足时直说“数据不足”。
+不要给买卖建议，不要使用 Markdown 标题或列表，只输出一个自然段。"""
+
+
+def explain_cross_model(evidence: str) -> tuple[str, str]:
+    """固定使用 medium tier（当前配置为 gpt-5.6-luna）解释模型，不参与计算。"""
+    client, model = _client_and_model("medium")
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": CROSS_MODEL_OPINION_PROMPT},
+            {"role": "user", "content": evidence},
+        ],
+        temperature=0.2,
+    )
+    text = (response.choices[0].message.content or "").strip()
+    if not text:
+        raise ValueError("多模型解释响应为空")
+    return text, model

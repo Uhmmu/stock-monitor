@@ -144,6 +144,21 @@ class QuarterlyFinancial(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ValuationSnapshot(Base):
+    """每日多模型估值快照；JSON payload 保留计算证据，便于追溯和扩展模型。"""
+    __tablename__ = "valuation_snapshots"
+    __table_args__ = (UniqueConstraint("ticker", "snapshot_date"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    ai_opinion: Mapped[str | None] = mapped_column(Text)
+    ai_model: Mapped[str | None] = mapped_column(String(128))
+    source_version: Mapped[str] = mapped_column(String(32), default="cross-model-v3")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class EarningsEvent(Base):
     __tablename__ = "earnings_events"
     __table_args__ = (UniqueConstraint("ticker", "event_time"),)

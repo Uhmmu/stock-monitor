@@ -1,42 +1,44 @@
 # Stock Monitor
 
-A self-hosted stock monitoring dashboard with AI-powered analysis, real-time alerts, SEC filings integration, and institutional holdings tracking.
+一个可自托管的美股监控与研究工作台。它把实时行情、异动提醒、新闻与 SEC 披露、基本面数据、AI 分析、交易日志和多模型指标集中在一个响应式仪表盘中。
 
-## Features
+项目面向希望自己掌握数据、API 密钥和部署环境的个人投资者与小团队。它提供研究辅助，不构成投资建议。
 
-- **Real-time price monitoring** — polls configurable watchlist stocks every few minutes, triggers alerts on abnormal moves (20m / 1h / daily thresholds)
-- **TradingView charts** — embedded interactive charts for each stock
-- **Prediction charts** — visualize forecast overlays alongside price history
-- **Market overview** — major indices (SPY, QQQ, DJI, etc.) with open/close status
-- **AI investigation** — automatically kicks off when an alert fires; pulls news, summarizes with LLM, produces a report
-- **Multi-source news** — Tavily web search + SEC EDGAR filings; filters and scores by relevance and sentiment
-- **SEC integration** — fetches 8-K, 10-Q, 10-K filings via EDGAR; surfaces material disclosures alongside news
-- **Analyst ratings visualization** — aggregated buy/hold/sell ratings displayed as a visual breakdown
-- **KOL / institutional holdings** — SEC 13-F filings parsed to show what major funds hold
-- **Data gap reporting** — flags missing price or fundamental data so you know when coverage is incomplete
-- **Appearance polish** — dark-themed responsive UI with smooth transitions
+## 功能
 
-## Tech Stack
+- **实时行情与自选股**：按计划轮询自选标的，展示价格、涨跌幅、市场状态和 TradingView 图表。
+- **异动提醒与调查**：按 20 分钟、1 小时和日内阈值检测异常波动，并自动收集相关新闻与上下文。
+- **新闻与 SEC 数据**：聚合 Tavily、SEC EDGAR、Finnhub 等来源，支持相关性、情绪和标题翻译处理。
+- **基本面与估值**：展示财报、分析师评级、季度数据、DCF 情景和同行估值比较。
+- **多模型交叉**：根据行业与公司特征组合模型权重，并计算 Forward P/E、PEG、EV/Sales、DCF、ROIC、Piotroski F-Score、Altman Z-Score 等指标。计算结果会显示公式、数据来源、缺失字段和适用性，不把缺失数据伪装成 0 分。
+- **多用户登录**：支持注册申请、登录、JWT 会话、管理员审核/删除用户和管理员权限控制。
+- **交易日志区**：按用户记录交易计划、买卖方向、数量、价格、标签、图片和复盘内容，并可调用 AI 生成总结。
+- **SEC 官方数据**：支持 8-K、10-Q、10-K、内幕交易和 13F 持仓信息。
+- **数据缺口提示**：当外部数据覆盖不足时明确显示缺少的字段，方便排错和判断模型可信度。
 
-| Layer | Technology |
+## 技术栈
+
+| 层 | 技术 |
 |---|---|
-| Frontend | React 19, TypeScript, Vite, TanStack Query |
-| Backend | FastAPI, Celery, SQLAlchemy, Alembic |
-| Database | PostgreSQL 16 |
-| Queue / Cache | Redis 7 |
-| Data sources | yfinance, Finnhub MCP, Tavily, SEC EDGAR (edgartools) |
-| AI | OpenAI-compatible API (configurable model per task tier) |
-| Reverse proxy | Caddy (HTTPS + basic auth out of the box) |
-| Deployment | Docker Compose |
+| 前端 | React 19、TypeScript、Vite、TanStack Query、react-markdown |
+| 后端 | FastAPI、SQLAlchemy 2、Alembic、Pydantic Settings |
+| 后台任务 | Celery、Redis |
+| 数据库 | PostgreSQL 16 |
+| 数据源 | yfinance、Finnhub MCP、Tavily、SEC EDGAR / edgartools |
+| AI | 可配置的 OpenAI-compatible API |
+| 网关 | Caddy（HTTPS 和 Basic Auth） |
+| 部署 | Docker Compose |
 
-## Quick Start
+## 快速开始
 
-### Prerequisites
+### 环境要求
 
-- Docker + Docker Compose
-- API keys: Finnhub, Tavily, OpenAI-compatible endpoint
+- Docker Engine 与 Docker Compose
+- Finnhub API Key
+- Tavily API Key
+- OpenAI-compatible API Key 和 Base URL
 
-### 1. Clone and configure
+### 1. 获取代码并配置环境变量
 
 ```bash
 git clone https://github.com/Uhmmu/stock-monitor.git
@@ -44,90 +46,120 @@ cd stock-monitor
 cp .env.example .env
 ```
 
-Edit `.env` and fill in:
+至少填写以下配置：
 
 ```env
-POSTGRES_PASSWORD=your-secure-password
-DATABASE_URL=postgresql+psycopg://stock:your-secure-password@postgres:5432/stock_monitor
+POSTGRES_PASSWORD=change-this
+DATABASE_URL=postgresql+psycopg://stock:change-this@postgres:5432/stock_monitor
 
 FINNHUB_API_KEY=your-finnhub-key
 TAVILY_API_KEY=your-tavily-key
 
 OPENAI_API_KEY=your-key
 OPENAI_BASE_URL=https://api.openai.com/v1
-MODEL_SIMPLE=gpt-4o-mini
-MODEL_MEDIUM=gpt-4o
-MODEL_IMPORTANT=gpt-4o
+MODEL_SIMPLE=gpt-5.4-mini
+MODEL_MEDIUM=gpt-5.6-luna
+MODEL_IMPORTANT=gpt-5.6-sol
 
-SITE_DOMAIN=stocks.yourdomain.com
+# 生产环境必须修改
+JWT_SECRET=generate-a-long-random-secret
+ADMIN_INIT_PASSWORD=generate-a-strong-admin-password
+
+SITE_DOMAIN=stocks.example.com
 AUTH_USER=admin
-AUTH_PASSWORD_HASH=   # generate with: caddy hash-password
+AUTH_PASSWORD_HASH=   # caddy hash-password 生成
 ```
 
-### 2. Start
+不要把 `.env`、API Key、JWT 密钥或真实密码提交到 GitHub。
+
+### 2. 启动服务
 
 ```bash
-docker compose up -d
+docker compose up -d --build
+docker compose ps
 ```
 
-The dashboard will be available at `https://stocks.yourdomain.com` (or `http://localhost` for local use with the override file).
+API 容器启动时会自动执行 Alembic migration。生产环境中，后端代码变化后需要重建所有共享后端构建上下文的服务：`api`、`worker`、`sec-worker`、`beat`。
 
-### 3. Add stocks to watch
-
-Open the dashboard → click **Add** → enter a ticker symbol (e.g. `AAPL`).
-
-## Configuration Reference
-
-Key `.env` settings:
-
-| Variable | Default | Description |
-|---|---|---|
-| `PRICE_POLL_MINUTES` | `5` | How often to fetch prices |
-| `DEFAULT_THRESHOLD_20M` | `2.0` | % move in 20 min to trigger alert |
-| `DEFAULT_THRESHOLD_1H` | `4.0` | % move in 1 h to trigger alert |
-| `DEFAULT_THRESHOLD_DAY` | `6.0` | % daily move to trigger alert |
-| `ALERT_COOLDOWN_MINUTES` | `60` | Min gap between repeated alerts for same ticker |
-| `INVESTIGATION_DURATION_MINUTES` | `120` | How long to keep collecting news after an alert |
-| `NEWS_POLL_MINUTES` | `15` | News refresh interval |
-| `EARNINGS_LOOKAHEAD_DAYS` | `7` | Days ahead to flag upcoming earnings |
-| `MARKET_TIMEZONE` | `America/New_York` | Exchange timezone |
-
-## Project Structure
-
+```bash
+docker compose build api worker sec-worker beat
+docker compose up -d api worker sec-worker beat
+docker compose build frontend
+docker compose up -d frontend
 ```
+
+配置 Caddy 域名后，访问 `https://SITE_DOMAIN`。本地开发可以使用：
+
+```bash
+docker compose -f compose.yaml -f compose.override.yaml up -d
+```
+
+### 3. 创建用户
+
+首次启动时，应用会根据 `ADMIN_INIT_PASSWORD` 创建管理员账号。普通用户可以在登录页申请注册，管理员在“系统设置”中审核账号。
+
+### 4. 添加自选股
+
+登录后进入“自选股”，添加股票代码，例如 `AAPL`、`MSFT` 或 `NVDA`。后台任务会逐步拉取行情、财报、新闻和模型快照。
+
+## 常用命令
+
+```bash
+make up       # 构建并启动
+make down     # 停止服务
+make logs     # 查看日志
+make migrate  # 执行数据库迁移
+make test     # 运行后端测试
+make backup   # 备份 PostgreSQL
+```
+
+前端本地验证：
+
+```bash
+cd frontend
+npm test
+npm run build
+```
+
+后端专项测试：
+
+```bash
+docker compose run --rm api pytest
+```
+
+## 多模型指标说明
+
+年度损益表、资产负债表和现金流量表优先由 yfinance 拉取并统一字段名，再由应用计算：
+
+- **ROIC**：NOPAT ÷ 投入资本，优先使用当前/上一年度平均投入资本。
+- **Piotroski F-Score**：九项会计信号。缺失信号不会直接计为失败，界面会显示例如 `6/8`。
+- **Altman Z-Score**：经典上市制造业模型。银行、保险等金融企业不适用；软件和 REIT 会标记较低适用性。
+
+模型页面会同时展示公式、计算口径、警告、来源和缺失字段。不同公司的财报口径与行业特征不同，请结合原始披露理解结果。
+
+## 项目结构
+
+```text
 stock-monitor/
 ├── backend/
-│   ├── app/
-│   │   ├── api/          # FastAPI routes
-│   │   ├── tasks/        # Celery workers (price poll, news, SEC, LLM)
-│   │   ├── models.py     # DB models
-│   │   └── schemas.py    # Pydantic schemas
-│   └── tests/
-├── frontend/
-│   └── src/
-│       ├── App.tsx       # Main dashboard
-│       ├── Sheet.tsx     # Stock detail sheet
-│       └── PipCard.tsx   # Price pip component
-├── finnhub-mcp/          # Finnhub MCP server sidecar
+│   ├── app/api/             # FastAPI 路由、认证、交易日志、多模型 API
+│   ├── app/services/        # 行情、新闻、SEC、LLM、多模型计算
+│   ├── app/tasks/           # Celery 定时任务和后台同步
+│   ├── alembic/versions/    # 数据库迁移
+│   └── tests/               # 后端测试
+├── frontend/src/            # React 单页应用
+├── finnhub-mcp/             # Finnhub MCP sidecar
 ├── compose.yaml
 ├── Caddyfile
 └── .env.example
 ```
 
-## Changelog
+## 数据与安全
 
-### v0.2
-- Added TradingView embedded charts
-- Added prediction / forecast chart overlay
-- Added SEC EDGAR as a news and filing source
-- Added analyst ratings visualization
-- Added KOL / institutional holdings via SEC 13-F
-- Added market overview panel (major indices)
-- Improved data gap reporting
-- UI appearance polish
-
-### v0.1
-- Initial release: watchlist, price alerts, AI investigation reports, multi-source news
+- 外部 API 的覆盖范围、限流和字段完整性会影响页面结果。
+- 计算指标缺失时会明确显示“数据不足”，应用不会补造财务数据。
+- 生产环境请设置强密码、随机 `JWT_SECRET`、真实 `SEC_USER_AGENT`，并限制数据库与 Redis 的网络暴露。
+- 运行 `make backup` 定期备份 PostgreSQL；升级前建议先保留数据库和源码回滚副本。
 
 ## License
 

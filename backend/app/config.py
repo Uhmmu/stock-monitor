@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     investigation_duration_minutes: int = 120
     earnings_lookahead_days: int = 7
     finnhub_mcp_url: str = "http://finnhub-mcp:8125/mcp"
+    finnhub_api_key: str = ""
     archive_dir: str = "/data/archive"
     news_poll_minutes: int = 15
     news_relevance_threshold: float = 0.15

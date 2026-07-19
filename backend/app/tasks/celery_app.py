@@ -27,6 +27,7 @@ from app.models import (
     SecFinancialPeriod,
     SecInsiderTrade,
     TrackedFigure,
+    ValuationSnapshot,
     WatchlistItem,
 )
 from app.services import archive
@@ -35,6 +36,7 @@ from app.services.financials import quarters_from_yf
 from app.services.sec_edgar import fetch_filings
 from app.services.market_context import build_market_context
 from app.services.llm import curate_daily_news, generate_analysis
+from app.services.llm import explain_cross_model
 from app.services.market_calendar import market_status
 from app.services.market_data import fetch_earnings_events, fetch_quotes, fetch_yf_quarterly
 from app.services.news import collect_ticker_news, filter_news
@@ -42,6 +44,8 @@ from app.services.news_store import news_for_day, persist_news
 from app.services.relevance import score_news
 from app.services.search import search_ticker_news
 from app.services.title_translation import title_input_hash, translate_title
+from app.services.cross_model import build_cross_model, fetch_cross_model_inputs, opinion_evidence
+from app.services.finnhub_mcp import fetch_company_peers
 
 settings = get_settings()
 NEWS_PER_TICKER = 12  # 每只股票入库上限，按相关性取 top N
@@ -57,6 +61,7 @@ celery_app.conf.beat_schedule = {
     "poll-news": {"task": "app.tasks.celery_app.poll_news", "schedule": settings.news_poll_minutes * 60},
     "curate-daily-news": {"task": "app.tasks.celery_app.curate_daily_archives", "schedule": 1800},
     "sync-financials": {"task": "app.tasks.celery_app.sync_financials", "schedule": 43200},
+    "sync-valuations": {"task": "app.tasks.celery_app.sync_valuations", "schedule": 86400},
     "translate-news-titles": {"task": "app.tasks.celery_app.translate_news_titles", "schedule": 60},
     "summarize-sec-events": {"task": "app.tasks.celery_app.summarize_sec_events", "schedule": 120},
     "sync-sec-filings": {"task": "app.tasks.celery_app.sync_sec_filings", "schedule": 21600},
@@ -501,6 +506,60 @@ def sync_ticker_financials(ticker: str):
         ok = _sync_ticker_financials(db, ticker)
         db.commit()
         return {"ticker": ticker, "synced": ok}
+
+
+def _sync_ticker_valuation(db, ticker: str) -> bool:
+    """抓取分类、Finnhub 同行与 Yahoo 原料，计算后按日 upsert；Luna 仅解释。"""
+    try:
+        peers = fetch_company_peers(ticker)
+    except Exception:
+        peers = []
+    info, peer_infos, financials = fetch_cross_model_inputs(ticker, peers)
+    if not info:
+        return False
+    quarters = db.scalars(
+        select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker)
+        .order_by(QuarterlyFinancial.period_end.desc()).limit(4)
+    ).all()
+    payload = build_cross_model(
+        ticker, info,
+        [{"revenue": row.revenue, "free_cash_flow": row.free_cash_flow} for row in quarters],
+        peer_infos, peers, financials,
+    )
+    ai_model = None
+    try:
+        opinion, ai_model = explain_cross_model(opinion_evidence(payload))
+        payload["ai_opinion"] = opinion
+        payload["ai_model"] = ai_model
+    except Exception:
+        opinion = payload["ai_opinion"]
+    today = datetime.now(UTC).date()
+    row = db.scalar(select(ValuationSnapshot).where(ValuationSnapshot.ticker == ticker, ValuationSnapshot.snapshot_date == today))
+    if not row:
+        row = ValuationSnapshot(ticker=ticker, snapshot_date=today)
+        db.add(row)
+    row.payload = payload
+    row.ai_opinion = opinion
+    row.ai_model = ai_model
+    row.source_version = "cross-model-v3"
+    return True
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_valuations")
+def sync_valuations():
+    with SessionLocal() as db:
+        tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        synced = sum(1 for ticker in tickers if _sync_ticker_valuation(db, ticker))
+        db.commit()
+        return {"synced": synced}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_ticker_valuation")
+def sync_ticker_valuation(ticker: str):
+    with SessionLocal() as db:
+        ok = _sync_ticker_valuation(db, ticker.upper())
+        db.commit()
+        return {"ticker": ticker.upper(), "synced": ok}
 
 
 def _sync_ticker_filings(db, ticker: str) -> int:

@@ -1,5 +1,7 @@
 import asyncio
 import json
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from datetime import UTC, datetime, timedelta
 
 from mcp import ClientSession
@@ -118,3 +120,28 @@ def fetch_recommendations(ticker: str) -> list[dict]:
     payload = _run(_call_tool("finnhub_stock_estimates",
         {"operation": "get_recommendations", "symbol": ticker}))
     return payload if isinstance(payload, list) else []
+
+
+def fetch_company_peers(ticker: str) -> list[str]:
+    """Finnhub 官方 /stock/peers。同行关系由 Finnhub 提供，不自行猜测。"""
+    settings = get_settings()
+    if not settings.finnhub_api_key:
+        return []
+    query = urlencode({"symbol": ticker.upper(), "grouping": "subIndustry"})
+    request = Request(
+        f"https://finnhub.io/api/v1/stock/peers?{query}",
+        headers={"X-Finnhub-Token": settings.finnhub_api_key, "User-Agent": "stock-monitor/2.0"},
+    )
+    with urlopen(request, timeout=_REQUEST_TIMEOUT) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, list):
+        return []
+    seen: set[str] = set()
+    peers: list[str] = []
+    for item in payload:
+        symbol = str(item or "").strip().upper()
+        if not symbol or symbol == ticker.upper() or symbol in seen:
+            continue
+        seen.add(symbol)
+        peers.append(symbol)
+    return peers[:10]

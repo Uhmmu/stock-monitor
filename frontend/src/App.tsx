@@ -20,6 +20,11 @@ type NewsArchive = {ticker:string;market_date:string;content:string;model:string
 type Financial = {fiscal_year:number;fiscal_period:string;period_end:string;filed_at:string|null;currency:string|null;revenue:number|null;eps:number|null;net_income:number|null;operating_income:number|null;gross_margin:number|null;net_margin:number|null;operating_cash_flow:number|null;free_cash_flow:number|null}
 type Rating = {period:string|null;strongBuy:number;buy:number;hold:number;sell:number;strongSell:number}
 type Fundamentals = {ticker:string;metrics:{label:string;value:number|null}[];rating:Rating|null}
+type CrossMetric = {key:string;label:string;value:number|null;unit:string;status:'available'|'partial'|'insufficient'|'not_applicable';display?:string|null;missing_fields?:string[];warnings?:string[];available_components?:number;total_components?:number;components?:Record<string,boolean|null>;applicability?:'medium'|'low'|'not_applicable';formula_version?:string;inputs?:Record<string,unknown>;peer_median:number|null;peer_count:number;peer_delta_percent:number|null;comparison:string|null;formula:string;recommended_range:string;explanation:string;note:string|null}
+type WeightAdjustment = {tag:string;label:string;confidence:number;raw_adjustment:number;applied_adjustment:number}
+type WeightDetail = {key:string;label:string;base_score:number;adjustments:WeightAdjustment[];final_score:number;weight:number}
+type ModelSignal = {key:string;label:string;verdict:string;stars:number;detail:string}
+type CrossModel = {ticker:string;company:string;classification:{sector:string|null;industry:string|null;industry_key:string|null;profile:string;label:string;primary:string[];secondary:string[];focus:string};peers:{source:string;symbols:string[];coverage:number;medians:Record<string,number>};tags:{name:string;label:string;confidence:number}[];weights:Record<string,number>;weight_details:WeightDetail[];valuation:CrossMetric[];growth:CrossMetric[];health:CrossMetric[];dcf_scenarios:{bear:number|null;base:number|null;bull:number|null;current:number|null;assumptions:Record<string,{growth:number;discount_rate:number;terminal_growth:number}>};reverse_dcf:{implied_fcf_growth:number|null;unit:string};consensus:{items:{key:string;label:string;value:number}[];value:number|null;current:number|null};model_signals:ModelSignal[];model_conflict:boolean;ai_opinion:string;ai_model:string|null;snapshot_date:string;generated_at:string|null}
 type SecEvent = {id:number;form:string;item_code:string;item_label:string;priority:string;text:string|null;summary_zh:string|null;summary_model:string|null;summary_status:string;filing_date:string|null;filing_url:string}
 type SecFin = {fiscal_year:number;fiscal_period:string;form:string;period_end:string|null;currency:string|null;revenue:number|null;net_income:number|null;operating_income:number|null;gross_profit:number|null;eps_basic:number|null;eps_diluted:number|null;cash_and_equivalents:number|null;total_debt:number|null;shares_outstanding:number|null;operating_cash_flow:number|null}
 type SecInsider = {id:number;insider_name:string;insider_title:string|null;transaction_date:string|null;transaction_code:string|null;shares:number|null;price:number|null;value:number|null;shares_owned_after:number|null;flag:string|null;filing_url:string}
@@ -68,6 +73,7 @@ function NavIcon({name}:{name:string}) {
     alerts:<><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></>,
     news:<><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></>,
     fundamentals:<><path d="m3 17 5-5 4 3 8-9"/><path d="M15 6h5v5"/></>,
+    crossmodel:<><path d="M4 18V7M10 18V4M16 18v-8M22 18H2"/><path d="m5 11 5-3 4 4 6-6"/></>,
     sec:<><path d="M6 2h9l4 4v16H6z"/><path d="M14 2v5h5M9 12h6M9 16h6"/></>,
     congress:<><circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 4-7 8-7s7 2 8 7"/></>,
     charts:<><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/></>,
@@ -88,6 +94,8 @@ export default function App() {
   const [mobileNavOpen,setMobileNavOpen] = useState(false)
   const [ticker,setTicker] = useState('')
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
+  const [selectedModel,setSelectedModel] = useState<CrossMetric|null>(null)
+  const [selectedWeight,setSelectedWeight] = useState<WeightDetail|null>(null)
   const [stocksExpanded,setStocksExpanded] = useState(false)
   const client = useQueryClient()
   const live = !!authUser&&!demoMode
@@ -121,8 +129,8 @@ export default function App() {
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
   const submitTicker = (event:FormEvent) => { event.preventDefault(); if(ticker.trim()) add.mutate() }
-  const tabs = [['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['sec','SEC 公告'],['congress','名人持仓'],['charts','图表'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面与财报'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['charts','实时图表'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
+  const tabs = [['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['crossmodel','多模型交叉'],['sec','SEC 公告'],['congress','名人持仓'],['charts','图表'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面与财报'],['crossmodel','多模型交叉'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['charts','实时图表'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
   const viewIndices = demoMode ? demoIndices : indices.data
   const viewAlerts = demoMode ? demoAlerts : alerts.data
@@ -135,7 +143,7 @@ export default function App() {
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
     <aside className={mobileNavOpen?'mobile-open':''}>
       <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div><div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{investigations.data?.length||0}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
-      <nav>{tabs.map(([key,label],index)=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{index===8&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
+      <nav>{tabs.map(([key,label],index)=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{index===9&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
       <div className="account-card"><span className="account-avatar">{authUser.username.slice(0,1)}</span><span><b>{demoMode?'演示空间':authUser.username}</b><small>{demoMode?'本地预览模式':'已安全连接'}</small></span><i className={viewDashboard?.market.is_open?'online':''}/></div>
       <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setDemoMode(false);setToken('');setAuthUser(null)}}>{demoMode?'退出预览':'退出登录'}</button></aside>
     {mobileNavOpen&&<button className="mobile-nav-scrim" onClick={()=>setMobileNavOpen(false)} aria-label="关闭菜单"/>}
@@ -154,6 +162,7 @@ export default function App() {
       {tab==='reports'&&<div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div>}
       {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
       {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
+      {tab==='crossmodel'&&<CrossModelCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onMetric={setSelectedModel} onWeight={setSelectedWeight}/>}
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
       {tab==='congress'&&<CongressCenter/>}
       {tab==='charts'&&<ChartsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
@@ -164,7 +173,61 @@ export default function App() {
     <Sheet open={selectedReport!==null} onClose={()=>setSelectedReport(null)} title={report.data?typeNames[report.data.report_type]||report.data.report_type:'报告'}>
       {report.data?<article className="report-detail sheet-report"><p className="eyebrow">{typeNames[report.data.report_type]} · {report.data.model}</p><h2>{report.data.title}</h2><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{report.data.content}</ReactMarkdown></div><h3>信息来源</h3>{report.data.sources.map((s,i)=><a href={s.url} target="_blank" rel="noreferrer" key={i}>{i+1}. {s.title}</a>)}</article>:<div className="empty">加载中…</div>}
     </Sheet>
+    <Sheet open={selectedModel!==null} onClose={()=>setSelectedModel(null)} title={selectedModel?.label||'指标说明'}>
+      {selectedModel&&<article className="model-drawer"><p className="eyebrow">MODEL EXPLAINER · 指标学习</p><h2>{selectedModel.label}</h2><strong>{formatCrossMetric(selectedModel)}</strong>{selectedModel.applicability&&<div className={`applicability ${selectedModel.applicability}`}>适用性：{{medium:'中',low:'低',not_applicable:'不适用'}[selectedModel.applicability]}</div>}{selectedModel.peer_median!=null&&<div className="drawer-peer"><span>同行中位数</span><b>{selectedModel.peer_median.toFixed(2)}{selectedModel.unit==='multiple'?'×':selectedModel.unit==='%'?'%':''}</b><em>{selectedModel.comparison}</em></div>}<p>{selectedModel.explanation}</p>{selectedModel.missing_fields?.length?<div className="missing-data"><b>{selectedModel.status==='not_applicable'?'不适用':'数据不足'}</b><p>{selectedModel.status==='not_applicable'?'该公司类型不使用此模型。':`缺少：${selectedModel.missing_fields.map(fieldLabel).join('、')}`}</p></div>:null}{selectedModel.warnings?.map(warning=><div className="metric-warning" key={warning}>{warning}</div>)}<div className="learn-block"><b>公式 Formula</b><p>{selectedModel.formula}</p></div><div className="learn-block"><b>参考区间 Reference Range</b><p>{selectedModel.recommended_range}</p></div>{selectedModel.note&&<div className="explainer"><b>计算说明</b><p>{selectedModel.note}</p></div>}</article>}
+    </Sheet>
+    <Sheet open={selectedWeight!==null} onClose={()=>setSelectedWeight(null)} title={selectedWeight?.label||'权重来源'}>
+      {selectedWeight&&<article className="weight-drawer"><p className="eyebrow">WEIGHT EVIDENCE · 权重证据</p><h2>{selectedWeight.label}</h2><div className="weight-result"><span>基础分 <b>{selectedWeight.base_score}</b></span><span>最终权重 <strong>{(selectedWeight.weight*100).toFixed(0)}%</strong></span></div><div className="weight-evidence-list">{selectedWeight.adjustments.map(a=><div key={`${a.tag}${a.raw_adjustment}`}><span>✓ {a.label}<small>置信度 {Math.round(a.confidence*100)}%</small></span><b className={a.applied_adjustment<0?'negative':'positive'}>{a.applied_adjustment>=0?'+':''}{a.applied_adjustment}</b></div>)}{!selectedWeight.adjustments.length&&<div className="empty">当前仅使用基础权重。</div>}</div><div className="weight-final">调整后得分 <b>{selectedWeight.final_score}</b><span>归一化后</span><strong>{(selectedWeight.weight*100).toFixed(0)}%</strong></div></article>}
+    </Sheet>
   </div>
+}
+
+function CrossModelCenter({tickers,onMetric,onWeight}:{tickers:string[];onMetric:(metric:CrossMetric)=>void;onWeight:(weight:WeightDetail)=>void}) {
+  const [active,setActive] = useState(tickers[0]||'')
+  const current = active||tickers[0]||''
+  const client = useQueryClient()
+  const result = useQuery({queryKey:['cross-model',current],queryFn:()=>api<CrossModel>(`/cross-model?ticker=${current}`),enabled:!!current})
+  const refresh = useMutation({mutationFn:()=>post(`/cross-model/refresh?ticker=${current}`,{}),onSuccess:()=>setTimeout(()=>client.invalidateQueries({queryKey:['cross-model',current]}),12000)})
+  const data = result.data
+  const MetricGroup = ({title,items}:{title:string;items:CrossMetric[]}) => <section className="cross-group"><div className="section-title"><h2>{title}</h2><small>点击指标学习公式与参考区间</small></div><div className="cross-metric-grid">{items.map(item=><button key={item.key} className={`cross-metric ${item.status}`} onClick={()=>onMetric(item)}><span>{item.label}</span><strong>{formatCrossMetric(item)}</strong>{item.peer_median!=null?<div className="peer-compare"><small>同行中位数</small><b>{item.peer_median.toFixed(2)}{item.unit==='multiple'?'×':item.unit==='%'?'%':''}</b><em className={(item.peer_delta_percent||0)>0?'negative':'positive'}>{item.comparison}</em></div>:<small>{metricHint(item)}</small>}</button>)}</div></section>
+  if(!tickers.length) return <div className="empty">请先在自选股中添加股票。</div>
+  return <div className="news-center cross-model">
+    <div className="news-tickers">{tickers.map(t=><button key={t} className={t===current?'active':''} onClick={()=>setActive(t)}>{t}</button>)}</div>
+    {result.isLoading&&<div className="empty">正在读取每日估值快照…</div>}{result.isError&&<div className="snapshot-empty"><p>该股票还没有每日估值快照。</p><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'正在抓取同行与估值…':'立即生成'}</button></div>}
+    {data&&<><section className="cross-hero"><div><p className="eyebrow">{data.classification.sector||'未分类'} · {data.classification.industry||'数据不足'}</p><h2>{data.company} <span>{data.classification.label}</span></h2><p>主模型：{data.classification.primary.map(modelLabel).join('、')||'数据不足'}　·　辅助：{data.classification.secondary.map(modelLabel).join('、')||'—'}</p></div><div><small>重点关注</small><b>{data.classification.focus}</b></div></section>
+      <section className="peer-strip"><div><span>FINNHUB PEERS · 同行公司</span><small>{data.peers.coverage}/{data.peers.symbols.length} 家具备可比数据</small></div><div>{data.peers.symbols.map(symbol=><b key={symbol}>{symbol}</b>)}{!data.peers.symbols.length&&<em>同行数据不足</em>}</div></section>
+      <section className="ai-opinion"><span>🧠 AI Opinion · Luna 分析师解释</span><p>{data.ai_opinion}</p><small>{data.model_conflict?'模型存在分歧，Luna 负责解释分歧原因。':'主要模型方向较一致。'} 数值全部由确定性公式计算，AI 不参与计算。{data.ai_model&&` · ${data.ai_model}`}</small></section>
+      <div className="tag-row">{data.tags.filter(t=>!t.name.includes(':')).map(t=><span key={t.name}>{t.label} <b>{Math.round(t.confidence*100)}%</b></span>)}</div>
+      <MetricGroup title="📈 Valuation" items={data.valuation}/><MetricGroup title="📊 Growth" items={data.growth}/><MetricGroup title="🏦 Financial Health" items={data.health}/>
+      <section className="scenario-section"><div className="section-title"><h2>DCF Scenarios（DCF 情景估值）</h2><small>区间比单一数字更重要</small></div><div className="scenario-grid">{(['bear','base','bull','current'] as const).map(key=><div key={key} className={key}><span>{{bear:'Bear（悲观）',base:'Base（基准）',bull:'Bull（乐观）',current:'Current（现价）'}[key]}</span><strong>{data.dcf_scenarios[key]==null?'数据不足':`$${data.dcf_scenarios[key]!.toFixed(2)}`}</strong>{key!=='current'&&data.dcf_scenarios.assumptions[key]&&<small>增长 {data.dcf_scenarios.assumptions[key].growth}% · 折现 {data.dcf_scenarios.assumptions[key].discount_rate}%</small>}</div>)}</div>{data.reverse_dcf.implied_fcf_growth!=null&&<p className="reverse-dcf">Reverse DCF（反向DCF）：现价隐含未来五年 FCF 年增长约 <b>{data.reverse_dcf.implied_fcf_growth}%</b></p>}</section>
+      <section className="consensus-section"><div className="section-title"><h2>Valuation Consensus（估值共识）</h2><small>仅聚合独立可计算的公允价值</small></div><div className="consensus-list">{data.consensus.items.map(item=><div key={item.key}><span>{item.label}</span><b>${item.value.toFixed(2)}</b></div>)}<div className="consensus-final"><span>Consensus（共识）</span><strong>{data.consensus.value==null?'数据不足':`$${data.consensus.value.toFixed(2)}`}</strong></div></div></section>
+      <section className="signal-section"><div className="section-title"><h2>Model Conflict（模型冲突）</h2><small>{data.model_conflict?'存在分歧':'方向一致'}</small></div><div className="signal-grid">{data.model_signals.map(signal=><div key={signal.key}><span>{signal.label}</span><b>{signal.verdict}</b><em>{'★'.repeat(signal.stars)}{'☆'.repeat(5-signal.stars)}</em><small>{signal.detail}</small></div>)}</div></section>
+      <section className="cross-weights"><div className="section-title"><h2>Model Weight（模型权重）</h2><small>点击查看基础分、标签加减分和置信度</small></div>{data.weight_details.filter(item=>item.weight>0).sort((a,b)=>b.weight-a.weight).map(item=><button key={item.key} onClick={()=>onWeight(item)}><span>{item.label}</span><i><b style={{width:`${item.weight*100}%`}}/></i><em>{(item.weight*100).toFixed(0)}%</em><small>查看来源 →</small></button>)}</section>
+      <div className="snapshot-footer"><span>数据快照：{data.snapshot_date}</span><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'更新中…':'刷新今日数据'}</button></div></>}
+  </div>
+}
+
+function modelLabel(key:string) { return ({forward_pe:'Forward PE',peg:'PEG',ev_sales:'EV/Sales',ev_ebitda:'EV/EBITDA',dcf:'DCF',fcf_yield:'FCF Yield',price_to_book:'P/B',rule_of_40:'Rule of 40',roe:'ROE',roic:'ROIC'} as Record<string,string>)[key]||key }
+
+function formatCrossMetric(item:CrossMetric) {
+  if(item.status==='not_applicable') return '不适用'
+  if(item.display) return item.display
+  if(item.value==null) return '数据不足'
+  return `${item.value.toLocaleString('en-US',{maximumFractionDigits:2})}${item.unit==='multiple'?'×':item.unit==='%'?'%':item.unit==='score'?'':` ${item.unit}`}`
+}
+
+function metricHint(item:CrossMetric) {
+  if(item.status==='not_applicable') return '该公司类型不适用'
+  if(item.status==='partial') return `部分数据 · ${item.available_components||0}/${item.total_components||9} 项可计算`
+  if(item.status==='available') return '查看说明与参考值 →'
+  return item.missing_fields?.length?`缺少 ${item.missing_fields.slice(0,2).map(fieldLabel).join('、')}`:'当前数据不足'
+}
+
+function fieldLabel(key:string) {
+  const previous = key.endsWith('_previous')
+  const base = previous?key.slice(0,-9):key
+  const label = ({operating_income:'Operating Income / EBIT',pretax_income:'Pretax Income',tax_expense:'Tax Expense',net_income:'Net Income',operating_cash_flow:'Operating Cash Flow',gross_profit:'Gross Profit',total_debt:'Total Debt',long_term_debt:'Long-Term Debt',stockholders_equity:'Stockholders Equity',shares_issued:'Ordinary Shares Number',cash:'Cash',retained_earnings:'Retained Earnings',current_assets:'Current Assets',current_liabilities:'Current Liabilities',total_assets:'Total Assets',total_liabilities:'Total Liabilities',revenue:'Revenue',market_cap:'Market Cap',positive_invested_capital:'正投入资本',positive_total_assets:'正总资产',positive_total_liabilities:'正总负债'} as Record<string,string>)[base]||base.replaceAll('_',' ')
+  return `${label}${previous?'（上一年度）':''}`
 }
 
 function RatingGauge({r}:{r:Rating}) {
