@@ -24,7 +24,11 @@ type CrossMetric = {key:string;label:string;value:number|null;unit:string;status
 type WeightAdjustment = {tag:string;label:string;confidence:number;raw_adjustment:number;applied_adjustment:number}
 type WeightDetail = {key:string;label:string;base_score:number;adjustments:WeightAdjustment[];final_score:number;weight:number}
 type ModelSignal = {key:string;label:string;verdict:string;stars:number;detail:string}
-type CrossModel = {ticker:string;company:string;classification:{sector:string|null;industry:string|null;industry_key:string|null;profile:string;label:string;primary:string[];secondary:string[];focus:string};peers:{source:string;symbols:string[];coverage:number;medians:Record<string,number>};tags:{name:string;label:string;confidence:number}[];weights:Record<string,number>;weight_details:WeightDetail[];valuation:CrossMetric[];growth:CrossMetric[];health:CrossMetric[];dcf_scenarios:{bear:number|null;base:number|null;bull:number|null;current:number|null;assumptions:Record<string,{growth:number;discount_rate:number;terminal_growth:number}>};reverse_dcf:{implied_fcf_growth:number|null;unit:string};consensus:{items:{key:string;label:string;value:number}[];value:number|null;current:number|null};model_signals:ModelSignal[];model_conflict:boolean;ai_opinion:string;ai_model:string|null;snapshot_date:string;generated_at:string|null}
+type GrahamPoint = {value:number|null;source:string;field?:string|null;as_of?:string|null;quality:string;raw_value?:number;clamped?:boolean;original?:GrahamPoint}
+type GrahamScenario = {name:string;growth_rate:number|null;intrinsic_value:number|null;current_price:number|null;margin_of_safety:number|null;premium_or_discount:number|null;status:GrahamStatus;available:boolean}
+type GrahamStatus = 'undervalued'|'fairly_valued'|'overvalued'|'not_applicable'
+type GrahamAnalysis = {symbol:string;currency:string;current_price:number|null;graham_number:{value:number|null;margin_of_safety:number|null;status:GrahamStatus;available:boolean};growth_formula:{conservative:GrahamScenario;base:GrahamScenario;optimistic:GrahamScenario};inputs:{current_price:GrahamPoint;eps_ttm:GrahamPoint;book_value_per_share:GrahamPoint;growth_rate:GrahamPoint;aaa_yield:GrahamPoint};applicability:{status:'applicable'|'limited'|'not_applicable';confidence:string;reasons:string[];missing_fields:string[]};overall_status:GrahamStatus;financial_period:string|null;updated_at:string}
+type CrossModel = {ticker:string;company:string;classification:{sector:string|null;industry:string|null;industry_key:string|null;profile:string;label:string;primary:string[];secondary:string[];focus:string};peers:{source:string;symbols:string[];coverage:number;medians:Record<string,number>};tags:{name:string;label:string;confidence:number}[];weights:Record<string,number>;weight_details:WeightDetail[];valuation:CrossMetric[];growth:CrossMetric[];health:CrossMetric[];graham:GrahamAnalysis|null;dcf_scenarios:{bear:number|null;base:number|null;bull:number|null;current:number|null;assumptions:Record<string,{growth:number;discount_rate:number;terminal_growth:number}>};reverse_dcf:{implied_fcf_growth:number|null;unit:string};consensus:{items:{key:string;label:string;value:number}[];value:number|null;current:number|null};model_signals:ModelSignal[];model_conflict:boolean;ai_opinion:string;ai_model:string|null;snapshot_date:string;generated_at:string|null}
 type SecEvent = {id:number;form:string;item_code:string;item_label:string;priority:string;text:string|null;summary_zh:string|null;summary_model:string|null;summary_status:string;filing_date:string|null;filing_url:string}
 type SecFin = {fiscal_year:number;fiscal_period:string;form:string;period_end:string|null;currency:string|null;revenue:number|null;net_income:number|null;operating_income:number|null;gross_profit:number|null;eps_basic:number|null;eps_diluted:number|null;cash_and_equivalents:number|null;total_debt:number|null;shares_outstanding:number|null;operating_cash_flow:number|null}
 type SecInsider = {id:number;insider_name:string;insider_title:string|null;transaction_date:string|null;transaction_code:string|null;shares:number|null;price:number|null;value:number|null;shares_owned_after:number|null;flag:string|null;filing_url:string}
@@ -182,6 +186,47 @@ export default function App() {
   </div>
 }
 
+const grahamStatusLabel:Record<GrahamStatus,string> = {undervalued:'Undervalued · 低估',fairly_valued:'Fairly Valued · 合理',overvalued:'Overvalued · 偏贵',not_applicable:'Not Applicable · 不适用'}
+const grahamQualityLabel:Record<string,string> = {reported:'Reported · 财报值',calculated:'Calculated · 计算值',estimated:'Estimated · 估算值',historical:'Historical · 历史值',analyst_estimate:'Analyst Estimate · 分析师预期',market_data:'Market Data · 市场数据',user_input:'User Input · 用户输入',missing:'Unavailable · 缺失'}
+
+function GrahamPanel({ticker,initial}:{ticker:string;initial:GrahamAnalysis}) {
+  const [result,setResult] = useState<GrahamAnalysis|null>(null)
+  const [growth,setGrowth] = useState('')
+  const [aaaYield,setAaaYield] = useState('')
+  const [normalizedEps,setNormalizedEps] = useState('')
+  useEffect(()=>{setResult(null);setGrowth('');setAaaYield('');setNormalizedEps('')},[ticker,initial.updated_at])
+  const applyOverride = useMutation({
+    mutationFn:()=>post<GrahamAnalysis>(`/cross-model/graham?ticker=${ticker}`,{
+      growth_rate:growth===''?null:Number(growth),aaa_yield:aaaYield===''?null:Number(aaaYield),normalized_eps:normalizedEps===''?null:Number(normalizedEps),
+    }),
+    onSuccess:setResult,
+  })
+  const data = result||initial
+  const money = (value:number|null) => value==null?'数据不足':new Intl.NumberFormat('en-US',{style:'currency',currency:data.currency||'USD',maximumFractionDigits:2}).format(value)
+  const percent = (value:number|null) => value==null?'—':`${(value*100).toFixed(1)}%`
+  const points = [
+    ['eps_ttm','EPS TTM',data.inputs.eps_ttm],['book_value_per_share','BVPS',data.inputs.book_value_per_share],
+    ['growth_rate','Growth Rate · 采用增长率',data.inputs.growth_rate],['aaa_yield','AAA Yield · 公司债收益率',data.inputs.aaa_yield],
+  ] as const
+  const reset = () => {setResult(null);setGrowth('');setAaaYield('');setNormalizedEps('')}
+  return <section className="graham-section">
+    <div className="section-title"><div><h2>Graham Analysis（格莱厄姆估值）</h2><small>历史盈利与账面价值模型 · 不构成投资建议</small></div><span className={`graham-applicability ${data.applicability.status}`}>{{applicable:'适用',limited:'有限适用',not_applicable:'不适用'}[data.applicability.status]}</span></div>
+    <div className="graham-summary">
+      <div><span>Current Price（现价）</span><strong>{money(data.current_price)}</strong><small>{data.inputs.current_price.source}</small></div>
+      <div><span>Graham Number</span><strong>{money(data.graham_number.value)}</strong><small>安全边际 {percent(data.graham_number.margin_of_safety)}</small></div>
+      <div><span>Base Growth Value（基准成长估值）</span><strong>{money(data.growth_formula.base.intrinsic_value)}</strong><small>增长率 {data.growth_formula.base.growth_rate==null?'—':`${data.growth_formula.base.growth_rate.toFixed(1)}%`}</small></div>
+      <div className={`graham-verdict ${data.overall_status}`}><span>Composite Status（综合状态）</span><strong>{grahamStatusLabel[data.overall_status]}</strong><small>仅为模型比较，不是买卖信号</small></div>
+    </div>
+    <div className="graham-scenario-wrap"><table className="graham-scenario-table"><thead><tr><th>Scenario</th><th>Growth Rate</th><th>Intrinsic Value</th><th>Margin of Safety</th><th>Valuation Status</th></tr></thead><tbody>{(['conservative','base','optimistic'] as const).map(key=>{const row=data.growth_formula[key];return <tr key={key}><td>{{conservative:'Conservative（保守）',base:'Base（基准）',optimistic:'Optimistic（乐观）'}[key]}</td><td>{row.growth_rate==null?'—':`${row.growth_rate.toFixed(1)}%`}</td><td>{money(row.intrinsic_value)}</td><td className={(row.margin_of_safety||0)>=0?'positive':'negative'}>{percent(row.margin_of_safety)}</td><td><span className={`graham-status ${row.status}`}>{grahamStatusLabel[row.status]}</span></td></tr>})}</tbody></table></div>
+    <div className="graham-detail-grid">
+      <div className="graham-inputs"><div className="section-title"><h3>Inputs & Sources（输入与来源）</h3><small>财报值、计算值和估算值分开展示</small></div>{points.map(([key,label,point])=><div className="graham-input-row" key={key}><span>{label}</span><b>{point.value==null?'数据不足':`${point.value.toFixed(2)}${key==='growth_rate'||key==='aaa_yield'?'%':''}`}</b><em>{point.source}</em><small>{point.as_of||'日期不可用'}</small><i>{grahamQualityLabel[point.quality]||point.quality}</i></div>)}</div>
+      <form className="graham-overrides" onSubmit={event=>{event.preventDefault();applyOverride.mutate()}}><div className="section-title"><h3>User Override（用户覆盖）</h3><small>仅临时重算，不修改原始快照</small></div><label>增长率 %（-4 至 15）<input type="number" min="-4" max="15" step="0.1" value={growth} onChange={e=>setGrowth(e.target.value)} placeholder="使用默认来源"/></label><label>AAA Yield %（可选）<input type="number" min="0.01" step="0.01" value={aaaYield} onChange={e=>setAaaYield(e.target.value)} placeholder="使用 FRED DAAA"/></label><label>Normalized EPS（可选）<input type="number" min="0.01" step="0.01" value={normalizedEps} onChange={e=>setNormalizedEps(e.target.value)} placeholder="使用 EPS TTM"/></label><div><button type="submit" disabled={applyOverride.isPending}>{applyOverride.isPending?'计算中…':'应用覆盖'}</button><button type="button" className="ghost-btn" onClick={reset}>恢复默认</button></div>{applyOverride.isError&&<p>输入无效或重算失败，请检查数值。</p>}</form>
+    </div>
+    {(data.applicability.reasons.length>0||data.applicability.missing_fields.length>0)&&<div className="graham-notes"><b>模型适用性说明</b>{data.applicability.reasons.map(reason=><p key={reason}>• {reason}</p>)}</div>}
+    <div className="graham-disclaimer">格莱厄姆估值依赖历史盈利、账面价值和增长率假设。该模型不适用于所有行业，也不构成投资建议。<span>公式：√(22.5 × EPS TTM × BVPS)；EPS × (8.5 + 2g) × 4.4 ÷ AAA Yield</span></div>
+  </section>
+}
+
 function CrossModelCenter({tickers,onMetric,onWeight}:{tickers:string[];onMetric:(metric:CrossMetric)=>void;onWeight:(weight:WeightDetail)=>void}) {
   const [active,setActive] = useState(tickers[0]||'')
   const current = active||tickers[0]||''
@@ -199,6 +244,7 @@ function CrossModelCenter({tickers,onMetric,onWeight}:{tickers:string[];onMetric
       <section className="ai-opinion"><span>🧠 AI Opinion · Luna 分析师解释</span><p>{data.ai_opinion}</p><small>{data.model_conflict?'模型存在分歧，Luna 负责解释分歧原因。':'主要模型方向较一致。'} 数值全部由确定性公式计算，AI 不参与计算。{data.ai_model&&` · ${data.ai_model}`}</small></section>
       <div className="tag-row">{data.tags.filter(t=>!t.name.includes(':')).map(t=><span key={t.name}>{t.label} <b>{Math.round(t.confidence*100)}%</b></span>)}</div>
       <MetricGroup title="📈 Valuation" items={data.valuation}/><MetricGroup title="📊 Growth" items={data.growth}/><MetricGroup title="🏦 Financial Health" items={data.health}/>
+      {data.graham?<GrahamPanel ticker={current} initial={data.graham}/>:<section className="graham-section graham-empty"><h2>Graham Analysis（格莱厄姆估值）</h2><p>当前是旧版估值快照，请点击底部“刷新今日数据”生成 Graham 数据。</p></section>}
       <section className="scenario-section"><div className="section-title"><h2>DCF Scenarios（DCF 情景估值）</h2><small>区间比单一数字更重要</small></div><div className="scenario-grid">{(['bear','base','bull','current'] as const).map(key=><div key={key} className={key}><span>{{bear:'Bear（悲观）',base:'Base（基准）',bull:'Bull（乐观）',current:'Current（现价）'}[key]}</span><strong>{data.dcf_scenarios[key]==null?'数据不足':`$${data.dcf_scenarios[key]!.toFixed(2)}`}</strong>{key!=='current'&&data.dcf_scenarios.assumptions[key]&&<small>增长 {data.dcf_scenarios.assumptions[key].growth}% · 折现 {data.dcf_scenarios.assumptions[key].discount_rate}%</small>}</div>)}</div>{data.reverse_dcf.implied_fcf_growth!=null&&<p className="reverse-dcf">Reverse DCF（反向DCF）：现价隐含未来五年 FCF 年增长约 <b>{data.reverse_dcf.implied_fcf_growth}%</b></p>}</section>
       <section className="consensus-section"><div className="section-title"><h2>Valuation Consensus（估值共识）</h2><small>仅聚合独立可计算的公允价值</small></div><div className="consensus-list">{data.consensus.items.map(item=><div key={item.key}><span>{item.label}</span><b>${item.value.toFixed(2)}</b></div>)}<div className="consensus-final"><span>Consensus（共识）</span><strong>{data.consensus.value==null?'数据不足':`$${data.consensus.value.toFixed(2)}`}</strong></div></div></section>
       <section className="signal-section"><div className="section-title"><h2>Model Conflict（模型冲突）</h2><small>{data.model_conflict?'存在分歧':'方向一致'}</small></div><div className="signal-grid">{data.model_signals.map(signal=><div key={signal.key}><span>{signal.label}</span><b>{signal.verdict}</b><em>{'★'.repeat(signal.stars)}{'☆'.repeat(5-signal.stars)}</em><small>{signal.detail}</small></div>)}</div></section>
@@ -540,7 +586,7 @@ function AuthGate({setToken,setAuthUser,onPreview}:{setToken:(t:string)=>void;se
 
   return <div className="auth-gate">
     <div className="auth-aurora auth-aurora-one"/><div className="auth-aurora auth-aurora-two"/>
-    <div className="auth-intro"><span className="auth-kicker">MARKET INTELLIGENCE</span><h1>看见波动背后的<br/>真正信号。</h1><p>把行情、公告与新闻凝聚成清晰判断，<br/>让每一次关注都有意义。</p><div className="auth-signal"><span><i/> AAPL</span><b>214.37</b><em>+1.51%</em></div></div>
+    <div className="auth-intro"><span className="auth-kicker">MARKET INTELLIGENCE</span><h1>小日向美香<br/>是钟家乐小女友。</h1><p>骗你的，其实羊宫妃那，<br/>是大女友。</p><div className="auth-signal"><span><i/> AAPL</span><b>214.37</b><em>+1.51%</em></div></div>
     <div className="auth-card">
       <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div><strong>小日向美香</strong><small>欢迎回来</small></div></div>
       <div className="auth-tabs">

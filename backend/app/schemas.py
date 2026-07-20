@@ -45,6 +45,13 @@ class SettingsOut(SettingsUpdate):
     price_poll_minutes: int
 
 
+class GrahamOverride(BaseModel):
+    """按请求临时覆盖 Graham 输入，不写回每日快照。"""
+    growth_rate: float | None = Field(default=None, ge=-4, le=15, allow_inf_nan=False)
+    aaa_yield: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    normalized_eps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
 class TradeLogTableRow(BaseModel):
     ticker: str = Field(default="", max_length=16)
     direction: str = Field(default="", max_length=16)

@@ -5,12 +5,14 @@ Luna 仅消费本模块生成的证据并解释结论，不参与任何数值计
 """
 from __future__ import annotations
 
+import logging
 from math import pow
 from statistics import median
 from typing import Any
 
 import yfinance as yf
 
+logger = logging.getLogger(__name__)
 
 FIELD_ALIASES = {
     "revenue": ["Total Revenue", "Operating Revenue"],
@@ -19,6 +21,7 @@ FIELD_ALIASES = {
     "pretax_income": ["Pretax Income", "Income Before Tax"],
     "tax_expense": ["Tax Provision", "Income Tax Expense"],
     "net_income": ["Net Income", "Net Income Common Stockholders"],
+    "diluted_eps": ["Diluted EPS", "DilutedEPS"],
     "total_assets": ["Total Assets"],
     "current_assets": ["Current Assets", "Total Current Assets"],
     "current_liabilities": ["Current Liabilities", "Total Current Liabilities"],
@@ -32,7 +35,7 @@ FIELD_ALIASES = {
     "shares_issued": ["Ordinary Shares Number", "Share Issued"],
 }
 
-INCOME_FIELDS = {"revenue", "gross_profit", "operating_income", "pretax_income", "tax_expense", "net_income"}
+INCOME_FIELDS = {"revenue", "gross_profit", "operating_income", "pretax_income", "tax_expense", "net_income", "diluted_eps"}
 BALANCE_FIELDS = set(FIELD_ALIASES) - INCOME_FIELDS - {"operating_cash_flow"}
 CASHFLOW_FIELDS = {"operating_cash_flow"}
 
@@ -495,7 +498,8 @@ def _fallback_opinion(signals: list[dict], rule40: float | None, dcf: dict, reve
 
 
 def build_cross_model(ticker: str, info: dict[str, Any], quarters: list[dict[str, Any]], peer_infos: list[dict[str, Any]] | None = None,
-                      peer_symbols: list[str] | None = None, financials: dict[str, Any] | None = None) -> dict:
+                      peer_symbols: list[str] | None = None, financials: dict[str, Any] | None = None,
+                      graham: dict[str, Any] | None = None) -> dict:
     peer_infos, peer_symbols = peer_infos or [], peer_symbols or []
     values = _raw_values(info); medians, counts = _peer_medians(peer_infos)
     financials = financials or {"source": "yfinance_annual", "periods": []}
@@ -580,6 +584,7 @@ def build_cross_model(ticker: str, info: dict[str, Any], quarters: list[dict[str
             "peers": {"source": "Finnhub /stock/peers", "symbols": peer_symbols, "coverage": len(peer_infos), "medians": medians},
             "tags": [{"name": name, "label": TAG_LABELS.get(name, name), "confidence": value} for name, value in sorted(tags.items())],
             "weights": weights, "weight_details": weight_details, "valuation": valuation, "growth": growth_items, "health": health,
+            "graham": graham,
             "dcf_scenarios": dcf, "reverse_dcf": {"implied_fcf_growth": reverse_growth, "unit": "%"},
             "consensus": {"items": consensus_items, "value": consensus_value, "current": round(price, 2) if price is not None else None},
             "model_signals": signals, "model_conflict": len({item["verdict"] for item in signals if item["stars"]}) > 1,
@@ -590,14 +595,24 @@ def fetch_cross_model_inputs(ticker: str, peer_symbols: list[str]) -> tuple[dict
     """每日任务调用；页面不直接访问 Yahoo，保证显示的是持久化快照。"""
     stock = yf.Ticker(ticker)
     try: info = stock.get_info()
-    except Exception: info = {}
+    except Exception as exc:
+        logger.warning("%s Yahoo info 获取失败: %s", ticker, exc)
+        info = {}
+    try:
+        fast_info = stock.fast_info
+        info["fastInfoLastPrice"] = fast_info.last_price
+        if info.get("previousClose") is None:
+            info["previousClose"] = fast_info.previous_close
+    except Exception as exc:
+        logger.warning("%s Yahoo fast_info 获取失败: %s", ticker, exc)
     try:
         financials = normalize_financial_statements(
             stock.get_income_stmt(freq="yearly"),
             stock.get_balance_sheet(freq="yearly"),
             stock.get_cash_flow(freq="yearly"),
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("%s Yahoo 年度财报获取失败: %s", ticker, exc)
         financials = {"source": "yfinance_annual", "periods": []}
     peer_infos: list[dict] = []
     for symbol in peer_symbols[:10]:

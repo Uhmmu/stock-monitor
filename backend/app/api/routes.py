@@ -31,6 +31,7 @@ from app.models import (
     WatchlistItem,
 )
 from app.schemas import (
+    GrahamOverride,
     SettingsOut,
     SettingsUpdate,
     TradeLogCreate,
@@ -343,6 +344,21 @@ def refresh_cross_model(ticker: str = Query(...), db: Session = Depends(get_db))
     from app.tasks.celery_app import sync_ticker_valuation
     sync_ticker_valuation.delay(value)
     return {"status": "queued", "ticker": value}
+
+
+@router.post("/cross-model/graham")
+def graham_with_overrides(payload: GrahamOverride, ticker: str = Query(...), db: Session = Depends(get_db)):
+    """使用最新快照输入临时重算 Graham；不访问第三方，也不覆盖原始快照。"""
+    from app.services.graham import apply_graham_overrides
+
+    value = _require_watched_ticker(db, ticker)
+    row = db.scalar(
+        select(ValuationSnapshot).where(ValuationSnapshot.ticker == value)
+        .order_by(ValuationSnapshot.snapshot_date.desc(), ValuationSnapshot.id.desc()).limit(1)
+    )
+    if not row or not row.payload.get("graham"):
+        raise HTTPException(404, "Graham 估值快照尚未生成，请先刷新今日数据")
+    return apply_graham_overrides(row.payload["graham"], **payload.model_dump())
 
 
 # 每项按候选 key 依次取第一个有值的（不同股票 Finnhub 填充的字段不一）

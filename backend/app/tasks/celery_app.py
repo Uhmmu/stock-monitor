@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import logging
 
 from celery import Celery
 from sqlalchemy import or_, select
@@ -45,9 +46,11 @@ from app.services.relevance import score_news
 from app.services.search import search_ticker_news
 from app.services.title_translation import title_input_hash, translate_title
 from app.services.cross_model import build_cross_model, fetch_cross_model_inputs, opinion_evidence
-from app.services.finnhub_mcp import fetch_company_peers
+from app.services.finnhub_mcp import fetch_basic_metrics, fetch_company_peers
+from app.services.graham import build_graham_from_sources, get_latest_aaa_corporate_bond_yield
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 NEWS_PER_TICKER = 12  # 每只股票入库上限，按相关性取 top N
 MIN_NEWS_PER_TICKER = 5  # 保底：新闻少的股票不被阈值砍光，按关联度降序至少留 N 篇
 celery_app = Celery("stock_monitor", broker=settings.redis_url, backend=settings.redis_url)
@@ -521,10 +524,29 @@ def _sync_ticker_valuation(db, ticker: str) -> bool:
         select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker)
         .order_by(QuarterlyFinancial.period_end.desc()).limit(4)
     ).all()
+    quarter_inputs = [
+        {"period_end": row.period_end.isoformat(), "eps": row.eps, "net_income": row.net_income,
+         "revenue": row.revenue, "free_cash_flow": row.free_cash_flow}
+        for row in quarters
+    ]
+    latest_quote = db.scalar(
+        select(PriceSnapshot).where(PriceSnapshot.ticker == ticker)
+        .order_by(PriceSnapshot.quote_time.desc()).limit(1)
+    )
+    quote_input = ({"price": latest_quote.price, "source": latest_quote.source,
+                    "as_of": latest_quote.quote_time.isoformat()} if latest_quote else None)
+    try:
+        finnhub_metrics = fetch_basic_metrics(ticker)
+    except Exception as exc:
+        logger.warning("%s Finnhub Graham 基本面获取失败: %s", ticker, exc)
+        finnhub_metrics = {}
+    aaa_yield = get_latest_aaa_corporate_bond_yield()
+    graham = build_graham_from_sources(
+        ticker, info, finnhub_metrics, quarter_inputs, financials, quote_input, aaa_yield,
+    )
     payload = build_cross_model(
         ticker, info,
-        [{"revenue": row.revenue, "free_cash_flow": row.free_cash_flow} for row in quarters],
-        peer_infos, peers, financials,
+        quarter_inputs, peer_infos, peers, financials, graham,
     )
     ai_model = None
     try:
@@ -541,7 +563,7 @@ def _sync_ticker_valuation(db, ticker: str) -> bool:
     row.payload = payload
     row.ai_opinion = opinion
     row.ai_model = ai_model
-    row.source_version = "cross-model-v3"
+    row.source_version = "cross-model-v4"
     return True
 
 
