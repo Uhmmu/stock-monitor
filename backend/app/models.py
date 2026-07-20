@@ -1,7 +1,7 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -30,6 +30,53 @@ class WatchlistItem(Base):
     threshold_20m: Mapped[float | None] = mapped_column(Float)
     threshold_1h: Mapped[float | None] = mapped_column(Float)
     threshold_day: Mapped[float | None] = mapped_column(Float)
+    alert_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    user_group_id: Mapped[int | None] = mapped_column(ForeignKey("stock_groups.id", ondelete="SET NULL"), index=True)
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class StockProfile(Base):
+    """股票基础资料缓存；官方分类与用户显示分组保持分离。"""
+    __tablename__ = "stock_profiles"
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    company_name: Mapped[str | None] = mapped_column(String(256))
+    official_sector: Mapped[str | None] = mapped_column(String(128), index=True)
+    official_industry: Mapped[str | None] = mapped_column(String(192), index=True)
+    source: Mapped[str] = mapped_column(String(32), default="yfinance")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class StockGroup(Base):
+    __tablename__ = "stock_groups"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PeerRelation(Base):
+    """同行引用缓存；官方结果随估值同步刷新，手动关系由用户维护。"""
+    __tablename__ = "peer_relations"
+    __table_args__ = (UniqueConstraint("base_ticker", "peer_ticker"), CheckConstraint("base_ticker <> peer_ticker"))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    base_ticker: Mapped[str] = mapped_column(String(16), index=True)
+    peer_ticker: Mapped[str] = mapped_column(String(16), index=True)
+    source: Mapped[str] = mapped_column(String(16), default="manual", index=True)
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PeerExclusion(Base):
+    __tablename__ = "peer_exclusions"
+    __table_args__ = (UniqueConstraint("base_ticker", "peer_ticker"), CheckConstraint("base_ticker <> peer_ticker"))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    base_ticker: Mapped[str] = mapped_column(String(16), index=True)
+    peer_ticker: Mapped[str] = mapped_column(String(16), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

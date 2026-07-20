@@ -6,7 +6,11 @@ import rehypeSanitize from 'rehype-sanitize'
 import { api, patch, post } from './api'
 import { Sheet } from './Sheet'
 
-type WatchItem = { id:number; ticker:string; enabled:boolean; threshold_20m:number|null; threshold_1h:number|null; threshold_day:number|null }
+type WatchItem = { id:number; ticker:string; enabled:boolean; alert_enabled:boolean; user_group_id:number|null; display_order:number; threshold_20m:number|null; threshold_1h:number|null; threshold_day:number|null }
+type ManagedStock = {ticker:string;company_name:string|null;official_sector:string|null;official_industry:string|null;user_group_id:number|null;display_order:number;is_watchlisted:boolean;is_peer_referenced:boolean;peer_referenced_by:string[];stock_type:'watchlist'|'matched';price:number|null;change_percent:number|null;alert_enabled:boolean;threshold_20m:number|null;threshold_1h:number|null;threshold_day:number|null;watchlist_id:number|null}
+type StockManagementData = {groups:{id:number;name:string;display_order:number}[];watchlisted:ManagedStock[];matched:ManagedStock[]}
+type PeerItem = {ticker:string;source:'official'|'manual';excluded:boolean;display_order:number;is_watchlisted:boolean}
+type PeerList = {base_ticker:string;items:PeerItem[]}
 type Dashboard = { market:{is_open:boolean; checked_at:string}; stocks:{ticker:string;price:number|null;previous_close:number|null;updated_at:string|null;volume:number|null;volume_ratio:number|null;volume_label:string|null}[] }
 type IndexQuote = {symbol:string;name:string;price:number|null;previous_close:number|null;change_points:number|null;change_percent:number|null}
 type Indices = {indices:IndexQuote[];market:{is_open:boolean;checked_at:string}}
@@ -28,7 +32,7 @@ type GrahamPoint = {value:number|null;source:string;field?:string|null;as_of?:st
 type GrahamScenario = {name:string;growth_rate:number|null;intrinsic_value:number|null;current_price:number|null;margin_of_safety:number|null;premium_or_discount:number|null;status:GrahamStatus;available:boolean}
 type GrahamStatus = 'undervalued'|'fairly_valued'|'overvalued'|'not_applicable'
 type GrahamAnalysis = {symbol:string;currency:string;current_price:number|null;graham_number:{value:number|null;margin_of_safety:number|null;status:GrahamStatus;available:boolean};growth_formula:{conservative:GrahamScenario;base:GrahamScenario;optimistic:GrahamScenario};inputs:{current_price:GrahamPoint;eps_ttm:GrahamPoint;book_value_per_share:GrahamPoint;growth_rate:GrahamPoint;aaa_yield:GrahamPoint};applicability:{status:'applicable'|'limited'|'not_applicable';confidence:string;reasons:string[];missing_fields:string[]};overall_status:GrahamStatus;financial_period:string|null;updated_at:string}
-type CrossModel = {ticker:string;company:string;classification:{sector:string|null;industry:string|null;industry_key:string|null;profile:string;label:string;primary:string[];secondary:string[];focus:string};peers:{source:string;symbols:string[];coverage:number;medians:Record<string,number>};tags:{name:string;label:string;confidence:number}[];weights:Record<string,number>;weight_details:WeightDetail[];valuation:CrossMetric[];growth:CrossMetric[];health:CrossMetric[];graham:GrahamAnalysis|null;dcf_scenarios:{bear:number|null;base:number|null;bull:number|null;current:number|null;assumptions:Record<string,{growth:number;discount_rate:number;terminal_growth:number}>};reverse_dcf:{implied_fcf_growth:number|null;unit:string};consensus:{items:{key:string;label:string;value:number}[];value:number|null;current:number|null};model_signals:ModelSignal[];model_conflict:boolean;ai_opinion:string;ai_model:string|null;snapshot_date:string;generated_at:string|null}
+type CrossModel = {ticker:string;company:string;classification:{sector:string|null;industry:string|null;industry_key:string|null;profile:string;label:string;primary:string[];secondary:string[];focus:string};peers:{source:string;symbols:string[];official_symbols?:string[];coverage:number;medians:Record<string,number>};tags:{name:string;label:string;confidence:number}[];weights:Record<string,number>;weight_details:WeightDetail[];valuation:CrossMetric[];growth:CrossMetric[];health:CrossMetric[];graham:GrahamAnalysis|null;dcf_scenarios:{bear:number|null;base:number|null;bull:number|null;current:number|null;assumptions:Record<string,{growth:number;discount_rate:number;terminal_growth:number}>};reverse_dcf:{implied_fcf_growth:number|null;unit:string};consensus:{items:{key:string;label:string;value:number}[];value:number|null;current:number|null};model_signals:ModelSignal[];model_conflict:boolean;ai_opinion:string;ai_model:string|null;snapshot_date:string;generated_at:string|null}
 type SecEvent = {id:number;form:string;item_code:string;item_label:string;priority:string;text:string|null;summary_zh:string|null;summary_model:string|null;summary_status:string;filing_date:string|null;filing_url:string}
 type SecFin = {fiscal_year:number;fiscal_period:string;form:string;period_end:string|null;currency:string|null;revenue:number|null;net_income:number|null;operating_income:number|null;gross_profit:number|null;eps_basic:number|null;eps_diluted:number|null;cash_and_equivalents:number|null;total_debt:number|null;shares_outstanding:number|null;operating_cash_flow:number|null}
 type SecInsider = {id:number;insider_name:string;insider_title:string|null;transaction_date:string|null;transaction_code:string|null;shares:number|null;price:number|null;value:number|null;shares_owned_after:number|null;flag:string|null;filing_url:string}
@@ -80,7 +84,6 @@ function NavIcon({name}:{name:string}) {
     crossmodel:<><path d="M4 18V7M10 18V4M16 18v-8M22 18H2"/><path d="m5 11 5-3 4 4 6-6"/></>,
     sec:<><path d="M6 2h9l4 4v16H6z"/><path d="M14 2v5h5M9 12h6M9 16h6"/></>,
     congress:<><circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 4-7 8-7s7 2 8 7"/></>,
-    charts:<><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/></>,
     reports:<><path d="M5 3h14v18H5z"/><path d="M9 8h6M9 12h6M9 16h4"/></>,
     journal:<><path d="M5 4h14v16H5z"/><path d="M9 4v16M12 8h4M12 12h4"/></>,
     settings:<><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></>,
@@ -96,7 +99,6 @@ export default function App() {
   const [authLoading,setAuthLoading] = useState(()=>!!(localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')))
   const [tab,setTab] = useState(()=>new URLSearchParams(window.location.search).get('tab')||'overview')
   const [mobileNavOpen,setMobileNavOpen] = useState(false)
-  const [ticker,setTicker] = useState('')
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
   const [selectedModel,setSelectedModel] = useState<CrossMetric|null>(null)
   const [selectedWeight,setSelectedWeight] = useState<WeightDetail|null>(null)
@@ -111,8 +113,6 @@ export default function App() {
   const reports = useQuery({queryKey:['reports'],queryFn:()=>api<Report[]>('/reports'),enabled:live})
   const report = useQuery({queryKey:['report',selectedReport],queryFn:()=>api<ReportDetail>(`/reports/${selectedReport}`),enabled:live&&selectedReport!==null})
   const settings = useQuery({queryKey:['settings'],queryFn:()=>api<Settings>('/settings'),enabled:live})
-  const add = useMutation({mutationFn:()=>post('/watchlist',{ticker}),onSuccess:()=>{setTicker('');client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}})
-  const remove = useMutation({mutationFn:(id:number)=>api(`/watchlist/${id}`,{method:'DELETE'}),onSuccess:()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}})
 
   useEffect(()=>{
     if(demoMode){setAuthLoading(false);return}
@@ -132,9 +132,8 @@ export default function App() {
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const submitTicker = (event:FormEvent) => { event.preventDefault(); if(ticker.trim()) add.mutate() }
-  const tabs = [['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['crossmodel','多模型交叉'],['sec','SEC 公告'],['congress','名人持仓'],['charts','图表'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面与财报'],['crossmodel','多模型交叉'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['charts','实时图表'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
+  const tabs = [['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['crossmodel','估值'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面与财报'],['crossmodel','估值'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
   const viewIndices = demoMode ? demoIndices : indices.data
   const viewAlerts = demoMode ? demoAlerts : alerts.data
@@ -161,7 +160,7 @@ export default function App() {
         <section><div className="section-title"><div><p>WATCHLIST</p><h2>市场快照</h2></div><div className="section-actions"><button className="stock-collapse-btn" onClick={()=>setStocksExpanded(v=>!v)}>{stocksExpanded?'收起':'展开更多'} <span>{stocksExpanded?'↑':'↓'}</span></button><button onClick={()=>setTab('watchlist')}>管理自选股 <span>→</span></button></div></div><div className={`stock-grid${stocksExpanded?' is-expanded':' is-collapsed'}`}>{overviewStocks.map(stock=>{const change=stock.price&&stock.previous_close?(stock.price-stock.previous_close)/stock.previous_close*100:null;return <article className="stock-card" key={stock.ticker}><div><span className="ticker">{stock.ticker}</span><small>{stock.updated_at?'刚刚更新':'等待首次采集'}</small></div><strong>{formatPrice(stock.price)}</strong><span className={change!=null&&change<0?'negative':'positive'}>{change==null?'—':`${change>=0?'+':''}${change.toFixed(2)}% 今日`}</span>{stock.volume_label&&stock.volume_label!=='正常'&&<span className={`vol-tag ${stock.volume_label==='放量'?'heavy':'light'}`}>{stock.volume_label} · {stock.volume_ratio?.toFixed(2)}×</span>}<div className="card-glow"/></article>})}{!overviewStocks.length&&<div className="empty">添加第一只股票，开始建立你的市场雷达。</div>}</div></section>
         <section className="split"><div><div className="section-title"><div><p>SIGNALS</p><h2>最近异动</h2></div></div>{viewAlerts?.slice(0,5).map(a=><div className="list-row" key={a.id}><span className="signal-symbol">{a.ticker.slice(0,1)}</span><b>{a.ticker}</b><span>{a.period}</span><em className={a.change_percent<0?'negative':'positive'}>{a.change_percent>=0?'+':''}{a.change_percent.toFixed(2)}%</em></div>)}</div><div><div className="section-title"><div><p>INTELLIGENCE</p><h2>最新报告</h2></div></div>{viewReports?.slice(0,5).map(r=><button className="report-row" key={r.id} onClick={()=>!demoMode&&setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{demoMode?'刚刚生成':formatDate(r.created_at)}</small></button>)}</div></section>
       </>}
-      {tab==='watchlist'&&<><form className="add-form" onSubmit={submitTicker}><div><label>股票代码</label><input value={ticker} onChange={e=>setTicker(e.target.value.toUpperCase())} placeholder="例如 AAPL、NVDA" maxLength={16}/></div><button disabled={add.isPending}>添加监控</button></form>{add.error&&<p className="error">{add.error.message}</p>}<div className="watchlist-stack">{watchlist.data?.map(item=><article className="watch-item-card" key={item.id}><div className="watch-item-head"><div><b>{item.ticker}</b><small>价格异动阈值</small></div><button className="watch-delete" aria-label={`删除 ${item.ticker}`} onClick={()=>remove.mutate(item.id)}><TrashIcon/></button></div><div className="threshold-tags"><ThresholdCell item={item} field="threshold_20m" onSaved={()=>client.invalidateQueries({queryKey:['watchlist']})}/><ThresholdCell item={item} field="threshold_1h" onSaved={()=>client.invalidateQueries({queryKey:['watchlist']})}/><ThresholdCell item={item} field="threshold_day" onSaved={()=>client.invalidateQueries({queryKey:['watchlist']})}/></div></article>)}</div></>}
+      {tab==='watchlist'&&<StockManagement onWatchlistChanged={()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}}/>}
       {tab==='alerts'&&<div className="investigations">{investigations.data?.map(item=><article key={item.id}><div><span className={`status ${item.status}`}>{item.status}</span><h2>{item.ticker} 异动调查</h2><p>{formatDate(item.started_at)} — {formatDate(item.ends_at)}</p></div><strong>{item.news_count}<small> 条新闻线索</small></strong>{item.last_error&&<p className="error">{item.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}
       {tab==='reports'&&<div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div>}
       {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
@@ -169,7 +168,6 @@ export default function App() {
       {tab==='crossmodel'&&<CrossModelCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onMetric={setSelectedModel} onWeight={setSelectedWeight}/>}
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
       {tab==='congress'&&<CongressCenter/>}
-      {tab==='charts'&&<ChartsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
       {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
       {tab==='settings'&&settings.data&&<><SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>{authUser.role==='admin'&&<AdminPanel/>}</> }
       </div>
@@ -229,10 +227,18 @@ function GrahamPanel({ticker,initial}:{ticker:string;initial:GrahamAnalysis}) {
 
 function CrossModelCenter({tickers,onMetric,onWeight}:{tickers:string[];onMetric:(metric:CrossMetric)=>void;onWeight:(weight:WeightDetail)=>void}) {
   const [active,setActive] = useState(tickers[0]||'')
+  const [editingPeers,setEditingPeers] = useState(false)
+  const [peerTicker,setPeerTicker] = useState('')
   const current = active||tickers[0]||''
   const client = useQueryClient()
   const result = useQuery({queryKey:['cross-model',current],queryFn:()=>api<CrossModel>(`/cross-model?ticker=${current}`),enabled:!!current})
+  const peerList = useQuery({queryKey:['peers',current],queryFn:()=>api<PeerList>(`/peers/${current}`),enabled:!!current&&editingPeers})
   const refresh = useMutation({mutationFn:()=>post(`/cross-model/refresh?ticker=${current}`,{}),onSuccess:()=>setTimeout(()=>client.invalidateQueries({queryKey:['cross-model',current]}),12000)})
+  const peersChanged = () => {client.invalidateQueries({queryKey:['peers',current]});client.invalidateQueries({queryKey:['stock-management']});setTimeout(()=>client.invalidateQueries({queryKey:['cross-model',current]}),12000)}
+  const addPeer = useMutation({mutationFn:()=>post(`/peers/${current}`,{ticker:peerTicker}),onSuccess:()=>{setPeerTicker('');peersChanged()}})
+  const removePeer = useMutation({mutationFn:(item:PeerItem)=>item.source==='manual'?api(`/peers/${current}/${item.ticker}`,{method:'DELETE'}):post(`/peers/${current}/${item.ticker}/exclude`,{}),onSuccess:peersChanged})
+  const restorePeer = useMutation({mutationFn:(ticker:string)=>api(`/peers/${current}/${ticker}/exclude`,{method:'DELETE'}),onSuccess:peersChanged})
+  const movePeer = async (item:PeerItem,delta:number) => {await patch(`/peers/${current}/${item.ticker}/order`,{display_order:Math.max(0,item.display_order+delta)});peersChanged()}
   const data = result.data
   const MetricGroup = ({title,items}:{title:string;items:CrossMetric[]}) => <section className="cross-group"><div className="section-title"><h2>{title}</h2><small>点击指标学习公式与参考区间</small></div><div className="cross-metric-grid">{items.map(item=><button key={item.key} className={`cross-metric ${item.status}`} onClick={()=>onMetric(item)}><span>{item.label}</span><strong>{formatCrossMetric(item)}</strong>{item.peer_median!=null?<div className="peer-compare"><small>同行中位数</small><b>{item.peer_median.toFixed(2)}{item.unit==='multiple'?'×':item.unit==='%'?'%':''}</b><em className={(item.peer_delta_percent||0)>0?'negative':'positive'}>{item.comparison}</em></div>:<small>{metricHint(item)}</small>}</button>)}</div></section>
   if(!tickers.length) return <div className="empty">请先在自选股中添加股票。</div>
@@ -240,7 +246,8 @@ function CrossModelCenter({tickers,onMetric,onWeight}:{tickers:string[];onMetric
     <div className="news-tickers">{tickers.map(t=><button key={t} className={t===current?'active':''} onClick={()=>setActive(t)}>{t}</button>)}</div>
     {result.isLoading&&<div className="empty">正在读取每日估值快照…</div>}{result.isError&&<div className="snapshot-empty"><p>该股票还没有每日估值快照。</p><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'正在抓取同行与估值…':'立即生成'}</button></div>}
     {data&&<><section className="cross-hero"><div><p className="eyebrow">{data.classification.sector||'未分类'} · {data.classification.industry||'数据不足'}</p><h2>{data.company} <span>{data.classification.label}</span></h2><p>主模型：{data.classification.primary.map(modelLabel).join('、')||'数据不足'}　·　辅助：{data.classification.secondary.map(modelLabel).join('、')||'—'}</p></div><div><small>重点关注</small><b>{data.classification.focus}</b></div></section>
-      <section className="peer-strip"><div><span>FINNHUB PEERS · 同行公司</span><small>{data.peers.coverage}/{data.peers.symbols.length} 家具备可比数据</small></div><div>{data.peers.symbols.map(symbol=><b key={symbol}>{symbol}</b>)}{!data.peers.symbols.length&&<em>同行数据不足</em>}</div></section>
+      <section className="peer-strip"><div><span>OFFICIAL + MANUAL · 同行公司</span><small>{data.peers.coverage}/{data.peers.symbols.length} 家具备可比数据</small></div><div>{data.peers.symbols.map(symbol=><b key={symbol}>{symbol}</b>)}{!data.peers.symbols.length&&<em>同行数据不足</em>}<button className="peer-edit-btn" onClick={()=>setEditingPeers(value=>!value)}>{editingPeers?'收起编辑':'编辑同行'}</button></div></section>
+      {editingPeers&&<section className="peer-editor"><form onSubmit={event=>{event.preventDefault();if(peerTicker.trim())addPeer.mutate()}}><input value={peerTicker} onChange={event=>setPeerTicker(event.target.value.toUpperCase())} placeholder="搜索并添加股票代码" maxLength={16}/><button disabled={addPeer.isPending}>验证并添加</button></form>{addPeer.error&&<p className="error">{addPeer.error.message}</p>}<div>{peerList.data?.items.map(item=><article key={`${item.source}-${item.ticker}`} className={item.excluded?'excluded':''}><span><b>{item.ticker}</b><small>{item.is_watchlisted?'自选股':'匹配股票'} · {item.source==='official'?'官方同行':'手动同行'}</small></span>{item.source==='manual'&&<div><button onClick={()=>movePeer(item,-1)}>↑</button><button onClick={()=>movePeer(item,1)}>↓</button></div>}{item.excluded?<button onClick={()=>restorePeer.mutate(item.ticker)}>恢复默认</button>:<button onClick={()=>removePeer.mutate(item)}>{item.source==='official'?'排除':'删除'}</button>}</article>)}</div><small>官方同行来自 Finnhub；这里仅保存手动新增、排除与排序，不修改官方行业分类。</small></section>}
       <section className="ai-opinion"><span>🧠 AI Opinion · Luna 分析师解释</span><p>{data.ai_opinion}</p><small>{data.model_conflict?'模型存在分歧，Luna 负责解释分歧原因。':'主要模型方向较一致。'} 数值全部由确定性公式计算，AI 不参与计算。{data.ai_model&&` · ${data.ai_model}`}</small></section>
       <div className="tag-row">{data.tags.filter(t=>!t.name.includes(':')).map(t=><span key={t.name}>{t.label} <b>{Math.round(t.confidence*100)}%</b></span>)}</div>
       <MetricGroup title="📈 Valuation" items={data.valuation}/><MetricGroup title="📊 Growth" items={data.growth}/><MetricGroup title="🏦 Financial Health" items={data.health}/>
@@ -267,6 +274,52 @@ function metricHint(item:CrossMetric) {
   if(item.status==='partial') return `部分数据 · ${item.available_components||0}/${item.total_components||9} 项可计算`
   if(item.status==='available') return '查看说明与参考值 →'
   return item.missing_fields?.length?`缺少 ${item.missing_fields.slice(0,2).map(fieldLabel).join('、')}`:'当前数据不足'
+}
+
+function StockManagement({onWatchlistChanged}:{onWatchlistChanged:()=>void}) {
+  const client = useQueryClient()
+  const [ticker,setTicker] = useState('')
+  const [groupName,setGroupName] = useState('')
+  const [selected,setSelected] = useState<ManagedStock|null>(null)
+  const [collapsed,setCollapsed] = useState<Record<string,boolean>>({})
+  const management = useQuery({queryKey:['stock-management'],queryFn:()=>api<StockManagementData>('/stock-management')})
+  const refresh = () => {client.invalidateQueries({queryKey:['stock-management']});onWatchlistChanged()}
+  const add = useMutation({mutationFn:()=>post('/watchlist',{ticker}),onSuccess:()=>{setTicker('');refresh()}})
+  const addGroup = useMutation({mutationFn:()=>post('/stock-groups',{name:groupName}),onSuccess:()=>{setGroupName('');client.invalidateQueries({queryKey:['stock-management']})}})
+  const remove = useMutation({mutationFn:(id:number)=>api(`/watchlist/${id}`,{method:'DELETE'}),onSuccess:()=>{setSelected(null);refresh()}})
+  const promote = useMutation({mutationFn:(value:string)=>post('/watchlist',{ticker:value}),onSuccess:()=>{setSelected(null);refresh()}})
+  const update = useMutation({mutationFn:({id,body}:{id:number;body:Record<string,unknown>})=>patch(`/watchlist/${id}`,body),onSuccess:()=>{client.invalidateQueries({queryKey:['stock-management']});client.invalidateQueries({queryKey:['watchlist']})}})
+  const data = management.data
+  const groupMap = new Map(data?.groups.map(group=>[group.id,group.name]))
+  const sections = new Map<string,ManagedStock[]>()
+  for(const stock of data?.watchlisted||[]) {
+    const key = stock.user_group_id ? `自定义 · ${groupMap.get(stock.user_group_id)||'未知分区'}` : `${stock.official_sector||'未分类'} · ${stock.official_industry||'行业待同步'}`
+    sections.set(key,[...(sections.get(key)||[]),stock])
+  }
+  const moveSelected = (group:string) => {
+    if(!selected?.watchlist_id) return
+    update.mutate({id:selected.watchlist_id,body:{user_group_id:group===''?null:Number(group)}})
+    setSelected({...selected,user_group_id:group===''?null:Number(group)})
+  }
+  const renameGroup = async (id:number,name:string) => {
+    const next = window.prompt('新的分区名称',name)?.trim()
+    if(next) {await patch(`/stock-groups/${id}`,{name:next});client.invalidateQueries({queryKey:['stock-management']})}
+  }
+  const deleteGroup = async (id:number) => {
+    try {await api(`/stock-groups/${id}`,{method:'DELETE'});client.invalidateQueries({queryKey:['stock-management']})}
+    catch(error) {window.alert(error instanceof Error?error.message:'无法删除分区')}
+  }
+  return <div className="stock-manager">
+    <div className="stock-manager-tools">
+      <form className="add-form" onSubmit={event=>{event.preventDefault();if(ticker.trim())add.mutate()}}><div><label>添加自选股</label><input value={ticker} onChange={event=>setTicker(event.target.value.toUpperCase())} placeholder="例如 AAPL、NVDA" maxLength={16}/></div><button disabled={add.isPending}>添加并完整同步</button></form>
+      <form className="group-form" onSubmit={event=>{event.preventDefault();if(groupName.trim())addGroup.mutate()}}><input value={groupName} onChange={event=>setGroupName(event.target.value)} placeholder="新建自定义分区"/><button disabled={addGroup.isPending}>创建分区</button></form>
+    </div>
+    {(add.error||addGroup.error)&&<p className="error">{(add.error||addGroup.error)?.message}</p>}
+    {!!data?.groups.length&&<div className="custom-group-admin">{data.groups.map(group=><span key={group.id}><b>{group.name}</b><button onClick={async()=>{await patch(`/stock-groups/${group.id}`,{display_order:Math.max(0,group.display_order-1)});client.invalidateQueries({queryKey:['stock-management']})}}>↑</button><button onClick={async()=>{await patch(`/stock-groups/${group.id}`,{display_order:group.display_order+1});client.invalidateQueries({queryKey:['stock-management']})}}>↓</button><button onClick={()=>renameGroup(group.id,group.name)}>重命名</button><button onClick={()=>deleteGroup(group.id)}>删除</button></span>)}</div>}
+    {[...sections.entries()].map(([name,stocks])=><section className="stock-section" key={name}><button className="stock-section-head" onClick={()=>setCollapsed(value=>({...value,[name]:!value[name]}))}><span>{collapsed[name]?'▸':'▾'} {name}</span><b>{stocks.length} 只</b></button>{!collapsed[name]&&<div className="managed-stock-list">{stocks.map(stock=><button key={stock.ticker} className="managed-stock-row" onClick={()=>setSelected(stock)}><span><b>{stock.ticker}</b><small>{stock.company_name||'公司资料待同步'}</small></span><strong>{formatPrice(stock.price)}</strong><em className={(stock.change_percent||0)<0?'negative':'positive'}>{stock.change_percent==null?'—':`${stock.change_percent>=0?'+':''}${stock.change_percent.toFixed(2)}%`}</em><i>{stock.alert_enabled?'报警开启':'报警关闭'}</i><u>自选股</u></button>)}</div>}</section>)}
+    <section className="stock-section matched-section"><button className="stock-section-head" onClick={()=>setCollapsed(value=>({...value,matched:!value.matched}))}><span>{collapsed.matched?'▸':'▾'} 匹配股票</span><b>{data?.matched.length||0} 只</b></button>{!collapsed.matched&&<div className="managed-stock-list">{data?.matched.map(stock=><button key={stock.ticker} className="managed-stock-row" onClick={()=>setSelected(stock)}><span><b>{stock.ticker}</b><small>{stock.company_name||'公司资料待同步'}</small></span><strong>{formatPrice(stock.price)}</strong><em className={(stock.change_percent||0)<0?'negative':'positive'}>{stock.change_percent==null?'—':`${stock.change_percent>=0?'+':''}${stock.change_percent.toFixed(2)}%`}</em><i>用于比较：{stock.peer_referenced_by.join('、')}</i><u>匹配股票</u></button>)}{!data?.matched.length&&<div className="empty">暂无仅用于估值比较的股票。</div>}</div>}</section>
+    <Sheet open={selected!==null} onClose={()=>setSelected(null)} title={selected?.ticker||'股票设置'}>{selected&&<article className="stock-settings"><p className="eyebrow">{selected.is_watchlisted?'WATCHLIST · 自选股':'MATCHED PEER · 匹配股票'}</p><h2>{selected.ticker} <small>{selected.company_name||'公司资料待同步'}</small></h2><dl><div><dt>官方 Sector</dt><dd>{selected.official_sector||'数据不足'}</dd></div><div><dt>官方 Industry</dt><dd>{selected.official_industry||'数据不足'}</dd></div></dl>{selected.is_watchlisted&&selected.watchlist_id?<><label>显示分区<select value={selected.user_group_id??''} onChange={event=>moveSelected(event.target.value)}><option value="">恢复官方分类</option>{data?.groups.map(group=><option key={group.id} value={group.id}>{group.name}</option>)}</select></label><div className="stock-order-actions"><button onClick={()=>update.mutate({id:selected.watchlist_id!,body:{display_order:Math.max(0,selected.display_order-1)}})}>上移</button><button onClick={()=>update.mutate({id:selected.watchlist_id!,body:{display_order:selected.display_order+1}})}>下移</button></div><label className="alert-toggle"><input type="checkbox" checked={selected.alert_enabled} onChange={event=>{update.mutate({id:selected.watchlist_id!,body:{alert_enabled:event.target.checked}});setSelected({...selected,alert_enabled:event.target.checked})}}/> 波动报警</label><div className="threshold-tags"><ThresholdCell item={{id:selected.watchlist_id,ticker:selected.ticker,enabled:true,alert_enabled:selected.alert_enabled,user_group_id:selected.user_group_id,display_order:selected.display_order,threshold_20m:selected.threshold_20m,threshold_1h:selected.threshold_1h,threshold_day:selected.threshold_day}} field="threshold_20m" onSaved={refresh}/><ThresholdCell item={{id:selected.watchlist_id,ticker:selected.ticker,enabled:true,alert_enabled:selected.alert_enabled,user_group_id:selected.user_group_id,display_order:selected.display_order,threshold_20m:selected.threshold_20m,threshold_1h:selected.threshold_1h,threshold_day:selected.threshold_day}} field="threshold_1h" onSaved={refresh}/><ThresholdCell item={{id:selected.watchlist_id,ticker:selected.ticker,enabled:true,alert_enabled:selected.alert_enabled,user_group_id:selected.user_group_id,display_order:selected.display_order,threshold_20m:selected.threshold_20m,threshold_1h:selected.threshold_1h,threshold_day:selected.threshold_day}} field="threshold_day" onSaved={refresh}/></div><button className="danger-btn" onClick={()=>remove.mutate(selected.watchlist_id!)}>从自选股移除</button></>:<><p>被以下自选股用于同行比较：{selected.peer_referenced_by.join('、')}</p><button onClick={()=>promote.mutate(selected.ticker)} disabled={promote.isPending}>加入自选股并启动完整同步</button></>}</article>}</Sheet>
+  </div>
 }
 
 function fieldLabel(key:string) {
@@ -375,44 +428,6 @@ function SecCenter({tickers}:{tickers:string[]}) {
       {refresh13f.isSuccess&&<p className="saved">已触发全市场 13F 数据集采集（约需数分钟下载解析），稍后自动刷新。</p>}
       <div className="table"><div className="table-head fin"><span>机构</span><span>持股数</span><span>持仓市值</span><span>类型</span><span>环比变动</span><span>申报日</span></div>{holdings.data?.holdings.map(h=><div className="table-row fin" key={h.id}><b>{h.manager_name}</b><span>{fmtNum(h.shares)}</span><span>{fmtNum(h.value_usd)}</span><span>{h.put_call||'股票'}</span><span className={h.is_new?'positive':h.share_change==null?'':h.share_change>0?'positive':h.share_change<0?'negative':''}>{h.is_new?'本季新建仓':h.share_change==null?'—':`${h.share_change>0?'+':''}${fmtNum(h.share_change)}`}</span><span>{h.filing_date||'—'}</span></div>)}{!holdings.data?.holdings.length&&<div className="empty">暂无 13F 机构持仓数据，点击"重新采集"触发（13F 每季度更新一次）。</div>}</div>
     </>}
-  </div>
-}
-
-function ChartsCenter({tickers}:{tickers:string[]}) {
-  const [active,setActive] = useState(tickers[0]||'')
-  const current = active||tickers[0]||''
-  const container = useRef<HTMLDivElement>(null)
-  useEffect(()=>{
-    if(!current||!container.current) return
-    const host = container.current
-    host.innerHTML = ''
-    const widget = document.createElement('div')
-    widget.className = 'tradingview-widget-container__widget'
-    widget.style.height = '100%'
-    host.appendChild(widget)
-    const script = document.createElement('script')
-    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'
-    script.async = true
-    script.innerHTML = JSON.stringify({
-      autosize:true,
-      symbol:current,
-      interval:'D',
-      timezone:'America/New_York',
-      theme:'light',
-      style:'1',
-      locale:'zh_CN',
-      allow_symbol_change:true,
-      hide_side_toolbar:false,
-      support_host:'https://www.tradingview.com',
-    })
-    host.appendChild(script)
-    return ()=>{ host.innerHTML = '' }
-  },[current])
-  if(!tickers.length) return <div className="empty">请先在自选股中添加股票。</div>
-  return <div className="news-center">
-    <div className="news-tickers">{tickers.map(t=><button key={t} className={t===current?'active':''} onClick={()=>setActive(t)}>{t}</button>)}</div>
-    <div className="section-title"><h2>{current} 实时图表</h2><small className="chart-note">数据由 TradingView 提供，仅供参考</small></div>
-    <div className="chart-shell"><div className="tradingview-widget-container" ref={container} style={{height:'100%',width:'100%'}}/></div>
   </div>
 }
 

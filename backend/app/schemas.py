@@ -20,6 +20,9 @@ class WatchlistCreate(BaseModel):
 
 class WatchlistUpdate(BaseModel):
     enabled: bool | None = None
+    alert_enabled: bool | None = None
+    user_group_id: int | None = None
+    display_order: int | None = Field(default=None, ge=0)
     threshold_20m: float | None = Field(default=None, gt=0)
     threshold_1h: float | None = Field(default=None, gt=0)
     threshold_day: float | None = Field(default=None, gt=0)
@@ -28,8 +31,38 @@ class WatchlistUpdate(BaseModel):
 class WatchlistOut(WatchlistCreate):
     id: int
     enabled: bool
+    alert_enabled: bool
+    user_group_id: int | None
+    display_order: int
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class StockGroupCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return value.strip()
+
+
+class StockGroupUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    display_order: int | None = Field(default=None, ge=0)
+
+
+class PeerCreate(BaseModel):
+    ticker: str = Field(min_length=1, max_length=16)
+
+    @field_validator("ticker")
+    @classmethod
+    def normalize_peer(cls, value: str) -> str:
+        return WatchlistCreate.normalize_ticker(value)
+
+
+class OrderUpdate(BaseModel):
+    display_order: int = Field(ge=0)
 
 
 class SettingsUpdate(BaseModel):

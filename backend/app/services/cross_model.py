@@ -618,7 +618,9 @@ def fetch_cross_model_inputs(ticker: str, peer_symbols: list[str]) -> tuple[dict
     for symbol in peer_symbols[:10]:
         try:
             peer_info = yf.Ticker(symbol).get_info()
-            if peer_info: peer_infos.append(peer_info)
+            if peer_info:
+                peer_info["_peerTicker"] = symbol
+                peer_infos.append(peer_info)
         except Exception:
             continue
     return info, peer_infos, financials

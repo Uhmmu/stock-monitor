@@ -48,6 +48,7 @@ from app.services.title_translation import title_input_hash, translate_title
 from app.services.cross_model import build_cross_model, fetch_cross_model_inputs, opinion_evidence
 from app.services.finnhub_mcp import fetch_basic_metrics, fetch_company_peers
 from app.services.graham import build_graham_from_sources, get_latest_aaa_corporate_bond_yield
+from app.services.stock_management import cache_official_relations, effective_peer_symbols, referenced_tickers, upsert_profile, valuation_tickers
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -97,7 +98,9 @@ def poll_market():
         return {"skipped": "market_closed"}
     with SessionLocal() as db:
         items = db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all()
-        quotes = fetch_quotes([item.ticker for item in items])
+        watched_tickers = {item.ticker for item in items}
+        peer_tickers = set(referenced_tickers(db))
+        quotes = fetch_quotes(sorted(watched_tickers | peer_tickers))
         by_ticker = {item.ticker: item for item in items}
         for quote in quotes:
             snapshot = PriceSnapshot(**quote.__dict__)
@@ -107,7 +110,9 @@ def poll_market():
             except IntegrityError:
                 db.rollback()
                 continue
-            evaluate_quote(db, by_ticker[quote.ticker], snapshot)
+            watched = by_ticker.get(quote.ticker)
+            if watched and watched.alert_enabled:
+                evaluate_quote(db, watched, snapshot)
         db.commit()
         return {"quotes": len(quotes)}
 
@@ -497,7 +502,7 @@ def _sync_ticker_financials(db, ticker: str) -> bool:
 @celery_app.task(name="app.tasks.celery_app.sync_financials")
 def sync_financials():
     with SessionLocal() as db:
-        tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        tickers = valuation_tickers(db)
         synced = sum(1 for ticker in tickers if _sync_ticker_financials(db, ticker))
         db.commit()
         return {"synced": synced}
@@ -511,15 +516,24 @@ def sync_ticker_financials(ticker: str):
         return {"ticker": ticker, "synced": ok}
 
 
-def _sync_ticker_valuation(db, ticker: str) -> bool:
+def _sync_ticker_valuation(db, ticker: str, explain: bool = True) -> bool:
     """抓取分类、Finnhub 同行与 Yahoo 原料，计算后按日 upsert；Luna 仅解释。"""
     try:
-        peers = fetch_company_peers(ticker)
+        official_peers = fetch_company_peers(ticker)
     except Exception:
-        peers = []
+        official_peers = []
+    is_watched = bool(db.scalar(select(WatchlistItem.id).where(WatchlistItem.ticker == ticker, WatchlistItem.enabled.is_(True))))
+    if is_watched:
+        cache_official_relations(db, ticker, official_peers)
+    peers = effective_peer_symbols(db, ticker, official_peers)
     info, peer_infos, financials = fetch_cross_model_inputs(ticker, peers)
     if not info:
         return False
+    upsert_profile(db, ticker, info)
+    for peer_info in peer_infos:
+        symbol = peer_info.get("_peerTicker") or peer_info.get("symbol")
+        if symbol:
+            upsert_profile(db, symbol, peer_info)
     quarters = db.scalars(
         select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker)
         .order_by(QuarterlyFinancial.period_end.desc()).limit(4)
@@ -548,13 +562,17 @@ def _sync_ticker_valuation(db, ticker: str) -> bool:
         ticker, info,
         quarter_inputs, peer_infos, peers, financials, graham,
     )
+    payload["peers"]["official_symbols"] = official_peers
+    payload["peers"]["source"] = "Finnhub official + manual overrides"
     ai_model = None
-    try:
-        opinion, ai_model = explain_cross_model(opinion_evidence(payload))
-        payload["ai_opinion"] = opinion
-        payload["ai_model"] = ai_model
-    except Exception:
-        opinion = payload["ai_opinion"]
+    opinion = payload["ai_opinion"]
+    if explain:
+        try:
+            opinion, ai_model = explain_cross_model(opinion_evidence(payload))
+            payload["ai_opinion"] = opinion
+            payload["ai_model"] = ai_model
+        except Exception:
+            pass
     today = datetime.now(UTC).date()
     row = db.scalar(select(ValuationSnapshot).where(ValuationSnapshot.ticker == ticker, ValuationSnapshot.snapshot_date == today))
     if not row:
@@ -563,15 +581,16 @@ def _sync_ticker_valuation(db, ticker: str) -> bool:
     row.payload = payload
     row.ai_opinion = opinion
     row.ai_model = ai_model
-    row.source_version = "cross-model-v4"
+    row.source_version = "cross-model-v5"
     return True
 
 
 @celery_app.task(name="app.tasks.celery_app.sync_valuations")
 def sync_valuations():
     with SessionLocal() as db:
-        tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
-        synced = sum(1 for ticker in tickers if _sync_ticker_valuation(db, ticker))
+        tickers = valuation_tickers(db)
+        watched = set(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        synced = sum(1 for ticker in tickers if _sync_ticker_valuation(db, ticker, explain=ticker in watched))
         db.commit()
         return {"synced": synced}
 
@@ -579,9 +598,38 @@ def sync_valuations():
 @celery_app.task(name="app.tasks.celery_app.sync_ticker_valuation")
 def sync_ticker_valuation(ticker: str):
     with SessionLocal() as db:
-        ok = _sync_ticker_valuation(db, ticker.upper())
+        value = ticker.upper()
+        watched = bool(db.scalar(select(WatchlistItem.id).where(WatchlistItem.ticker == value, WatchlistItem.enabled.is_(True))))
+        ok = _sync_ticker_valuation(db, value, explain=watched)
         db.commit()
-        return {"ticker": ticker.upper(), "synced": ok}
+        return {"ticker": value, "synced": ok}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_peer_valuation_data")
+def sync_peer_valuation_data(ticker: str):
+    """匹配股票最小同步：报价、财务、基础资料与估值；不触发新闻/SEC/Insider。"""
+    value = ticker.upper()
+    with SessionLocal() as db:
+        financials_ok = _sync_ticker_financials(db, value)
+        quotes = fetch_quotes([value])
+        for quote in quotes:
+            db.add(PriceSnapshot(**quote.__dict__))
+        valuation_ok = _sync_ticker_valuation(db, value, explain=False)
+        db.commit()
+        return {"ticker": value, "financials": financials_ok, "valuation": valuation_ok, "quotes": len(quotes)}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_ticker_full")
+def sync_ticker_full(ticker: str):
+    """自选股初始化入口；保持现有各同步任务独立与幂等。"""
+    value = ticker.upper()
+    sync_ticker_financials.delay(value)
+    sync_ticker_filings.delay(value)
+    sync_ticker_sec_all.delay(value)
+    sync_ticker_congress.delay(value)
+    sync_ticker_valuation.delay(value)
+    poll_news.delay(value)
+    return {"ticker": value, "status": "queued_full_sync"}
 
 
 def _sync_ticker_filings(db, ticker: str) -> int:

@@ -2,7 +2,7 @@ import hashlib
 from datetime import UTC, date as date_type, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,8 @@ from app.models import (
     NewsItem,
     PriceAlert,
     PriceSnapshot,
+    PeerExclusion,
+    PeerRelation,
     QuarterlyFinancial,
     Report,
     Sec13FHolding,
@@ -28,12 +30,17 @@ from app.models import (
     TradeLog,
     User,
     ValuationSnapshot,
+    StockGroup,
     WatchlistItem,
 )
 from app.schemas import (
     GrahamOverride,
+    OrderUpdate,
+    PeerCreate,
     SettingsOut,
     SettingsUpdate,
+    StockGroupCreate,
+    StockGroupUpdate,
     TradeLogCreate,
     TradeLogOut,
     TradeLogUpdate,
@@ -44,7 +51,8 @@ from app.schemas import (
 from app.auth import get_current_user
 from app.services.article_fetch import fetch_article_text
 from app.services.finnhub_mcp import fetch_basic_metrics, fetch_recommendations
-from app.services.market_data import fetch_index_quotes, fetch_yf_info_metrics
+from app.services.market_data import fetch_index_quotes, fetch_stock_profile, fetch_yf_info_metrics
+from app.services.stock_management import normalize_ticker, stock_management_payload, upsert_profile
 from app.services.llm import summarize_news, summarize_trade_log
 from app.services.market_calendar import market_status
 from app.services.volume_stats import volume_context
@@ -87,13 +95,9 @@ def add_watchlist(payload: WatchlistCreate, db: Session = Depends(get_db)):
         raise HTTPException(409, "该股票已在自选列表中")
     db.refresh(item)
     if item.enabled:
-        from app.tasks.celery_app import sync_ticker_congress, sync_ticker_filings, sync_ticker_financials, sync_ticker_sec_all, sync_ticker_valuation
+        from app.tasks.celery_app import sync_ticker_full
 
-        sync_ticker_financials.delay(item.ticker)
-        sync_ticker_filings.delay(item.ticker)
-        sync_ticker_sec_all.delay(item.ticker)
-        sync_ticker_congress.delay(item.ticker)
-        sync_ticker_valuation.delay(item.ticker)
+        sync_ticker_full.delay(item.ticker)
     return item
 
 
@@ -102,6 +106,8 @@ def update_watchlist(item_id: int, payload: WatchlistUpdate, db: Session = Depen
     item = db.get(WatchlistItem, item_id)
     if not item:
         raise HTTPException(404, "未找到股票")
+    if "user_group_id" in payload.model_fields_set and payload.user_group_id is not None and not db.get(StockGroup, payload.user_group_id):
+        raise HTTPException(404, "显示分区不存在")
     for key in payload.model_fields_set:
         setattr(item, key, getattr(payload, key))
     db.commit()
@@ -116,6 +122,168 @@ def remove_watchlist(item_id: int, db: Session = Depends(get_db)):
     db.execute(delete(WatchlistItem).where(WatchlistItem.id == item_id))
     db.commit()
     return Response(status_code=204)
+
+
+@router.get("/stock-management")
+def stock_management(db: Session = Depends(get_db)):
+    return stock_management_payload(db)
+
+
+@router.post("/stock-groups", status_code=status.HTTP_201_CREATED)
+def create_stock_group(payload: StockGroupCreate, db: Session = Depends(get_db)):
+    order = db.scalar(select(func.coalesce(func.max(StockGroup.display_order), -1))) or 0
+    row = StockGroup(name=payload.name, display_order=order + 1)
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "分区名称已存在")
+    db.refresh(row)
+    return {"id": row.id, "name": row.name, "display_order": row.display_order}
+
+
+@router.patch("/stock-groups/{group_id}")
+def update_stock_group(group_id: int, payload: StockGroupUpdate, db: Session = Depends(get_db)):
+    row = db.get(StockGroup, group_id)
+    if not row:
+        raise HTTPException(404, "分区不存在")
+    for key in payload.model_fields_set:
+        value = getattr(payload, key)
+        if key == "name" and value is not None:
+            value = value.strip()
+        setattr(row, key, value)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "分区名称已存在")
+    return {"id": row.id, "name": row.name, "display_order": row.display_order}
+
+
+@router.delete("/stock-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_stock_group(group_id: int, db: Session = Depends(get_db)):
+    row = db.get(StockGroup, group_id)
+    if not row:
+        raise HTTPException(404, "分区不存在")
+    if db.scalar(select(WatchlistItem.id).where(WatchlistItem.user_group_id == group_id).limit(1)):
+        raise HTTPException(409, "分区仍包含股票，请先移出")
+    db.delete(row)
+    db.commit()
+    return Response(status_code=204)
+
+
+def _latest_official_peers(db: Session, base: str) -> list[str]:
+    snapshot = db.scalar(select(ValuationSnapshot).where(ValuationSnapshot.ticker == base).order_by(ValuationSnapshot.snapshot_date.desc(), ValuationSnapshot.id.desc()).limit(1))
+    if not snapshot:
+        return []
+    peers = snapshot.payload.get("peers", {})
+    return peers.get("official_symbols") or peers.get("symbols") or []
+
+
+@router.get("/peers/{base_ticker}")
+def list_peers(base_ticker: str, db: Session = Depends(get_db)):
+    base = _require_watched_ticker(db, base_ticker)
+    official = _latest_official_peers(db, base)
+    manual = db.scalars(select(PeerRelation).where(PeerRelation.base_ticker == base, PeerRelation.enabled.is_(True)).order_by(PeerRelation.display_order, PeerRelation.id)).all()
+    excluded = set(db.scalars(select(PeerExclusion.peer_ticker).where(PeerExclusion.base_ticker == base)).all())
+    watched = set(db.scalars(select(WatchlistItem.ticker)).all())
+    items = []
+    for order, ticker in enumerate(official):
+        items.append({"ticker": ticker, "source": "official", "excluded": ticker in excluded, "display_order": order, "is_watchlisted": ticker in watched})
+    official_set = set(official)
+    items.extend({"ticker": row.peer_ticker, "source": "manual", "excluded": False, "display_order": row.display_order, "is_watchlisted": row.peer_ticker in watched} for row in manual if row.peer_ticker not in official_set)
+    return {"base_ticker": base, "items": items}
+
+
+@router.post("/peers/{base_ticker}", status_code=status.HTTP_201_CREATED)
+def add_manual_peer(base_ticker: str, payload: PeerCreate, db: Session = Depends(get_db)):
+    base = _require_watched_ticker(db, base_ticker)
+    peer = normalize_ticker(payload.ticker)
+    if base == peer:
+        raise HTTPException(422, "股票不能把自己设为同行")
+    info = fetch_stock_profile(peer)
+    if not info:
+        raise HTTPException(422, "无法验证该股票代码")
+    upsert_profile(db, peer, info)
+    if peer in _latest_official_peers(db, base):
+        raise HTTPException(409, "该股票已是官方同行")
+    existing = db.scalar(select(PeerRelation).where(PeerRelation.base_ticker == base, PeerRelation.peer_ticker == peer))
+    if existing and existing.enabled:
+        raise HTTPException(409, "该同行关系已存在")
+    order = db.scalar(select(func.coalesce(func.max(PeerRelation.display_order), -1)).where(PeerRelation.base_ticker == base)) or 0
+    if existing:
+        existing.enabled = True
+        existing.source = "manual"
+        existing.display_order = order + 1
+    else:
+        db.add(PeerRelation(base_ticker=base, peer_ticker=peer, display_order=order + 1))
+    exclusion = db.scalar(select(PeerExclusion).where(PeerExclusion.base_ticker == base, PeerExclusion.peer_ticker == peer))
+    if exclusion:
+        db.delete(exclusion)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "该同行关系已存在")
+    from app.tasks.celery_app import sync_peer_valuation_data, sync_ticker_valuation
+    if not db.scalar(select(WatchlistItem.id).where(WatchlistItem.ticker == peer)):
+        sync_peer_valuation_data.delay(peer)
+    sync_ticker_valuation.delay(base)
+    return {"base_ticker": base, "peer_ticker": peer, "source": "manual"}
+
+
+@router.delete("/peers/{base_ticker}/{peer_ticker}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_manual_peer(base_ticker: str, peer_ticker: str, db: Session = Depends(get_db)):
+    base, peer = _require_watched_ticker(db, base_ticker), normalize_ticker(peer_ticker)
+    row = db.scalar(select(PeerRelation).where(PeerRelation.base_ticker == base, PeerRelation.peer_ticker == peer, PeerRelation.source == "manual"))
+    if not row:
+        raise HTTPException(404, "手动同行关系不存在")
+    db.delete(row)
+    db.commit()
+    from app.tasks.celery_app import sync_ticker_valuation
+    sync_ticker_valuation.delay(base)
+    return Response(status_code=204)
+
+
+@router.post("/peers/{base_ticker}/{peer_ticker}/exclude")
+def exclude_official_peer(base_ticker: str, peer_ticker: str, db: Session = Depends(get_db)):
+    base, peer = _require_watched_ticker(db, base_ticker), normalize_ticker(peer_ticker)
+    if peer not in _latest_official_peers(db, base):
+        raise HTTPException(422, "该股票不是当前官方同行")
+    if not db.scalar(select(PeerExclusion.id).where(PeerExclusion.base_ticker == base, PeerExclusion.peer_ticker == peer)):
+        db.add(PeerExclusion(base_ticker=base, peer_ticker=peer))
+        relation = db.scalar(select(PeerRelation).where(PeerRelation.base_ticker == base, PeerRelation.peer_ticker == peer, PeerRelation.source == "official"))
+        if relation:
+            relation.enabled = False
+        db.commit()
+    from app.tasks.celery_app import sync_ticker_valuation
+    sync_ticker_valuation.delay(base)
+    return {"status": "excluded", "ticker": peer}
+
+
+@router.delete("/peers/{base_ticker}/{peer_ticker}/exclude", status_code=status.HTTP_204_NO_CONTENT)
+def restore_official_peer(base_ticker: str, peer_ticker: str, db: Session = Depends(get_db)):
+    base, peer = _require_watched_ticker(db, base_ticker), normalize_ticker(peer_ticker)
+    db.execute(delete(PeerExclusion).where(PeerExclusion.base_ticker == base, PeerExclusion.peer_ticker == peer))
+    relation = db.scalar(select(PeerRelation).where(PeerRelation.base_ticker == base, PeerRelation.peer_ticker == peer, PeerRelation.source == "official"))
+    if relation:
+        relation.enabled = True
+    db.commit()
+    from app.tasks.celery_app import sync_ticker_valuation
+    sync_ticker_valuation.delay(base)
+    return Response(status_code=204)
+
+
+@router.patch("/peers/{base_ticker}/{peer_ticker}/order")
+def update_peer_order(base_ticker: str, peer_ticker: str, payload: OrderUpdate, db: Session = Depends(get_db)):
+    base, peer = _require_watched_ticker(db, base_ticker), normalize_ticker(peer_ticker)
+    row = db.scalar(select(PeerRelation).where(PeerRelation.base_ticker == base, PeerRelation.peer_ticker == peer, PeerRelation.source == "manual"))
+    if not row:
+        raise HTTPException(404, "仅手动同行支持排序")
+    row.display_order = payload.display_order
+    db.commit()
+    return {"ticker": peer, "display_order": row.display_order}
 
 
 @router.get("/dashboard")

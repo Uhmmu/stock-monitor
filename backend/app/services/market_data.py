@@ -59,6 +59,21 @@ def fetch_yf_info_metrics(ticker: str) -> dict:
     }
 
 
+def fetch_stock_profile(ticker: str) -> dict:
+    """验证代码并读取基础资料；报价或名称均不存在时视为无效代码。"""
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.get_info() or {}
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        if price is None:
+            price = stock.fast_info.last_price
+    except Exception:
+        return {}
+    if not (info.get("symbol") or info.get("shortName") or info.get("longName") or price is not None):
+        return {}
+    return info
+
+
 def fetch_yf_quarterly(ticker: str) -> list[dict]:
     """yfinance 季度财报：单季值（无需去累计），合并利润表+现金流，按季度末倒序。"""
     stock = yf.Ticker(ticker)
