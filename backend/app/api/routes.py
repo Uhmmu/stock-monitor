@@ -1,4 +1,5 @@
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date as date_type, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -27,6 +28,7 @@ from app.models import (
     SecFiling,
     SecFinancialPeriod,
     SecInsiderTrade,
+    Security,
     TrackedFigure,
     TradeLog,
     User,
@@ -40,6 +42,7 @@ from app.schemas import (
     GrahamOverride,
     OrderUpdate,
     PeerCreate,
+    SecurityResolveIn,
     SettingsOut,
     SettingsUpdate,
     StockGroupCreate,
@@ -54,8 +57,9 @@ from app.schemas import (
 from app.auth import get_current_user
 from app.services.article_fetch import fetch_article_text
 from app.services.finnhub_mcp import fetch_basic_metrics, fetch_recommendations
-from app.services.market_data import fetch_index_quotes, fetch_stock_profile, fetch_yf_info_metrics
+from app.services.market_data import fetch_index_quotes, fetch_yf_info_metrics, fetch_yf_recommendations
 from app.services.stock_management import normalize_ticker, stock_management_payload, upsert_profile
+from app.services.securities import SecuritySearchUnavailable, provider_symbol, resolve_security, search_securities
 from app.services.llm import summarize_news, summarize_trade_log
 from app.services.market_calendar import market_status
 from app.services.volume_stats import volume_context
@@ -80,7 +84,42 @@ def _require_watched_ticker(db: Session, ticker: str, snapshot_section: str | No
 
 
 def _snapshot_out(row: TemporarySnapshot) -> dict:
-    return {"ticker": row.ticker, "section": row.section, "expires_at": row.expires_at}
+    return {"ticker": row.ticker, "security_id": row.security_id, "section": row.section, "expires_at": row.expires_at}
+
+
+def _security_out(row: Security) -> dict:
+    return {
+        "provider_key": f"security:{row.id}", "security_id": row.id,
+        "display_symbol": row.display_symbol, "display_name": row.display_name or row.display_symbol,
+        "local_symbol": row.local_symbol, "exchange": row.exchange_name,
+        "exchange_code": row.exchange_code, "market": row.market, "country_code": row.country_code,
+        "currency": row.currency, "instrument_type": row.instrument_type,
+        "yahoo_symbol": row.yahoo_symbol, "finnhub_symbol": row.finnhub_symbol,
+        "source": "local", "is_local": True,
+        "yahoo_status": row.yahoo_status, "finnhub_status": row.finnhub_status,
+        "mapping_method": row.mapping_method, "mapping_confidence": row.mapping_confidence,
+    }
+
+
+@router.get("/securities/search")
+def security_search(q: str = Query(default="", max_length=80), limit: int = Query(default=12, ge=1, le=20), db: Session = Depends(get_db)):
+    try:
+        results = search_securities(db, q, limit)
+    except SecuritySearchUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return {"query": " ".join(q.strip().split()), "results": results}
+
+
+@router.post("/securities/resolve")
+def security_resolve(payload: SecurityResolveIn, db: Session = Depends(get_db)):
+    try:
+        row = resolve_security(db, **payload.model_dump())
+        db.commit()
+        db.refresh(row)
+        return _security_out(row)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc)) from exc
 
 
 def _purge_temporary_ticker(db: Session, ticker: str) -> None:
@@ -110,16 +149,27 @@ def list_snapshots(section: str, db: Session = Depends(get_db)):
 
 
 @router.post("/snapshots/{section}")
-def create_snapshot(section: str, ticker: str = Query(...), db: Session = Depends(get_db)):
+def create_snapshot(section: str, ticker: str | None = Query(default=None), security_id: int | None = Query(default=None),
+                    source: str | None = Query(default=None), yahoo_symbol: str | None = Query(default=None),
+                    finnhub_symbol: str | None = Query(default=None), db: Session = Depends(get_db)):
     if section not in SNAPSHOT_SECTIONS:
         raise HTTPException(404, "未知快照栏目")
-    value = normalize_ticker(ticker)
+    try:
+        security = resolve_security(db, security_id=security_id, source=source,
+                                    yahoo_symbol=yahoo_symbol or ticker, finnhub_symbol=finnhub_symbol)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc)) from exc
+    value = security.yahoo_symbol or security.finnhub_symbol
+    if not value:
+        raise HTTPException(422, "该证券暂无可用行情数据源")
     now = datetime.now(UTC)
     row = db.scalar(select(TemporarySnapshot).where(TemporarySnapshot.section == section, TemporarySnapshot.ticker == value))
     if not row:
-        row = TemporarySnapshot(section=section, ticker=value, expires_at=now + timedelta(days=1))
+        row = TemporarySnapshot(section=section, ticker=value, security_id=security.id, expires_at=now + timedelta(days=1))
         db.add(row)
     else:
+        row.security_id = security.id
         row.expires_at = now + timedelta(days=1)
     db.commit()
     if section == "news":
@@ -166,7 +216,19 @@ def list_watchlist(db: Session = Depends(get_db)):
 
 @router.post("/watchlist", response_model=WatchlistOut, status_code=status.HTTP_201_CREATED)
 def add_watchlist(payload: WatchlistCreate, db: Session = Depends(get_db)):
-    item = WatchlistItem(**payload.model_dump())
+    try:
+        security = resolve_security(
+            db, security_id=payload.security_id, source=payload.source,
+            yahoo_symbol=payload.yahoo_symbol or payload.ticker, finnhub_symbol=payload.finnhub_symbol,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc)) from exc
+    ticker = security.yahoo_symbol or security.finnhub_symbol
+    if not ticker:
+        raise HTTPException(422, "该证券暂无可用行情数据源")
+    item = WatchlistItem(ticker=ticker, security_id=security.id, threshold_20m=payload.threshold_20m,
+                         threshold_1h=payload.threshold_1h, threshold_day=payload.threshold_day)
     db.add(item)
     try:
         db.commit()
@@ -279,13 +341,19 @@ def list_peers(base_ticker: str, db: Session = Depends(get_db)):
 @router.post("/peers/{base_ticker}", status_code=status.HTTP_201_CREATED)
 def add_manual_peer(base_ticker: str, payload: PeerCreate, db: Session = Depends(get_db)):
     base = _require_watched_ticker(db, base_ticker)
-    peer = normalize_ticker(payload.ticker)
+    try:
+        security = resolve_security(db, security_id=payload.security_id, source=payload.source,
+                                    yahoo_symbol=payload.yahoo_symbol or payload.ticker,
+                                    finnhub_symbol=payload.finnhub_symbol)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc)) from exc
+    peer = security.yahoo_symbol or security.finnhub_symbol
+    if not peer:
+        raise HTTPException(422, "该证券暂无可用行情数据源")
     if base == peer:
         raise HTTPException(422, "股票不能把自己设为同行")
-    info = fetch_stock_profile(peer)
-    if not info:
-        raise HTTPException(422, "无法验证该股票代码")
-    upsert_profile(db, peer, info)
+    upsert_profile(db, peer, {"symbol": peer, "longName": security.display_name})
     if peer in _latest_official_peers(db, base):
         raise HTTPException(409, "该股票已是官方同行")
     existing = db.scalar(select(PeerRelation).where(PeerRelation.base_ticker == base, PeerRelation.peer_ticker == peer))
@@ -295,9 +363,10 @@ def add_manual_peer(base_ticker: str, payload: PeerCreate, db: Session = Depends
     if existing:
         existing.enabled = True
         existing.source = "manual"
+        existing.peer_security_id = security.id
         existing.display_order = order + 1
     else:
-        db.add(PeerRelation(base_ticker=base, peer_ticker=peer, display_order=order + 1))
+        db.add(PeerRelation(base_ticker=base, peer_ticker=peer, peer_security_id=security.id, display_order=order + 1))
     exclusion = db.scalar(select(PeerExclusion).where(PeerExclusion.base_ticker == base, PeerExclusion.peer_ticker == peer))
     if exclusion:
         db.delete(exclusion)
@@ -605,6 +674,8 @@ def financials(ticker: str = Query(...), db: Session = Depends(get_db)):
             "net_margin": r.net_margin,
             "operating_cash_flow": r.operating_cash_flow,
             "free_cash_flow": r.free_cash_flow,
+            "source": r.source,
+            "synced_at": r.synced_at,
         }
         for r in rows
     ]
@@ -624,6 +695,7 @@ def financial_statements(ticker: str = Query(...), frequency: str = Query("annua
         "fiscal_year": row.fiscal_year, "fiscal_period": row.fiscal_period, "period_end": row.period_end,
         "currency": row.currency, "income_statement": row.income_statement,
         "balance_sheet": row.balance_sheet, "cash_flow": row.cash_flow, "source": row.source,
+        "synced_at": row.synced_at,
     } for row in rows]
 
 
@@ -677,6 +749,24 @@ _METRIC_KEYS = [
     (("marketCapitalization",), "市值(百万)"),
 ]
 
+_YAHOO_METRIC_KEYS = {
+    "P/E": ("trailingPE", "forwardPE"),
+    "P/B": ("priceToBook",),
+    "P/S": ("priceToSalesTrailing12Months",),
+    "毛利率 %": ("grossMargins",),
+    "净利率 %": ("profitMargins",),
+    "营业利润率 %": ("operatingMargins",),
+    "ROE %": ("returnOnEquity",),
+    "ROA %": ("returnOnAssets",),
+    "营收增速 YoY %": ("revenueGrowth",),
+    "EPS增速 YoY %": ("earningsGrowth",),
+    "市值(百万)": ("marketCap",),
+    "Beta": ("beta",),
+    "52周高": ("fiftyTwoWeekHigh",),
+    "52周低": ("fiftyTwoWeekLow",),
+}
+_PERCENT_METRICS = {"毛利率 %", "净利率 %", "营业利润率 %", "ROE %", "ROA %", "营收增速 YoY %", "EPS增速 YoY %"}
+
 
 def _pick(metric: dict, keys: tuple[str, ...]):
     for key in keys:
@@ -685,24 +775,60 @@ def _pick(metric: dict, keys: tuple[str, ...]):
     return None
 
 
+def _yahoo_metric(info: dict, label: str):
+    value = _pick(info, _YAHOO_METRIC_KEYS[label])
+    if not isinstance(value, (int, float)):
+        return None
+    if label in _PERCENT_METRICS:
+        return value * 100
+    if label == "市值(百万)":
+        return value / 1_000_000
+    return value
+
+
 @router.get("/fundamentals")
 def fundamentals(ticker: str = Query(...), db: Session = Depends(get_db)):
     value = _require_watched_ticker(db, ticker, "fundamentals")
-    try:
-        metric = fetch_basic_metrics(value)
-    except Exception:
-        metric = {}
-    try:
-        recs = fetch_recommendations(value)
-    except Exception:
-        recs = []
-    metrics = [{"label": label, "value": _pick(metric, keys)} for keys, label in _METRIC_KEYS]
-    info = fetch_yf_info_metrics(value)
-    metrics += [
-        {"label": "Beta", "value": info.get("beta")},
-        {"label": "52周高", "value": info.get("fiftyTwoWeekHigh")},
-        {"label": "52周低", "value": info.get("fiftyTwoWeekLow")},
-    ]
+    yahoo_value = provider_symbol(db, value, "yahoo") or value
+    finnhub_value = provider_symbol(db, value, "finnhub")
+    # These are independent upstream calls. Run them together so an optional
+    # slow provider cannot serially hold the whole fundamentals page hostage.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        info_future = pool.submit(fetch_yf_info_metrics, yahoo_value)
+        yahoo_recs_future = pool.submit(fetch_yf_recommendations, yahoo_value)
+        metric_future = pool.submit(fetch_basic_metrics, finnhub_value) if finnhub_value else None
+        finnhub_recs_future = pool.submit(fetch_recommendations, finnhub_value) if finnhub_value else None
+        try:
+            info = info_future.result()
+        except Exception:
+            info = {}
+        try:
+            yahoo_recs = yahoo_recs_future.result()
+        except Exception:
+            yahoo_recs = []
+        try:
+            metric = metric_future.result() if metric_future else {}
+        except Exception:
+            metric = {}
+        try:
+            finnhub_recs = finnhub_recs_future.result() if finnhub_recs_future else []
+        except Exception:
+            finnhub_recs = []
+    finnhub_available = bool(metric or finnhub_recs)
+    metrics = []
+    for finnhub_keys, label in _METRIC_KEYS:
+        yahoo_value_for_metric = _yahoo_metric(info, label)
+        finnhub_value_for_metric = _pick(metric, finnhub_keys)
+        metrics.append({
+            "label": label,
+            "value": yahoo_value_for_metric if yahoo_value_for_metric is not None else finnhub_value_for_metric,
+            "source": "yahoo" if yahoo_value_for_metric is not None else ("finnhub" if finnhub_value_for_metric is not None else None),
+        })
+    for label in ("Beta", "52周高", "52周低"):
+        yahoo_value_for_metric = _yahoo_metric(info, label)
+        metrics.append({"label": label, "value": yahoo_value_for_metric,
+                        "source": "yahoo" if yahoo_value_for_metric is not None else None})
+    recs = finnhub_recs or yahoo_recs
     latest = recs[0] if recs else None
     rating = None
     if latest:
@@ -712,7 +838,10 @@ def fundamentals(ticker: str = Query(...), db: Session = Depends(get_db)):
             "hold": latest.get("hold", 0), "sell": latest.get("sell", 0),
             "strongSell": latest.get("strongSell", 0),
         }
-    return {"ticker": value, "metrics": metrics, "rating": rating}
+    yahoo_available = any(item["source"] == "yahoo" for item in metrics)
+    return {"ticker": value, "metrics": metrics, "rating": rating,
+            "as_of": datetime.now(UTC), "data_mode": "live",
+            "source_support": {"yahoo": yahoo_available, "finnhub": finnhub_available}}
 
 
 @router.get("/sec-filings")
@@ -934,6 +1063,20 @@ def _trade_log_out(row: TradeLog) -> dict:
     }
 
 
+def _resolve_trade_log_securities(db: Session, payload: TradeLogCreate | TradeLogUpdate) -> None:
+    for item in payload.table_rows:
+        if not item.ticker:
+            item.security_id = None
+            continue
+        try:
+            security = resolve_security(db, security_id=item.security_id, source="yahoo", yahoo_symbol=item.ticker)
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(422, f"交易标的 {item.ticker} 无法验证，请重新搜索选择") from exc
+        item.security_id = security.id
+        item.ticker = security.display_symbol
+
+
 def _trade_log_evidence(row: TradeLog) -> str:
     table_lines = []
     for index, item in enumerate(row.table_rows or [], 1):
@@ -978,6 +1121,7 @@ def create_trade_log(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    _resolve_trade_log_securities(db, payload)
     row = TradeLog(user_id=user.id, **payload.model_dump())
     db.add(row)
     db.commit()
@@ -995,6 +1139,7 @@ def update_trade_log(
     row = db.scalar(select(TradeLog).where(TradeLog.id == log_id, TradeLog.user_id == user.id))
     if not row:
         raise HTTPException(404, "未找到交易日志")
+    _resolve_trade_log_securities(db, payload)
     for key, value in payload.model_dump().items():
         setattr(row, key, value)
     row.ai_summary = None

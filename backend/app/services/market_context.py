@@ -73,7 +73,9 @@ _METRIC_LABELS = [
 ]
 
 
-def _fundamentals(ticker: str) -> str:
+def _fundamentals(ticker: str | None) -> str:
+    if not ticker:
+        return "基本面指标：该数据源暂不支持"
     try:
         metric = fetch_basic_metrics(ticker)
     except Exception:
@@ -84,7 +86,9 @@ def _fundamentals(ticker: str) -> str:
     return "基本面指标：" + ("，".join(parts) if parts else "数据不足")
 
 
-def _recommendations(ticker: str) -> str:
+def _recommendations(ticker: str | None) -> str:
+    if not ticker:
+        return "分析师评级：该数据源暂不支持"
     try:
         rows = fetch_recommendations(ticker)
     except Exception:
@@ -205,15 +209,14 @@ def _institutional_holdings(ticker: str) -> str:
     return f"机构持仓（13F，季度截至 {latest_period}）：" + "；".join(parts)
 
 
-def build_market_context(ticker: str) -> str:
+def build_market_context(ticker: str, finnhub_symbol: str | None = None) -> str:
     """返回注入报告 evidence 的市场上下文 markdown 块。"""
     blocks = [
         _day_quote(ticker),
         _market_env(),
-        _fundamentals(ticker),
-        _recommendations(ticker),
+        _fundamentals(finnhub_symbol),
+        _recommendations(finnhub_symbol),
         _insider_trades(ticker),
         _institutional_holdings(ticker),
     ]
     return "\n\n# 市场与基本面数据\n" + "\n".join(f"- {b}" for b in blocks)
-

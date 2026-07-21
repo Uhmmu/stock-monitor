@@ -130,16 +130,34 @@ def fetch_yf_financial_statements(ticker: str, frequency: str) -> list[dict]:
 
 
 def fetch_yf_info_metrics(ticker: str) -> dict:
-    """yfinance info 里的 Beta / 52周高低（Finnhub 常缺）。注意字段大小写。"""
+    """Return the Yahoo fields used by the fundamentals screen.
+
+    Keep Yahoo's native units here.  The API layer normalizes ratios to percent
+    and market cap to millions so it can safely merge optional Finnhub values.
+    """
     try:
-        info = yf.Ticker(ticker).info
+        info = yf.Ticker(ticker).get_info() or {}
     except Exception:
         return {}
-    return {
-        "beta": info.get("beta"),
-        "fiftyTwoWeekHigh": info.get("fiftyTwoWeekHigh"),
-        "fiftyTwoWeekLow": info.get("fiftyTwoWeekLow"),
-    }
+    keys = (
+        "trailingPE", "forwardPE", "priceToBook", "priceToSalesTrailing12Months",
+        "grossMargins", "profitMargins", "operatingMargins", "returnOnEquity",
+        "returnOnAssets", "revenueGrowth", "earningsGrowth", "marketCap", "beta",
+        "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "currency", "regularMarketPrice",
+    )
+    return {key: info.get(key) for key in keys}
+
+
+def fetch_yf_recommendations(ticker: str) -> list[dict]:
+    """Return Yahoo's current analyst recommendation summary when available."""
+    try:
+        rows = yf.Ticker(ticker).recommendations_summary
+    except Exception:
+        return []
+    if rows is None or rows.empty:
+        return []
+    expected = ("period", "strongBuy", "buy", "hold", "sell", "strongSell")
+    return [{key: row.get(key) for key in expected} for row in rows.to_dict("records")]
 
 
 def fetch_stock_profile(ticker: str) -> dict:

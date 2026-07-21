@@ -22,9 +22,41 @@ class ReportType(str, enum.Enum):
     earnings_after = "earnings_after"
 
 
+class Security(Base):
+    """Canonical security identity with provider-specific symbols."""
+    __tablename__ = "securities"
+    __table_args__ = (
+        UniqueConstraint("yahoo_symbol", name="uq_securities_yahoo_symbol"),
+        UniqueConstraint("finnhub_symbol", name="uq_securities_finnhub_symbol"),
+        CheckConstraint("yahoo_symbol IS NOT NULL OR finnhub_symbol IS NOT NULL", name="ck_securities_provider_symbol"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    display_symbol: Mapped[str] = mapped_column(String(32), index=True)
+    display_name: Mapped[str | None] = mapped_column(String(256), index=True)
+    local_symbol: Mapped[str | None] = mapped_column(String(32), index=True)
+    exchange_code: Mapped[str | None] = mapped_column(String(32), index=True)
+    exchange_name: Mapped[str | None] = mapped_column(String(128))
+    mic_code: Mapped[str | None] = mapped_column(String(16))
+    market: Mapped[str | None] = mapped_column(String(32), index=True)
+    country_code: Mapped[str | None] = mapped_column(String(2), index=True)
+    currency: Mapped[str | None] = mapped_column(String(8))
+    instrument_type: Mapped[str | None] = mapped_column(String(32), index=True)
+    isin: Mapped[str | None] = mapped_column(String(32), index=True)
+    yahoo_symbol: Mapped[str | None] = mapped_column(String(32), index=True)
+    finnhub_symbol: Mapped[str | None] = mapped_column(String(32), index=True)
+    yahoo_status: Mapped[str] = mapped_column(String(16), default="unknown")
+    finnhub_status: Mapped[str] = mapped_column(String(16), default="unknown")
+    mapping_confidence: Mapped[float | None] = mapped_column(Float)
+    mapping_method: Mapped[str] = mapped_column(String(32), default="unresolved")
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class WatchlistItem(Base):
     __tablename__ = "watchlist_items"
     id: Mapped[int] = mapped_column(primary_key=True)
+    security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id", ondelete="SET NULL"), index=True)
     ticker: Mapped[str] = mapped_column(String(16), unique=True, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     threshold_20m: Mapped[float | None] = mapped_column(Float)
@@ -41,6 +73,7 @@ class TemporarySnapshot(Base):
     __tablename__ = "temporary_snapshots"
     __table_args__ = (UniqueConstraint("section", "ticker"),)
     id: Mapped[int] = mapped_column(primary_key=True)
+    security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id", ondelete="SET NULL"), index=True)
     section: Mapped[str] = mapped_column(String(24), index=True)
     ticker: Mapped[str] = mapped_column(String(16), index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -73,6 +106,7 @@ class PeerRelation(Base):
     __tablename__ = "peer_relations"
     __table_args__ = (UniqueConstraint("base_ticker", "peer_ticker"), CheckConstraint("base_ticker <> peer_ticker"))
     id: Mapped[int] = mapped_column(primary_key=True)
+    peer_security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id", ondelete="SET NULL"), index=True)
     base_ticker: Mapped[str] = mapped_column(String(16), index=True)
     peer_ticker: Mapped[str] = mapped_column(String(16), index=True)
     source: Mapped[str] = mapped_column(String(16), default="manual", index=True)

@@ -4,18 +4,31 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class WatchlistCreate(BaseModel):
-    ticker: str = Field(min_length=1, max_length=16)
+    ticker: str | None = Field(default=None, min_length=1, max_length=32)
+    security_id: int | None = Field(default=None, gt=0)
+    source: str | None = Field(default=None, pattern="^(yahoo|finnhub|local)$")
+    yahoo_symbol: str | None = Field(default=None, max_length=32)
+    finnhub_symbol: str | None = Field(default=None, max_length=32)
     threshold_20m: float | None = Field(default=None, gt=0)
     threshold_1h: float | None = Field(default=None, gt=0)
     threshold_day: float | None = Field(default=None, gt=0)
 
     @field_validator("ticker")
     @classmethod
-    def normalize_ticker(cls, value: str) -> str:
+    def normalize_ticker(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         ticker = value.strip().upper()
         if not ticker.replace("-", "").replace(".", "").isalnum():
             raise ValueError("股票代码格式无效")
         return ticker
+
+
+class SecurityResolveIn(BaseModel):
+    security_id: int | None = Field(default=None, gt=0)
+    source: str | None = Field(default=None, pattern="^(yahoo|finnhub|local)$")
+    yahoo_symbol: str | None = Field(default=None, max_length=32)
+    finnhub_symbol: str | None = Field(default=None, max_length=32)
 
 
 class WatchlistUpdate(BaseModel):
@@ -53,11 +66,17 @@ class StockGroupUpdate(BaseModel):
 
 
 class PeerCreate(BaseModel):
-    ticker: str = Field(min_length=1, max_length=16)
+    ticker: str | None = Field(default=None, min_length=1, max_length=32)
+    security_id: int | None = Field(default=None, gt=0)
+    source: str | None = Field(default=None, pattern="^(yahoo|finnhub|local)$")
+    yahoo_symbol: str | None = Field(default=None, max_length=32)
+    finnhub_symbol: str | None = Field(default=None, max_length=32)
 
     @field_validator("ticker")
     @classmethod
-    def normalize_peer(cls, value: str) -> str:
+    def normalize_peer(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         return WatchlistCreate.normalize_ticker(value)
 
 
@@ -86,6 +105,7 @@ class GrahamOverride(BaseModel):
 
 
 class TradeLogTableRow(BaseModel):
+    security_id: int | None = Field(default=None, gt=0)
     ticker: str = Field(default="", max_length=16)
     direction: str = Field(default="", max_length=16)
     quantity: float | None = Field(default=None, ge=0)

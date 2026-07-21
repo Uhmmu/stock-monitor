@@ -51,6 +51,7 @@ from app.services.cross_model import build_cross_model, fetch_cross_model_inputs
 from app.services.finnhub_mcp import fetch_basic_metrics, fetch_company_peers
 from app.services.graham import build_graham_from_sources, get_latest_aaa_corporate_bond_yield
 from app.services.stock_management import cache_official_relations, effective_peer_symbols, referenced_tickers, upsert_profile, valuation_tickers
+from app.services.securities import provider_symbol
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ def _save_report(db, key: str, ticker: str | None, report_type: ReportType, titl
         return
     if ticker:
         try:
-            evidence = build_market_context(ticker) + "\n\n# 新闻线索\n" + evidence
+            evidence = build_market_context(ticker, provider_symbol(db, ticker, "finnhub")) + "\n\n# 新闻线索\n" + evidence
         except Exception:
             pass
     content, model = generate_analysis(title, evidence, tier, report_type.value)
@@ -122,7 +123,8 @@ def poll_market():
 
 
 def _collect_investigation_news(db, investigation: Investigation, now: datetime):
-    dtos = collect_ticker_news(investigation.ticker, "sudden price movement catalyst", days=2)
+    dtos = collect_ticker_news(investigation.ticker, "sudden price movement catalyst", days=2,
+                               finnhub_symbol=provider_symbol(db, investigation.ticker, "finnhub"))
     for dto in dtos:
         fingerprint = dto.fingerprint
         if db.scalar(select(NewsItem.id).where(NewsItem.fingerprint == fingerprint)):
@@ -386,7 +388,7 @@ def poll_news(ticker: str | None = None):
         total = 0
         now = datetime.now(UTC)
         for item in items:
-            dtos = collect_ticker_news(item.ticker)
+            dtos = collect_ticker_news(item.ticker, finnhub_symbol=provider_symbol(db, item.ticker, "finnhub"))
             kept = [dto for dto in dtos if filter_news(dto, now)]
             if not kept:
                 continue
@@ -571,6 +573,7 @@ def _sync_ticker_financials(db, ticker: str) -> bool:
     quarters = quarters_from_yf(rows)
     if not quarters and not statement_rows:
         return False
+    synced_at = datetime.now(UTC)
     for quarter in quarters:
         row = db.scalar(
             select(QuarterlyFinancial).where(
@@ -594,6 +597,7 @@ def _sync_ticker_financials(db, ticker: str) -> bool:
         row.operating_cash_flow = quarter.operating_cash_flow
         row.free_cash_flow = quarter.free_cash_flow
         row.raw_payload = quarter.raw_payload
+        row.synced_at = synced_at
         archive.write_quarter(ticker, quarter.label, quarter.raw_payload)
     for frequency, item in statement_rows:
         snapshot = db.scalar(select(FinancialStatementSnapshot).where(
@@ -610,6 +614,7 @@ def _sync_ticker_financials(db, ticker: str) -> bool:
         snapshot.income_statement = item["income_statement"]
         snapshot.balance_sheet = item["balance_sheet"]
         snapshot.cash_flow = item["cash_flow"]
+        snapshot.synced_at = synced_at
     if quarters:
         keep_labels = [q.label for q in quarters]
         keep_pairs = {(q.fiscal_year, q.fiscal_period) for q in quarters}
@@ -643,8 +648,9 @@ def sync_ticker_financials(ticker: str):
 
 def _sync_ticker_valuation(db, ticker: str, explain: bool = True) -> bool:
     """抓取分类、Finnhub 同行与 Yahoo 原料，计算后按日 upsert；Luna 仅解释。"""
+    finnhub_ticker = provider_symbol(db, ticker, "finnhub")
     try:
-        official_peers = fetch_company_peers(ticker)
+        official_peers = fetch_company_peers(finnhub_ticker) if finnhub_ticker else []
     except Exception:
         official_peers = []
     is_watched = bool(db.scalar(select(WatchlistItem.id).where(WatchlistItem.ticker == ticker, WatchlistItem.enabled.is_(True))))
@@ -698,7 +704,7 @@ def _sync_ticker_valuation(db, ticker: str, explain: bool = True) -> bool:
     quote_input = ({"price": latest_quote.price, "source": latest_quote.source,
                     "as_of": latest_quote.quote_time.isoformat()} if latest_quote else None)
     try:
-        finnhub_metrics = fetch_basic_metrics(ticker)
+        finnhub_metrics = fetch_basic_metrics(finnhub_ticker) if finnhub_ticker else {}
     except Exception as exc:
         logger.warning("%s Finnhub Graham 基本面获取失败: %s", ticker, exc)
         finnhub_metrics = {}

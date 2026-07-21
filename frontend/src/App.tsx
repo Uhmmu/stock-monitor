@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import rehypeSanitize from 'rehype-sanitize'
 import { api, patch, post } from './api'
 import { Sheet } from './Sheet'
+import { SecuritySearchAutocomplete, securityPayload, type SecuritySearchResult } from './SecuritySearchAutocomplete'
 
 type WatchItem = { id:number; ticker:string; enabled:boolean; alert_enabled:boolean; user_group_id:number|null; display_order:number; threshold_20m:number|null; threshold_1h:number|null; threshold_day:number|null }
 type ManagedStock = {ticker:string;company_name:string|null;official_sector:string|null;official_industry:string|null;user_group_id:number|null;display_order:number;is_watchlisted:boolean;is_peer_referenced:boolean;peer_referenced_by:string[];stock_type:'watchlist'|'matched';price:number|null;change_percent:number|null;alert_enabled:boolean;threshold_20m:number|null;threshold_1h:number|null;threshold_day:number|null;watchlist_id:number|null}
@@ -22,12 +23,12 @@ type Settings = {threshold_20m:number;threshold_1h:number;threshold_day:number;a
 type NewsRow = {id:number;ticker:string;provider:string;title:string;translated_title:string|null;title_translation_model:string|null;title_translated_at:string|null;url:string;source:string|null;summary:string|null;image_url:string|null;published_at:string|null;found_at:string;relevance_score:number|null;sentiment_score:number|null;ai_summary:string|null;ai_summary_model:string|null}
 type NewsArchive = {ticker:string;market_date:string;content:string;model:string;version:number;updated_at:string;included_news_ids:number[]}
 type WeeklyArchive = {ticker:string;iso_year:number;iso_week:number;week_start:string;week_end:string;content:string;included_dates:string[];model:string;version:number;updated_at:string}
-type Financial = {fiscal_year:number;fiscal_period:string;period_end:string;filed_at:string|null;currency:string|null;revenue:number|null;eps:number|null;net_income:number|null;operating_income:number|null;gross_margin:number|null;net_margin:number|null;operating_cash_flow:number|null;free_cash_flow:number|null}
+type Financial = {fiscal_year:number;fiscal_period:string;period_end:string;filed_at:string|null;currency:string|null;revenue:number|null;eps:number|null;net_income:number|null;operating_income:number|null;gross_margin:number|null;net_margin:number|null;operating_cash_flow:number|null;free_cash_flow:number|null;source:string;synced_at:string}
 type StatementValues = Record<string,number|null>
-type FinancialStatement = {fiscal_year:number;fiscal_period:string;period_end:string;currency:string|null;income_statement:StatementValues;balance_sheet:StatementValues;cash_flow:StatementValues;source:string}
+type FinancialStatement = {fiscal_year:number;fiscal_period:string;period_end:string;currency:string|null;income_statement:StatementValues;balance_sheet:StatementValues;cash_flow:StatementValues;source:string;synced_at:string}
 type StatementMetric = {label:string;english:string;description:string;impact:string;formula?:string}
 type Rating = {period:string|null;strongBuy:number;buy:number;hold:number;sell:number;strongSell:number}
-type Fundamentals = {ticker:string;metrics:{label:string;value:number|null}[];rating:Rating|null}
+type Fundamentals = {ticker:string;metrics:{label:string;value:number|null;source:'yahoo'|'finnhub'|null}[];rating:Rating|null;as_of:string;data_mode:'live';source_support:{yahoo:boolean;finnhub:boolean}}
 type CrossMetric = {key:string;label:string;value:number|null;unit:string;status:'available'|'partial'|'insufficient'|'not_applicable';display?:string|null;missing_fields?:string[];warnings?:string[];available_components?:number;total_components?:number;components?:Record<string,boolean|null>;applicability?:'medium'|'low'|'not_applicable';formula_version?:string;inputs?:Record<string,unknown>;peer_median:number|null;peer_count:number;peer_delta_percent:number|null;comparison:string|null;formula:string;recommended_range:string;explanation:string;note:string|null}
 type WeightAdjustment = {tag:string;label:string;confidence:number;raw_adjustment:number;applied_adjustment:number}
 type WeightDetail = {key:string;label:string;base_score:number;adjustments:WeightAdjustment[];final_score:number;weight:number}
@@ -48,7 +49,7 @@ type CongressTradeRow = {id:number;filer_id:string;filer_name:string;chamber:str
 type Position = {ticker:string|null;asset_name:string;category:string;value:number;is_percent:boolean;note:string|null}
 type FigureDetail = {slug:string;display_name:string;kind:string;photo_url:string|null;note:string|null;is_seed:boolean;positions:Position[];positions_are_percent:boolean;trades:CongressTradeRow[];moves:{buys:string[];sells:string[]}|null}
 type FilerHit = {filer_id:string;full_name:string;chamber:string|null;branch:string|null;party:string|null;state:string|null;trade_count:number|null}
-type TradeLogRow = {ticker:string;direction:string;quantity:number|null;price:number|null;fee:number|null;strategy:string;result:string}
+type TradeLogRow = {security_id?:number|null;ticker:string;direction:string;quantity:number|null;price:number|null;fee:number|null;strategy:string;result:string}
 type TradeLog = {id:number;trade_date:string;ticker:string|null;direction:string|null;quantity:number|null;price:number|null;note:string|null;content:string|null;table_rows:TradeLogRow[];photo_urls:string[];ai_summary:string|null;ai_summary_model:string|null;ai_summary_created_at:string|null;created_at:string}
 
 const formatPrice = (value:number|null) => value == null ? '等待行情' : `$${value.toFixed(2)}`
@@ -112,14 +113,14 @@ const localizeSector = (value:string|null|undefined,fallback='未分类') => val
 const localizeIndustry = (value:string|null|undefined,fallback='行业待同步') => value ? industryNames[value]||value : fallback
 
 function SnapshotTickerBar({section,tickers,current,onSelect}:{section:'news'|'fundamentals'|'financials'|'valuation'|'sec';tickers:string[];current:string;onSelect:(ticker:string)=>void}) {
-  const [input,setInput] = useState('')
+  const [selectedSecurity,setSelectedSecurity] = useState<SecuritySearchResult|null>(null)
   const client = useQueryClient()
   const snapshots = useQuery({queryKey:['snapshots',section],queryFn:()=>api<TemporarySnapshot[]>(`/snapshots/${section}`)})
-  const search = useMutation({mutationFn:(ticker:string)=>post<TemporarySnapshot>(`/snapshots/${section}?ticker=${encodeURIComponent(ticker)}`,{}),onSuccess:item=>{setInput('');onSelect(item.ticker);client.invalidateQueries({queryKey:['snapshots',section]})}})
+  const search = useMutation({mutationFn:(security:SecuritySearchResult)=>{const params=new URLSearchParams();Object.entries(securityPayload(security)).forEach(([key,value])=>{if(value!=null)params.set(key,String(value))});return post<TemporarySnapshot>(`/snapshots/${section}?${params}`,{})},onSuccess:item=>{setSelectedSecurity(null);onSelect(item.ticker);client.invalidateQueries({queryKey:['snapshots',section]})}})
   const remove = useMutation({mutationFn:(ticker:string)=>api(`/snapshots/${section}/${ticker}`,{method:'DELETE'}),onSuccess:(_,ticker)=>{if(current===ticker) onSelect(tickers[0]||'');client.invalidateQueries({queryKey:['snapshots',section]});client.removeQueries({queryKey:[section,ticker]})}})
   const temporary = snapshots.data||[]
   const shown = [...tickers, ...temporary.map(item=>item.ticker).filter(ticker=>!tickers.includes(ticker))]
-  return <><form className="snapshot-search" onSubmit={event=>{event.preventDefault();const ticker=input.trim().toUpperCase();if(ticker)search.mutate(ticker)}}><input value={input} onChange={event=>setInput(event.target.value.toUpperCase())} placeholder="临时查看股票代码，例如 AAPL" maxLength={16}/><button disabled={search.isPending}>{search.isPending?'正在采集…':'查看快照'}</button></form><div className="news-tickers">{shown.map(ticker=>{const isTemporary=temporary.some(item=>item.ticker===ticker);return <span className={`ticker-chip${ticker===current?' active':''}${isTemporary?' temporary':''}`} key={ticker}><button onClick={()=>onSelect(ticker)}>{ticker}</button>{isTemporary&&<button className="ticker-remove" aria-label={`删除 ${ticker} 临时快照`} onClick={()=>remove.mutate(ticker)}>×</button>}</span>})}</div>{search.isError&&<p className="error">股票代码无效或暂时无法采集。</p>}</>
+  return <><form className="snapshot-search" onSubmit={event=>{event.preventDefault();if(selectedSecurity)search.mutate(selectedSecurity)}}><SecuritySearchAutocomplete value={selectedSecurity} onSelect={setSelectedSecurity} placeholder="临时查看代码或公司名称" compact/><button disabled={!selectedSecurity||search.isPending}>{search.isPending?'正在采集…':'查看快照'}</button></form><div className="news-tickers">{shown.map(ticker=>{const isTemporary=temporary.some(item=>item.ticker===ticker);return <span className={`ticker-chip${ticker===current?' active':''}${isTemporary?' temporary':''}`} key={ticker}><button onClick={()=>onSelect(ticker)}>{ticker}</button>{isTemporary&&<button className="ticker-remove" aria-label={`删除 ${ticker} 临时快照`} onClick={()=>remove.mutate(ticker)}>×</button>}</span>})}</div>{search.isError&&<p className="error">候选证券已失效或暂时无法采集，请重新搜索。</p>}</>
 }
 
 const demoDashboard:Dashboard = {
@@ -306,14 +307,14 @@ function GrahamPanel({ticker,initial}:{ticker:string;initial:GrahamAnalysis}) {
 
 function CrossModelCenter({tickers,onMetric,onWeight,active,setActive}:{tickers:string[];onMetric:(metric:CrossMetric)=>void;onWeight:(weight:WeightDetail)=>void;active:string;setActive:(ticker:string)=>void}) {
   const [editingPeers,setEditingPeers] = useState(false)
-  const [peerTicker,setPeerTicker] = useState('')
+  const [peerSecurity,setPeerSecurity] = useState<SecuritySearchResult|null>(null)
   const current = active||tickers[0]||''
   const client = useQueryClient()
   const result = useQuery({queryKey:['cross-model',current],queryFn:()=>api<CrossModel>(`/cross-model?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
   const peerList = useQuery({queryKey:['peers',current],queryFn:()=>api<PeerList>(`/peers/${current}`),enabled:!!current&&editingPeers})
   const refresh = useMutation({mutationFn:()=>post(`/cross-model/refresh?ticker=${current}`,{}),onSuccess:()=>setTimeout(()=>client.invalidateQueries({queryKey:['cross-model',current]}),12000)})
   const peersChanged = () => {client.invalidateQueries({queryKey:['peers',current]});client.invalidateQueries({queryKey:['stock-management']});setTimeout(()=>client.invalidateQueries({queryKey:['cross-model',current]}),12000)}
-  const addPeer = useMutation({mutationFn:()=>post(`/peers/${current}`,{ticker:peerTicker}),onSuccess:()=>{setPeerTicker('');peersChanged()}})
+  const addPeer = useMutation({mutationFn:()=>post(`/peers/${current}`,securityPayload(peerSecurity!)),onSuccess:()=>{setPeerSecurity(null);peersChanged()}})
   const removePeer = useMutation({mutationFn:(item:PeerItem)=>item.source==='manual'?api(`/peers/${current}/${item.ticker}`,{method:'DELETE'}):post(`/peers/${current}/${item.ticker}/exclude`,{}),onSuccess:peersChanged})
   const restorePeer = useMutation({mutationFn:(ticker:string)=>api(`/peers/${current}/${ticker}/exclude`,{method:'DELETE'}),onSuccess:peersChanged})
   const movePeer = async (item:PeerItem,delta:number) => {await patch(`/peers/${current}/${item.ticker}/order`,{display_order:Math.max(0,item.display_order+delta)});peersChanged()}
@@ -322,12 +323,12 @@ function CrossModelCenter({tickers,onMetric,onWeight,active,setActive}:{tickers:
   const consensusGap = data?.consensus.value!=null&&data.consensus.current!=null&&data.consensus.current!==0?(data.consensus.value-data.consensus.current)/data.consensus.current*100:null
   return <div className="news-center cross-model">
     <SnapshotTickerBar section="valuation" tickers={tickers} current={current} onSelect={setActive}/>
-    {!current&&<div className="empty">输入股票代码，生成仅保留一天的临时估值快照。</div>}
+    {!current&&<div className="empty">搜索并选择证券，生成仅保留一天的临时估值快照。</div>}
     {result.isLoading&&<div className="empty">正在读取每日估值快照…</div>}{result.isError&&<div className="snapshot-empty"><p>该股票还没有每日估值快照。</p><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'正在抓取同行与估值…':'立即生成'}</button></div>}
     {data&&<><section className="cross-hero"><div><p className="eyebrow">{localizeSector(data.classification.sector)} · {localizeIndustry(data.classification.industry,'数据不足')}</p><h2>{data.company} <span>{data.classification.label}</span></h2><p>主模型：{data.classification.primary.map(modelLabel).join('、')||'数据不足'}　·　辅助模型：{data.classification.secondary.map(modelLabel).join('、')||'—'}</p><div className="tag-row">{data.tags.filter(t=>!t.name.includes(':')).map(t=><span key={t.name}>{t.label} <b>{Math.round(t.confidence*100)}%</b></span>)}</div></div><div className="valuation-focus"><small>本次估值重点</small><b>{data.classification.focus}</b></div></section>
       <section className="valuation-glance" aria-label="估值摘要"><div><span>当前市场价格</span><strong>{data.consensus.current==null?'数据不足':`$${data.consensus.current.toFixed(2)}`}</strong><small>市场正在支付的价格</small></div><div><span>模型估值共识</span><strong>{data.consensus.value==null?'数据不足':`$${data.consensus.value.toFixed(2)}`}</strong><small>{data.consensus.items.length} 个独立模型参与</small></div><div className={consensusGap==null?'':consensusGap>=0?'positive':'negative'}><span>共识相对现价</span><strong>{consensusGap==null?'数据不足':`${consensusGap>=0?'+':''}${consensusGap.toFixed(1)}%`}</strong><small>仅表示模型差值，不是预期收益</small></div><div><span>模型一致性</span><strong>{data.model_conflict?'存在分歧':'方向一致'}</strong><small>{data.peers.coverage}/{data.peers.symbols.length} 家同行可比</small></div></section>
       <section className="peer-strip"><div><span>同行公司</span><small>{data.peers.coverage}/{data.peers.symbols.length} 家具备可比数据</small></div><div>{data.peers.symbols.map(symbol=><b key={symbol}>{symbol}</b>)}{!data.peers.symbols.length&&<em>同行数据不足</em>}<button className="peer-edit-btn" onClick={()=>setEditingPeers(value=>!value)}>{editingPeers?'收起编辑':'编辑同行'}</button></div></section>
-      {editingPeers&&<section className="peer-editor"><form onSubmit={event=>{event.preventDefault();if(peerTicker.trim())addPeer.mutate()}}><input value={peerTicker} onChange={event=>setPeerTicker(event.target.value.toUpperCase())} placeholder="搜索并添加股票代码" maxLength={16}/><button disabled={addPeer.isPending}>验证并添加</button></form>{addPeer.error&&<p className="error">{addPeer.error.message}</p>}<div>{peerList.data?.items.map(item=><article key={`${item.source}-${item.ticker}`} className={item.excluded?'excluded':''}><span><b>{item.ticker}</b><small>{item.is_watchlisted?'自选股':'匹配股票'} · {item.source==='official'?'官方同行':'手动同行'}</small></span>{item.source==='manual'&&<div><button onClick={()=>movePeer(item,-1)}>↑</button><button onClick={()=>movePeer(item,1)}>↓</button></div>}{item.excluded?<button onClick={()=>restorePeer.mutate(item.ticker)}>恢复默认</button>:<button onClick={()=>removePeer.mutate(item)}>{item.source==='official'?'排除':'删除'}</button>}</article>)}</div><small>官方同行来自 Finnhub；这里仅保存手动新增、排除与排序，不修改官方行业分类。</small></section>}
+      {editingPeers&&<section className="peer-editor"><form onSubmit={event=>{event.preventDefault();if(peerSecurity)addPeer.mutate()}}><SecuritySearchAutocomplete value={peerSecurity} onSelect={setPeerSecurity} excludeSymbols={[current]} disabledSymbols={peerList.data?.items.filter(item=>!item.excluded).map(item=>item.ticker)||[]} placeholder="搜索同行代码或公司名称"/><button disabled={!peerSecurity||addPeer.isPending}>添加同行</button></form>{addPeer.error&&<p className="error">{addPeer.error.message}</p>}<div>{peerList.data?.items.map(item=><article key={`${item.source}-${item.ticker}`} className={item.excluded?'excluded':''}><span><b>{item.ticker}</b><small>{item.is_watchlisted?'自选股':'匹配股票'} · {item.source==='official'?'官方同行':'手动同行'}</small></span>{item.source==='manual'&&<div><button onClick={()=>movePeer(item,-1)}>↑</button><button onClick={()=>movePeer(item,1)}>↓</button></div>}{item.excluded?<button onClick={()=>restorePeer.mutate(item.ticker)}>恢复默认</button>:<button onClick={()=>removePeer.mutate(item)}>{item.source==='official'?'排除':'删除'}</button>}</article>)}</div><small>官方同行来自 Finnhub；这里仅保存手动新增、排除与排序，不修改官方行业分类。</small></section>}
       <div className="valuation-chapter"><MetricGroup tone="pricing" title="市场定价与相对估值" subtitle="与同行和自身经营尺度比较" items={data.valuation}/><MetricGroup tone="growth" title="增长能力" subtitle="判断增长速度、质量与可持续性" items={data.growth}/><MetricGroup tone="quality" title="财务质量与资本效率" subtitle="检查盈利、偿债与资本使用效率" items={data.health}/></div>
       {data.graham?<GrahamPanel ticker={current} initial={data.graham}/>:<section className="graham-section graham-empty"><h2>Graham Analysis（格莱厄姆估值）</h2><p>当前是旧版估值快照，请点击底部“刷新今日数据”生成 Graham 数据。</p></section>}
       <div className="valuation-pair"><section className="scenario-section"><div className="section-title"><h2>DCF 情景估值</h2><small>区间比单一数字更重要</small></div><div className="scenario-grid">{(['bear','base','bull','current'] as const).map(key=><div key={key} className={key}><span>{{bear:'悲观情景',base:'基准情景',bull:'乐观情景',current:'当前价格'}[key]}</span><strong>{data.dcf_scenarios[key]==null?'数据不足':`$${data.dcf_scenarios[key]!.toFixed(2)}`}</strong>{key!=='current'&&data.dcf_scenarios.assumptions[key]&&<small>增长 {data.dcf_scenarios.assumptions[key].growth}% · 折现 {data.dcf_scenarios.assumptions[key].discount_rate}%</small>}</div>)}</div>{data.reverse_dcf.implied_fcf_growth!=null&&<p className="reverse-dcf">反向 DCF：现价隐含未来五年 FCF 年增长约 <b>{data.reverse_dcf.implied_fcf_growth}%</b></p>}</section><section className="consensus-section"><div className="section-title"><h2>估值共识</h2><small>只聚合独立可计算的公允价值</small></div><div className="consensus-list">{data.consensus.items.map(item=><div key={item.key}><span>{item.label}</span><b>${item.value.toFixed(2)}</b></div>)}<div className="consensus-final"><span>估值共识</span><strong>{data.consensus.value==null?'数据不足':`$${data.consensus.value.toFixed(2)}`}</strong></div></div></section></div>
@@ -355,13 +356,13 @@ function metricHint(item:CrossMetric) {
 
 function StockManagement({onWatchlistChanged}:{onWatchlistChanged:()=>void}) {
   const client = useQueryClient()
-  const [ticker,setTicker] = useState('')
+  const [newSecurity,setNewSecurity] = useState<SecuritySearchResult|null>(null)
   const [groupName,setGroupName] = useState('')
   const [selected,setSelected] = useState<ManagedStock|null>(null)
   const [collapsed,setCollapsed] = useState<Record<string,boolean>>({})
   const management = useQuery({queryKey:['stock-management'],queryFn:()=>api<StockManagementData>('/stock-management')})
   const refresh = () => {client.invalidateQueries({queryKey:['stock-management']});onWatchlistChanged()}
-  const add = useMutation({mutationFn:()=>post('/watchlist',{ticker}),onSuccess:()=>{setTicker('');refresh()}})
+  const add = useMutation({mutationFn:()=>post('/watchlist',securityPayload(newSecurity!)),onSuccess:()=>{setNewSecurity(null);refresh()}})
   const addGroup = useMutation({mutationFn:()=>post('/stock-groups',{name:groupName}),onSuccess:()=>{setGroupName('');client.invalidateQueries({queryKey:['stock-management']})}})
   const remove = useMutation({mutationFn:(id:number)=>api(`/watchlist/${id}`,{method:'DELETE'}),onSuccess:()=>{setSelected(null);refresh()}})
   const promote = useMutation({mutationFn:(value:string)=>post('/watchlist',{ticker:value}),onSuccess:()=>{setSelected(null);refresh()}})
@@ -390,7 +391,7 @@ function StockManagement({onWatchlistChanged}:{onWatchlistChanged:()=>void}) {
   return <div className="stock-manager">
     <section className="stock-manager-intro"><div><h2>自选股概览</h2></div><dl><div><dt>自选股</dt><dd>{data?.watchlisted.length||0}</dd></div><div><dt>观察分区</dt><dd>{sections.size}</dd></div><div><dt>同行样本</dt><dd>{data?.matched.length||0}</dd></div></dl></section>
     <div className="stock-manager-tools">
-      <form className="add-form" onSubmit={event=>{event.preventDefault();if(ticker.trim())add.mutate()}}><div><label>添加公司</label><input value={ticker} onChange={event=>setTicker(event.target.value.toUpperCase())} placeholder="输入股票代码，例如 AAPL" maxLength={16}/></div><button disabled={add.isPending}>{add.isPending?'正在同步…':'添加到自选股'}</button></form>
+      <form className="add-form" onSubmit={event=>{event.preventDefault();if(newSecurity)add.mutate()}}><SecuritySearchAutocomplete label="添加公司" value={newSecurity} onSelect={setNewSecurity} disabledSymbols={data?.watchlisted.map(stock=>stock.ticker)||[]} placeholder="搜索股票代码或公司名称"/><button disabled={!newSecurity||add.isPending}>{add.isPending?'正在同步…':'添加到自选股'}</button></form>
       <form className="group-form" onSubmit={event=>{event.preventDefault();if(groupName.trim())addGroup.mutate()}}><div><label>新建个人分区</label><input value={groupName} onChange={event=>setGroupName(event.target.value)} placeholder="例如：长期复利、等待回调"/></div><button disabled={addGroup.isPending}>创建分区</button></form>
     </div>
     {(add.error||addGroup.error)&&<p className="error">{(add.error||addGroup.error)?.message}</p>}
@@ -452,7 +453,7 @@ const statementMetricInfo:Record<string,StatementMetric> = {
 
 function FundamentalsCenter({tickers,active,setActive}:{tickers:string[];active:string;setActive:(ticker:string)=>void}) {
   const current = active||tickers[0]||''
-  const fundamentals = useQuery({queryKey:['fundamentals',current],queryFn:()=>api<Fundamentals>(`/fundamentals?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
+  const fundamentals = useQuery({queryKey:['fundamentals',current],queryFn:()=>api<Fundamentals>(`/fundamentals?ticker=${current}`),enabled:!!current,staleTime:60_000})
   const financials = useQuery({queryKey:['financials',current],queryFn:()=>api<Financial[]>(`/financials?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
   const fmtNum = (v:number|null) => {
     if(v==null) return '数据不足'
@@ -465,9 +466,10 @@ function FundamentalsCenter({tickers,active,setActive}:{tickers:string[];active:
   const r = fundamentals.data?.rating
   return <div className="news-center">
     <SnapshotTickerBar section="fundamentals" tickers={tickers} current={current} onSelect={setActive}/>
-    {!current&&<div className="empty">输入股票代码，临时查看基本面数据。</div>}
+    {!current&&<div className="empty">搜索并选择证券，临时查看基本面数据。</div>}
+    {fundamentals.data&&<div className={`source-notice ${fundamentals.data.source_support.yahoo?'source-ok':'source-error'}`}><span><i aria-hidden="true"/>{fundamentals.data.source_support.yahoo?'Yahoo 实时基本面已连接':'Yahoo 基本面暂不可用'}</span><time>{formatDate(fundamentals.data.as_of)}</time>{!fundamentals.data.source_support.finnhub&&<small>Finnhub 仅作可选补充，不影响下方 Yahoo 数据。</small>}</div>}
     <div className="section-title"><h2>{current} 基本面指标</h2></div>
-    <div className="metric-grid">{fundamentals.data?.metrics.map(m=><div className="metric-card" key={m.label}><span>{m.label}</span><strong>{fmtMetric(m.value)}</strong></div>)}{fundamentals.isError&&<div className="empty">基本面数据暂不可用。</div>}</div>
+    <div className="metric-grid">{fundamentals.data?.metrics.map(m=><div className="metric-card" key={m.label}><span>{m.label}</span><strong>{fmtMetric(m.value)}</strong>{m.source&&<em>{m.source==='yahoo'?'Yahoo':'Finnhub'}</em>}</div>)}{fundamentals.isError&&<div className="empty">基本面数据暂不可用。</div>}</div>
     <div className="section-title"><h2>分析师评级</h2></div>
     {r?<RatingGauge r={r}/>:<div className="empty">暂无分析师评级。</div>}
     <div className="section-title"><h2>近四季度财报（SEC 单季，已去累计）</h2></div>
@@ -479,7 +481,7 @@ function FinancialStatementsCenter({tickers,onStatementMetric,active,setActive}:
   const [frequency,setFrequency] = useState<'annual'|'quarterly'>('annual')
   const current = active||tickers[0]||''
   const statements = useQuery({queryKey:['financial-statements',current,frequency],queryFn:()=>api<FinancialStatement[]>(`/financial-statements?ticker=${current}&frequency=${frequency}`),enabled:!!current,refetchInterval:current?5000:false})
-  return <div className="news-center"><SnapshotTickerBar section="financials" tickers={tickers} current={current} onSelect={setActive}/>{!current?<div className="empty">输入股票代码，临时查看财务报表。</div>:<FinancialStatementsPanel frequency={frequency} setFrequency={setFrequency} rows={statements.data||[]} loading={statements.isLoading} onMetric={onStatementMetric}/>}</div>
+  return <div className="news-center"><SnapshotTickerBar section="financials" tickers={tickers} current={current} onSelect={setActive}/>{!current?<div className="empty">搜索并选择证券，临时查看财务报表。</div>:<FinancialStatementsPanel frequency={frequency} setFrequency={setFrequency} rows={statements.data||[]} loading={statements.isLoading} onMetric={onStatementMetric}/>}</div>
 }
 
 function FinancialStatementsPanel({frequency,setFrequency,rows,loading,onMetric}:{frequency:'annual'|'quarterly';setFrequency:(value:'annual'|'quarterly')=>void;rows:FinancialStatement[];loading:boolean;onMetric:(metric:StatementMetric)=>void}) {
@@ -497,7 +499,7 @@ function FinancialStatementsPanel({frequency,setFrequency,rows,loading,onMetric}
     {title:'现金流量表',key:'cash_flow',items:['operating_cash_flow','capital_expenditure','free_cash_flow','financing_cash_flow','investing_cash_flow']},
   ]
   return <section className="financial-statements">
-    <div className="statement-toolbar"><div><p className="eyebrow">YAHOO FINANCE · THREE STATEMENTS</p><h2>财务报表</h2><small>与 Yahoo Finance 三表同源；点击指标查看释义。</small></div><div className="frequency-toggle" role="tablist" aria-label="报表周期"><button role="tab" aria-selected={frequency==='annual'} className={frequency==='annual'?'active':''} onClick={()=>setFrequency('annual')}>年度</button><button role="tab" aria-selected={frequency==='quarterly'} className={frequency==='quarterly'?'active':''} onClick={()=>setFrequency('quarterly')}>季度</button></div></div>
+    <div className="statement-toolbar"><div><p className="eyebrow">YAHOO FINANCE · THREE STATEMENTS</p><h2>财务报表</h2><small>与 Yahoo Finance 三表同源；点击指标查看释义。{rows[0]?.synced_at&&` · 同步于 ${formatDate(rows[0].synced_at)}`}</small></div><div className="frequency-toggle" role="tablist" aria-label="报表周期"><button role="tab" aria-selected={frequency==='annual'} className={frequency==='annual'?'active':''} onClick={()=>setFrequency('annual')}>年度</button><button role="tab" aria-selected={frequency==='quarterly'} className={frequency==='quarterly'?'active':''} onClick={()=>setFrequency('quarterly')}>季度</button></div></div>
     {loading&&<div className="empty">正在读取 Yahoo Finance 财务报表…</div>}
     {!loading&&!rows.length&&<div className="empty">尚未同步三大报表。系统会在下一次财务同步时拉取年度与季度数据。</div>}
     {rows.length>0&&groups.map(group=><section className="statement-card" key={group.key}><h3>{group.title}</h3><div className="statement-table">{[<div className="statement-row statement-head" style={{gridTemplateColumns:`minmax(142px,.85fr) repeat(${rows.length},minmax(68px,1fr))`}} key="head"><span>指标</span>{rows.map(row=><span key={row.period_end}>{frequency==='annual'?row.fiscal_year:row.period_end.slice(0,10)}</span>)}</div>,...group.items.map(key=>{const info=statementMetricInfo[key];return <button className="statement-row" style={{gridTemplateColumns:`minmax(142px,.85fr) repeat(${rows.length},minmax(68px,1fr))`}} onClick={()=>onMetric(info)} key={key}><span><b>{info.label}</b><small>{info.english}</small></span>{rows.map(row=><span key={row.period_end}>{fmt(row[group.key][key])}</span>)}</button>})]}</div></section>)}
@@ -525,7 +527,7 @@ function SecCenter({tickers,active,setActive}:{tickers:string[];active:string;se
   const codeName:Record<string,string> = {P:'买入',S:'卖出',M:'期权行权',F:'税务代扣',A:'授予',G:'赠予',D:'处置'}
   return <div className="news-center">
     <SnapshotTickerBar section="sec" tickers={tickers} current={current} onSelect={setActive}/>
-    {!current&&<div className="empty">输入股票代码，临时查看 SEC 公告。</div>}
+    {!current&&<div className="empty">搜索并选择证券，临时查看 SEC 公告。</div>}
     <div className="section-title"><h2>{current} SEC 官方数据</h2><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'刷新中…':'刷新数据'}</button></div>
     {refresh.isSuccess&&<p className="saved">已触发后台采集（含 XBRL 解析，约需 1-2 分钟），稍后自动刷新。</p>}
     <div className="news-tickers" style={{marginTop:4}}>{([['events','重大事件'],['financials','财务数据'],['insider','内幕交易'],['holdings','机构持仓']] as const).map(([k,l])=><button key={k} className={view===k?'active':''} onClick={()=>setView(k)}>{l}</button>)}</div>
@@ -572,7 +574,7 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
   const orderNo = (id:number) => { const i = includedIds.indexOf(id); return i>=0 ? i+1 : null }
   return <div className="news-center">
     <SnapshotTickerBar section="news" tickers={tickers} current={current} onSelect={setActive}/>
-    {!current&&<div className="empty">输入股票代码，临时查看新闻。</div>}
+    {!current&&<div className="empty">搜索并选择证券，临时查看新闻。</div>}
     <div className="section-title"><h2>每日定档（Luna 去重）</h2><button onClick={()=>setWeeklyOpen(true)}>历史每周新闻</button></div>
     {archive.data?<article className="report-detail"><p className="eyebrow">{archive.data.market_date} · v{archive.data.version} · {archive.data.model}</p><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{keyFactsOnly(archive.data.content)}</ReactMarkdown></div></article>:<div className="empty">尚未生成每日定档。</div>}
     <Sheet open={weeklyOpen} onClose={()=>setWeeklyOpen(false)} title={`${current} 历史每周新闻`}>
@@ -762,7 +764,8 @@ function AuthGate({setToken,setAuthUser,onPreview}:{setToken:(t:string)=>void;se
 }
 
 // ── 交易日志 ───────────────────────────────────────────────
-const emptyTradeRow = ():TradeLogRow => ({ticker:'',direction:'',quantity:null,price:null,fee:null,strategy:'',result:''})
+const emptyTradeRow = ():TradeLogRow => ({security_id:null,ticker:'',direction:'',quantity:null,price:null,fee:null,strategy:'',result:''})
+const legacySecurity = (ticker:string):SecuritySearchResult => ({provider_key:`legacy:${ticker}`,security_id:null,display_symbol:ticker,display_name:ticker,local_symbol:ticker,exchange:null,exchange_code:null,market:null,country_code:null,currency:null,instrument_type:'EQUITY',yahoo_symbol:ticker,finnhub_symbol:null,source:'local',is_local:true})
 
 function JournalSection({username}:{username:string}) {
   const client = useQueryClient()
@@ -771,6 +774,7 @@ function JournalSection({username}:{username:string}) {
   const [editing,setEditing] = useState<TradeLog|null>(null)
   const [editorOpen,setEditorOpen] = useState(()=>new URLSearchParams(window.location.search).get('journal')==='new')
   const [form,setForm] = useState({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[] as string[]})
+  const [rowSecurities,setRowSecurities] = useState<(SecuritySearchResult|null)[]>([null])
   const payload = () => ({
     trade_date:form.trade_date,
     ticker:null,
@@ -782,7 +786,7 @@ function JournalSection({username}:{username:string}) {
     table_rows:form.table_rows.filter(r=>r.ticker||r.direction||r.quantity!=null||r.price!=null||r.strategy||r.result).map(r=>({...r,fee:null})),
     photo_urls:form.photo_urls,
   })
-  const reset = () => {setEditing(null);setEditorOpen(false);setForm({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[]})}
+  const reset = () => {setEditing(null);setEditorOpen(false);setRowSecurities([null]);setForm({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[]})}
   const save = useMutation({
     mutationFn:()=>editing?patch<TradeLog>(`/trade-logs/${editing.id}`,payload()):post<TradeLog>('/trade-logs',payload()),
     onSuccess:()=>{reset();client.invalidateQueries({queryKey:['trade-logs']})},
@@ -802,6 +806,7 @@ function JournalSection({username}:{username:string}) {
       table_rows:log.table_rows.length?log.table_rows:[emptyTradeRow()],
       photo_urls:log.photo_urls||[],
     })
+    setRowSecurities((log.table_rows.length?log.table_rows:[emptyTradeRow()]).map(row=>row.ticker?legacySecurity(row.ticker):null))
     setEditorOpen(true)
   }
   const updateRow = (index:number, patch:Partial<TradeLogRow>) => setForm(f=>({...f,table_rows:f.table_rows.map((row,i)=>i===index?{...row,...patch}:row)}))
@@ -813,8 +818,8 @@ function JournalSection({username}:{username:string}) {
       reader.readAsDataURL(file)
     })
   }
-  const beginNew = () => {setEditing(null);setForm({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[]});setEditorOpen(true)}
-  const removeRow = (index:number) => setForm(f=>({...f,table_rows:f.table_rows.length>1?f.table_rows.filter((_,i)=>i!==index):[emptyTradeRow()]}))
+  const beginNew = () => {setEditing(null);setRowSecurities([null]);setForm({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[]});setEditorOpen(true)}
+  const removeRow = (index:number) => {setForm(f=>({...f,table_rows:f.table_rows.length>1?f.table_rows.filter((_,i)=>i!==index):[emptyTradeRow()]}));setRowSecurities(items=>items.length>1?items.filter((_,i)=>i!==index):[null])}
   return <div className="journal">
       <div className="journal-list">
         <div className="section-title journal-list-title"><div><p>TRADING JOURNAL</p><h2>我的日志</h2></div><div className="journal-list-actions"><span>{logs.data?.length||0} 条</span><button className="journal-new-btn" onClick={beginNew}><span>＋</span> 新建日志</button></div></div>
@@ -839,10 +844,10 @@ function JournalSection({username}:{username:string}) {
         <div className="journal-table">
           <div className="journal-table-heading"><div><b>交易明细</b><span>{form.table_rows.length} 张便签</span></div><small>每张便签可以记录一笔交易</small></div>
           {form.table_rows.map((row,index)=><div className="journal-row-note" key={index}>
-            <div className="journal-row-top"><label><span>标的</span><input value={row.ticker} onChange={e=>updateRow(index,{ticker:e.target.value.toUpperCase()})} placeholder="NVDA"/></label><label><span>方向</span><select value={row.direction} onChange={e=>updateRow(index,{direction:e.target.value})}><option value="">选择方向</option><option>买入</option><option>卖出</option><option>观望</option><option>挂单</option></select></label><button type="button" className="row-delete" aria-label="删除这笔交易" onClick={()=>removeRow(index)}><TrashIcon/></button></div>
+            <div className="journal-row-top"><label><span>标的</span><SecuritySearchAutocomplete compact value={rowSecurities[index]||null} onSelect={security=>{setRowSecurities(items=>items.map((item,i)=>i===index?security:item));updateRow(index,{ticker:security?.display_symbol||'',security_id:security?.security_id||null})}} placeholder="搜索代码或公司"/></label><label><span>方向</span><select value={row.direction} onChange={e=>updateRow(index,{direction:e.target.value})}><option value="">选择方向</option><option>买入</option><option>卖出</option><option>观望</option><option>挂单</option></select></label><button type="button" className="row-delete" aria-label="删除这笔交易" onClick={()=>removeRow(index)}><TrashIcon/></button></div>
             <div className="journal-row-bottom"><label><span>数量</span><input type="number" inputMode="decimal" min="0" step="any" value={row.quantity??''} onChange={e=>updateRow(index,{quantity:e.target.value===''?null:Number(e.target.value)})} placeholder="0"/></label><label><span>价格</span><input type="number" inputMode="decimal" min="0" step="any" value={row.price??''} onChange={e=>updateRow(index,{price:e.target.value===''?null:Number(e.target.value)})} placeholder="0.00"/></label><label><span>自定义标签</span><input value={row.strategy} onChange={e=>updateRow(index,{strategy:e.target.value})} placeholder="突破 / 试仓"/></label><label><span>其他</span><input value={row.result} onChange={e=>updateRow(index,{result:e.target.value})} placeholder="补充说明"/></label></div>
           </div>)}
-          <button type="button" className="add-note-btn" onClick={()=>setForm(f=>({...f,table_rows:[...f.table_rows,emptyTradeRow()]}))}><span>＋</span> 添加交易便签</button>
+          <button type="button" className="add-note-btn" onClick={()=>{setForm(f=>({...f,table_rows:[...f.table_rows,emptyTradeRow()]}));setRowSecurities(items=>[...items,null])}}><span>＋</span> 添加交易便签</button>
         </div>
         <div className="photo-uploader"><label>照片<input type="file" accept="image/*" multiple onChange={e=>addPhotos(e.target.files)}/></label><div className="photo-grid">{form.photo_urls.map((src,index)=><div className="photo-thumb" key={index}><img src={src} alt={`交易截图 ${index+1}`}/><button type="button" onClick={()=>setForm(f=>({...f,photo_urls:f.photo_urls.filter((_,i)=>i!==index)}))}>移除</button></div>)}</div></div>
         {save.error&&<p className="error">{save.error.message}</p>}

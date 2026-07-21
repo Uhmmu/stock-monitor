@@ -79,11 +79,14 @@ def news_fingerprint(provider: str, external_id: str | None, url: str, title: st
 _FINNHUB_CAP = 20  # finnhub 常返回上百条，取最新的即可，省 AI 打分 token
 
 
-def collect_ticker_news(ticker: str, context: str = "latest company news", days: int = 7) -> list[NewsDTO]:
+def collect_ticker_news(ticker: str, context: str = "latest company news", days: int = 7,
+                        finnhub_symbol: str | None = None) -> list[NewsDTO]:
     from app.services.finnhub_mcp import fetch_company_news
 
     def _capped_finnhub() -> list[NewsDTO]:
-        rows = fetch_company_news(ticker, days)
+        if not finnhub_symbol:
+            return []
+        rows = fetch_company_news(finnhub_symbol, days)
         rows.sort(key=lambda d: d.published_at or datetime.min.replace(tzinfo=UTC), reverse=True)
         return rows[:_FINNHUB_CAP]
 
