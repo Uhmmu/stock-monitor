@@ -1,5 +1,5 @@
 import hashlib
-from datetime import UTC, date as date_type, datetime
+from datetime import UTC, date as date_type, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import delete, func, select
@@ -13,6 +13,7 @@ from app.models import (
     CongressTrade,
     DailyNewsArchive,
     FigurePosition,
+    FinancialStatementSnapshot,
     Investigation,
     NewsItem,
     PriceAlert,
@@ -31,7 +32,9 @@ from app.models import (
     User,
     ValuationSnapshot,
     StockGroup,
+    TemporarySnapshot,
     WatchlistItem,
+    WeeklyNewsArchive,
 )
 from app.schemas import (
     GrahamOverride,
@@ -61,11 +64,88 @@ public_router = APIRouter(prefix="/api")
 router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
 
 
-def _require_watched_ticker(db: Session, ticker: str) -> str:
+SNAPSHOT_SECTIONS = {"news", "fundamentals", "financials", "valuation", "sec"}
+
+
+def _require_watched_ticker(db: Session, ticker: str, snapshot_section: str | None = None) -> str:
     value = (ticker or "").strip().upper()
-    if not db.scalar(select(WatchlistItem.id).where(WatchlistItem.ticker == value)):
+    watched = db.scalar(select(WatchlistItem.id).where(WatchlistItem.ticker == value))
+    snapshot = snapshot_section and db.scalar(select(TemporarySnapshot.id).where(
+        TemporarySnapshot.section.in_((snapshot_section or "").split("|")), TemporarySnapshot.ticker == value,
+        TemporarySnapshot.expires_at > datetime.now(UTC),
+    ))
+    if not watched and not snapshot:
         raise HTTPException(404, "该股票不在自选列表中")
     return value
+
+
+def _snapshot_out(row: TemporarySnapshot) -> dict:
+    return {"ticker": row.ticker, "section": row.section, "expires_at": row.expires_at}
+
+
+def _purge_temporary_ticker(db: Session, ticker: str) -> None:
+    """Drop cached source data only once no temporary section still references it."""
+    if db.scalar(select(WatchlistItem.id).where(WatchlistItem.ticker == ticker)) or db.scalar(select(TemporarySnapshot.id).where(TemporarySnapshot.ticker == ticker)):
+        return
+    for model in (NewsItem, DailyNewsArchive, WeeklyNewsArchive, QuarterlyFinancial,
+                  FinancialStatementSnapshot, ValuationSnapshot, SecFiling, SecEvent,
+                  SecFinancialPeriod, SecInsiderTrade, PriceSnapshot):
+        db.execute(delete(model).where(model.ticker == ticker))
+
+
+@router.get("/snapshots/{section}")
+def list_snapshots(section: str, db: Session = Depends(get_db)):
+    if section not in SNAPSHOT_SECTIONS:
+        raise HTTPException(404, "未知快照栏目")
+    now = datetime.now(UTC)
+    expired = list(db.scalars(select(TemporarySnapshot).where(TemporarySnapshot.expires_at <= now)).all())
+    for row in expired:
+        db.delete(row)
+    db.flush()
+    for row in expired:
+        _purge_temporary_ticker(db, row.ticker)
+    db.commit()
+    return [_snapshot_out(row) for row in db.scalars(select(TemporarySnapshot).where(
+        TemporarySnapshot.section == section).order_by(TemporarySnapshot.created_at.desc())).all()]
+
+
+@router.post("/snapshots/{section}")
+def create_snapshot(section: str, ticker: str = Query(...), db: Session = Depends(get_db)):
+    if section not in SNAPSHOT_SECTIONS:
+        raise HTTPException(404, "未知快照栏目")
+    value = normalize_ticker(ticker)
+    now = datetime.now(UTC)
+    row = db.scalar(select(TemporarySnapshot).where(TemporarySnapshot.section == section, TemporarySnapshot.ticker == value))
+    if not row:
+        row = TemporarySnapshot(section=section, ticker=value, expires_at=now + timedelta(days=1))
+        db.add(row)
+    else:
+        row.expires_at = now + timedelta(days=1)
+    db.commit()
+    if section == "news":
+        from app.tasks.celery_app import poll_news
+        poll_news.delay(value)
+    elif section in {"fundamentals", "financials"}:
+        from app.tasks.celery_app import sync_ticker_financials
+        sync_ticker_financials.delay(value)
+    elif section == "valuation":
+        from app.tasks.celery_app import sync_peer_valuation_data
+        sync_peer_valuation_data.delay(value)
+    elif section == "sec":
+        from app.tasks.celery_app import sync_ticker_sec_all
+        sync_ticker_sec_all.delay(value)
+    return _snapshot_out(row)
+
+
+@router.delete("/snapshots/{section}/{ticker}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_snapshot(section: str, ticker: str, db: Session = Depends(get_db)):
+    if section not in SNAPSHOT_SECTIONS:
+        raise HTTPException(404, "未知快照栏目")
+    value = (ticker or "").strip().upper()
+    db.execute(delete(TemporarySnapshot).where(TemporarySnapshot.section == section, TemporarySnapshot.ticker == value))
+    db.flush()
+    _purge_temporary_ticker(db, value)
+    db.commit()
 
 
 @public_router.get("/health")
@@ -402,14 +482,24 @@ def _news_out(item: NewsItem) -> dict:
     }
 
 
+def _current_week_start() -> date_type:
+    """本 ISO 周的周一（UTC）。原始新闻与每日定档只保留本周，历史归入每周汇总。"""
+    today = datetime.now(UTC).date()
+    return today - timedelta(days=today.isocalendar()[2] - 1)
+
+
 @router.get("/news")
 def list_news(ticker: str = Query(...), date: date_type | None = None, db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "news")
     query = select(NewsItem).where(NewsItem.ticker == value)
     if date:
         start = datetime.combine(date, datetime.min.time(), tzinfo=UTC)
         end = datetime.combine(date, datetime.max.time(), tzinfo=UTC)
         query = query.where(NewsItem.found_at >= start, NewsItem.found_at <= end)
+    else:
+        # 仅本周：早于本周的原始新闻已被每周汇总任务清理，这里也做上界防御
+        week_start = datetime.combine(_current_week_start(), datetime.min.time(), tzinfo=UTC)
+        query = query.where(NewsItem.found_at >= week_start)
     query = query.order_by(NewsItem.published_at.desc().nullslast(), NewsItem.found_at.desc()).limit(200)
     return [_news_out(item) for item in db.scalars(query).all()]
 
@@ -440,7 +530,7 @@ def summarize(news_id: int, db: Session = Depends(get_db)):
 
 @router.get("/news/archive")
 def news_archive(ticker: str = Query(...), date: date_type | None = None, db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "news")
     query = select(DailyNewsArchive).where(DailyNewsArchive.ticker == value)
     if date:
         query = query.where(DailyNewsArchive.market_date == date)
@@ -460,16 +550,43 @@ def news_archive(ticker: str = Query(...), date: date_type | None = None, db: Se
 
 @router.post("/news/refresh")
 def refresh_news(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "news")
     from app.tasks.celery_app import poll_news
 
     poll_news.delay(value)
     return {"status": "queued", "ticker": value}
 
 
+@router.get("/news/weekly")
+def news_weekly(ticker: str = Query(...), db: Session = Depends(get_db)):
+    """历史每周新闻汇总，按周倒序。"""
+    value = _require_watched_ticker(db, ticker, "news")
+    rows = db.scalars(
+        select(WeeklyNewsArchive)
+        .where(WeeklyNewsArchive.ticker == value)
+        .order_by(WeeklyNewsArchive.week_start.desc())
+        .limit(52)
+    ).all()
+    return [
+        {
+            "ticker": row.ticker,
+            "iso_year": row.iso_year,
+            "iso_week": row.iso_week,
+            "week_start": row.week_start,
+            "week_end": row.week_end,
+            "content": row.content,
+            "included_dates": row.included_dates,
+            "model": row.model,
+            "version": row.version,
+            "updated_at": row.updated_at,
+        }
+        for row in rows
+    ]
+
+
 @router.get("/financials")
 def financials(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "fundamentals|financials")
     rows = db.scalars(
         select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == value).order_by(QuarterlyFinancial.period_end.desc()).limit(4)
     ).all()
@@ -493,10 +610,27 @@ def financials(ticker: str = Query(...), db: Session = Depends(get_db)):
     ]
 
 
+@router.get("/financial-statements")
+def financial_statements(ticker: str = Query(...), frequency: str = Query("annual"), db: Session = Depends(get_db)):
+    """Yahoo 三大报表展示数据；年度/季度各取最近四期。"""
+    value = _require_watched_ticker(db, ticker, "financials")
+    if frequency not in {"annual", "quarterly"}:
+        raise HTTPException(422, "frequency 必须是 annual 或 quarterly")
+    rows = db.scalars(select(FinancialStatementSnapshot).where(
+        FinancialStatementSnapshot.ticker == value,
+        FinancialStatementSnapshot.frequency == frequency,
+    ).order_by(FinancialStatementSnapshot.period_end.desc()).limit(4)).all()
+    return [{
+        "fiscal_year": row.fiscal_year, "fiscal_period": row.fiscal_period, "period_end": row.period_end,
+        "currency": row.currency, "income_statement": row.income_statement,
+        "balance_sheet": row.balance_sheet, "cash_flow": row.cash_flow, "source": row.source,
+    } for row in rows]
+
+
 @router.get("/cross-model")
 def cross_model(ticker: str = Query(...), db: Session = Depends(get_db)):
     """读取最新每日估值快照；页面不在请求期间实时打外部数据源。"""
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "valuation")
     row = db.scalar(
         select(ValuationSnapshot).where(ValuationSnapshot.ticker == value)
         .order_by(ValuationSnapshot.snapshot_date.desc(), ValuationSnapshot.id.desc()).limit(1)
@@ -508,7 +642,7 @@ def cross_model(ticker: str = Query(...), db: Session = Depends(get_db)):
 
 @router.post("/cross-model/refresh")
 def refresh_cross_model(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "valuation")
     from app.tasks.celery_app import sync_ticker_valuation
     sync_ticker_valuation.delay(value)
     return {"status": "queued", "ticker": value}
@@ -519,7 +653,7 @@ def graham_with_overrides(payload: GrahamOverride, ticker: str = Query(...), db:
     """使用最新快照输入临时重算 Graham；不访问第三方，也不覆盖原始快照。"""
     from app.services.graham import apply_graham_overrides
 
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "valuation")
     row = db.scalar(
         select(ValuationSnapshot).where(ValuationSnapshot.ticker == value)
         .order_by(ValuationSnapshot.snapshot_date.desc(), ValuationSnapshot.id.desc()).limit(1)
@@ -553,7 +687,7 @@ def _pick(metric: dict, keys: tuple[str, ...]):
 
 @router.get("/fundamentals")
 def fundamentals(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "fundamentals")
     try:
         metric = fetch_basic_metrics(value)
     except Exception:
@@ -583,7 +717,7 @@ def fundamentals(ticker: str = Query(...), db: Session = Depends(get_db)):
 
 @router.get("/sec-filings")
 def sec_filings(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "sec")
     rows = db.scalars(
         select(SecFiling)
         .where(SecFiling.ticker == value)
@@ -608,7 +742,7 @@ def sec_filings(ticker: str = Query(...), db: Session = Depends(get_db)):
 
 @router.post("/sec-filings/refresh")
 def refresh_sec_filings(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "sec")
     from app.tasks.celery_app import sync_ticker_sec_all
 
     sync_ticker_sec_all.delay(value)
@@ -617,7 +751,7 @@ def refresh_sec_filings(ticker: str = Query(...), db: Session = Depends(get_db))
 
 @router.get("/sec-events")
 def sec_events(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "sec")
     rows = db.scalars(
         select(SecEvent)
         .where(SecEvent.ticker == value)
@@ -644,7 +778,7 @@ def sec_events(ticker: str = Query(...), db: Session = Depends(get_db)):
 
 @router.get("/sec-financials")
 def sec_financials(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "sec")
     rows = db.scalars(
         select(SecFinancialPeriod)
         .where(SecFinancialPeriod.ticker == value)
@@ -675,7 +809,7 @@ def sec_financials(ticker: str = Query(...), db: Session = Depends(get_db)):
 
 @router.get("/sec-insider")
 def sec_insider(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "sec")
     rows = db.scalars(
         select(SecInsiderTrade)
         .where(SecInsiderTrade.ticker == value)
@@ -703,7 +837,7 @@ def sec_insider(ticker: str = Query(...), db: Session = Depends(get_db)):
 @router.get("/sec-13f")
 def sec_13f(ticker: str = Query(...), db: Session = Depends(get_db)):
     """13F 机构持仓：返回最新季度的持有机构（按市值降序），附环比增减。"""
-    value = _require_watched_ticker(db, ticker)
+    value = _require_watched_ticker(db, ticker, "sec")
     latest_period = db.scalar(
         select(Sec13FHolding.report_period)
         .where(Sec13FHolding.ticker == value)

@@ -508,37 +508,58 @@ def build_cross_model(ticker: str, info: dict[str, Any], quarters: list[dict[str
     annual_prev = annual_periods[1] if len(annual_periods) > 1 else {}
     price = _number(info.get("currentPrice") or info.get("regularMarketPrice"))
     market_cap = _number(info.get("marketCap"))
-    revenue = _number(info.get("totalRevenue")) or _number(annual_now.get("revenue"))
-    net_income = _number(info.get("netIncomeToCommon")) or _number(annual_now.get("net_income"))
-    ebitda = _number(info.get("ebitda"))
-    debt = _number(info.get("totalDebt")) if _number(info.get("totalDebt")) is not None else _number(annual_now.get("total_debt"))
-    cash = _number(info.get("totalCash")) if _number(info.get("totalCash")) is not None else _number(annual_now.get("cash"))
-    if values["current_ratio"] is None:
-        values["current_ratio"] = _ratio(_number(annual_now.get("current_assets")), _number(annual_now.get("current_liabilities")))
-    if values["roe"] is None:
-        equity_now, equity_prev = _number(annual_now.get("stockholders_equity")), _number(annual_prev.get("stockholders_equity"))
-        average_equity = (equity_now + equity_prev) / 2 if equity_now is not None and equity_prev is not None else equity_now
-        roe = _ratio(_number(annual_now.get("net_income")), average_equity)
-        values["roe"] = roe * 100 if roe is not None else None
-    if values["revenue_growth"] is None:
-        annual_growth = _ratio(_number(annual_now.get("revenue")), _number(annual_prev.get("revenue")))
-        values["revenue_growth"] = (annual_growth - 1) * 100 if annual_growth is not None else None
-    fcf = _number(info.get("freeCashflow"))
+    # 已持久化三表是公司财务输入的唯一优先来源；Yahoo info 仅补市场/前瞻字段或快照尚未存在时的缺口。
+    revenue = _number(annual_now.get("revenue")) or _number(info.get("totalRevenue"))
+    net_income = _number(annual_now.get("net_income")) or _number(info.get("netIncomeToCommon"))
+    ebitda = _number(annual_now.get("ebitda")) or _number(info.get("ebitda"))
+    debt = _number(annual_now.get("total_debt")) if _number(annual_now.get("total_debt")) is not None else _number(info.get("totalDebt"))
+    cash = _number(annual_now.get("cash")) if _number(annual_now.get("cash")) is not None else _number(info.get("totalCash"))
+    statement_current_ratio = _ratio(_number(annual_now.get("current_assets")), _number(annual_now.get("current_liabilities")))
+    if statement_current_ratio is not None:
+        values["current_ratio"] = statement_current_ratio
+    equity_now, equity_prev = _number(annual_now.get("stockholders_equity")), _number(annual_prev.get("stockholders_equity"))
+    average_equity = (equity_now + equity_prev) / 2 if equity_now is not None and equity_prev is not None else equity_now
+    statement_roe = _ratio(_number(annual_now.get("net_income")), average_equity)
+    if statement_roe is not None:
+        values["roe"] = statement_roe * 100
+    statement_revenue_growth = _ratio(_number(annual_now.get("revenue")), _number(annual_prev.get("revenue")))
+    if statement_revenue_growth is not None:
+        values["revenue_growth"] = (statement_revenue_growth - 1) * 100
+    statement_eps_growth = _ratio(_number(annual_now.get("eps")), _number(annual_prev.get("eps")))
+    if statement_eps_growth is not None:
+        values["eps_growth"] = (statement_eps_growth - 1) * 100
+    shares_issued = _number(annual_now.get("shares_issued"))
+    if price and equity_now and shares_issued:
+        values["price_to_book"] = price / (equity_now / shares_issued)
+    enterprise = _number(info.get("enterpriseValue"))
+    if enterprise and revenue:
+        values["ev_sales"] = enterprise / revenue
+    if enterprise and ebitda:
+        values["ev_ebitda"] = enterprise / ebitda
+    fcf = _number(annual_now.get("free_cash_flow")) or _number(info.get("freeCashflow"))
     positive_periods = 0
     if quarters:
         q_fcf = [_number(q.get("free_cash_flow")) for q in quarters]
         positive_periods = sum(1 for value in q_fcf if value is not None and value > 0)
         recent_fcf = sum(value or 0 for value in q_fcf)
         if recent_fcf: fcf = recent_fcf
-    metrics_for_tags = {"revenue_growth": values["revenue_growth"], "gross_margin": _pct(info.get("grossMargins")), "net_income": net_income,
+    if values["revenue_growth"] is not None and fcf is not None and revenue:
+        values["rule_of_40"] = values["revenue_growth"] + fcf / revenue * 100
+    statement_gross_margin = _ratio(_number(annual_now.get("gross_profit")), _number(annual_now.get("revenue")))
+    metrics_for_tags = {"revenue_growth": values["revenue_growth"], "gross_margin": statement_gross_margin * 100 if statement_gross_margin is not None else _pct(info.get("grossMargins")), "net_income": net_income,
                         "net_debt_to_ebitda": ((debt - cash) / ebitda if debt is not None and cash is not None and ebitda else None), "fcf_positive_periods": positive_periods}
     tags = derive_classification_tags(info); tags.update(derive_financial_tags(metrics_for_tags)); tags.update(derive_business_model_tags(info, metrics_for_tags))
     profile_key = industry_profile(info, tags); profile = INDUSTRY_PROFILES[profile_key]
     roic_result = calculate_roic_metric(financials)
+    is_financial_services = str(info.get("sector") or info.get("sectorKey") or "").lower() in {"financial services", "financial-services", "financialservices"}
+    if profile_key in {"bank", "insurance"} or is_financial_services:
+        roic_result = {"value": None, "status": "not_applicable", "missing_fields": [], "inputs": {},
+                       "warnings": ["金融企业不使用 ROIC；应优先结合 P/B 与 ROE 评估。"], "applicability": "not_applicable"}
+        values["ev_ebitda"] = None
     piotroski_result = calculate_piotroski_metric(financials)
     altman_result = calculate_altman_metric(financials, market_cap, profile_key)
     # 原始三表计算优先；旧 Yahoo summary 字段只作为无三表快照时的兼容回退。
-    if roic_result["value"] is None and not financials["periods"] and values["roic"] is not None:
+    if roic_result["value"] is None and not financials["periods"] and values["roic"] is not None and not (is_financial_services or profile_key in {"bank", "insurance"}):
         roic_result = {"value": values["roic"], "status": "available", "missing_fields": [], "inputs": {},
                        "warnings": ["年度三表不可用，使用 Yahoo summary 的 returnOnInvestedCapital。"], "formula_version": "yahoo_summary_fallback"}
     weights, weight_details = calculate_model_weight_details(tags)
@@ -565,7 +586,7 @@ def build_cross_model(ticker: str, info: dict[str, Any], quarters: list[dict[str
     valuation = [_metric("forward_pe", values["forward_pe"], peer_median=medians.get("forward_pe"), peer_count=counts.get("forward_pe", 0)),
                  _metric("peg", values["peg"], peer_median=medians.get("peg"), peer_count=counts.get("peg", 0)),
                  _metric("ev_sales", values["ev_sales"], peer_median=medians.get("ev_sales"), peer_count=counts.get("ev_sales", 0)),
-                 _metric("ev_ebitda", values["ev_ebitda"], peer_median=medians.get("ev_ebitda"), peer_count=counts.get("ev_ebitda", 0)),
+                 _metric("ev_ebitda", values["ev_ebitda"], peer_median=medians.get("ev_ebitda"), peer_count=counts.get("ev_ebitda", 0), details={"status": "not_applicable", "warnings": ["金融企业通常不使用 EV/EBITDA；请优先参考 P/B 与 ROE。"], "applicability": "not_applicable"} if is_financial_services or profile_key in {"bank", "insurance"} else None),
                  _metric("dcf", dcf.get("base"), "USD/share", note="Bear/Base/Bull 使用不同增长、折现率和永续增长率。"),
                  _metric("fcf_yield", fcf / market_cap * 100 if fcf is not None and market_cap else None, "%", medians.get("fcf_yield"), counts.get("fcf_yield", 0)),
                  _metric("price_to_book", values["price_to_book"], peer_median=medians.get("price_to_book"), peer_count=counts.get("price_to_book", 0))]
@@ -591,7 +612,7 @@ def build_cross_model(ticker: str, info: dict[str, Any], quarters: list[dict[str
             "ai_opinion": fallback, "ai_model": None, "as_of": info.get("regularMarketTime")}
 
 
-def fetch_cross_model_inputs(ticker: str, peer_symbols: list[str]) -> tuple[dict, list[dict], dict[str, Any]]:
+def fetch_cross_model_inputs(ticker: str, peer_symbols: list[str], financials: dict[str, Any] | None = None) -> tuple[dict, list[dict], dict[str, Any]]:
     """每日任务调用；页面不直接访问 Yahoo，保证显示的是持久化快照。"""
     stock = yf.Ticker(ticker)
     try: info = stock.get_info()
@@ -605,15 +626,16 @@ def fetch_cross_model_inputs(ticker: str, peer_symbols: list[str]) -> tuple[dict
             info["previousClose"] = fast_info.previous_close
     except Exception as exc:
         logger.warning("%s Yahoo fast_info 获取失败: %s", ticker, exc)
-    try:
-        financials = normalize_financial_statements(
-            stock.get_income_stmt(freq="yearly"),
-            stock.get_balance_sheet(freq="yearly"),
-            stock.get_cash_flow(freq="yearly"),
-        )
-    except Exception as exc:
-        logger.warning("%s Yahoo 年度财报获取失败: %s", ticker, exc)
-        financials = {"source": "yfinance_annual", "periods": []}
+    if financials is None:
+        try:
+            financials = normalize_financial_statements(
+                stock.get_income_stmt(freq="yearly"),
+                stock.get_balance_sheet(freq="yearly"),
+                stock.get_cash_flow(freq="yearly"),
+            )
+        except Exception as exc:
+            logger.warning("%s Yahoo 年度财报获取失败: %s", ticker, exc)
+            financials = {"source": "yfinance_annual", "periods": []}
     peer_infos: list[dict] = []
     for symbol in peer_symbols[:10]:
         try:

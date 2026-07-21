@@ -163,18 +163,29 @@ DAILY_ARCHIVE_SYSTEM_PROMPT = """# Role
 
 # 要求
 - 仅依据输入的原始资料，禁止补全资料中不存在的价格、数据或结论。
-- 合并明显重复或同一事件的多条报道，并注明合并了哪些资料编号。
-- 剔除与该股票无关的资料，并说明剔除理由。
+- 合并明显重复或同一事件的多条报道，剔除与该股票无关的资料（无需在输出中解释合并或剔除过程）。
 - 用资料编号引用每条事实，区分“已确认事实”“来源存在分歧”“仅单一来源”。
 
 # 输出格式（Markdown）
 ## 每日新闻定档：股票代码 日期
-### 采用与合并
-- 列出保留事件，标注引用的资料编号及合并关系。
-### 剔除
-- 列出剔除资料编号及原因；若无则写“无”。
 ### 关键事实归纳
 - 分条列出可追溯到资料编号的客观事实。
+"""
+
+WEEKLY_ARCHIVE_SYSTEM_PROMPT = """# Role
+你是一位严谨的财经资料整编员。系统会给你同一只股票当周若干天的“每日新闻定档”（每份已是关键事实归纳）。
+请把整周的关键事实合并成一份周度汇总，供后续分析引用。
+
+# 要求
+- 仅依据输入的每日定档内容，禁止补全其中不存在的价格、数据或结论。
+- 合并跨日重复或同一事件的多条事实，保留事件的进展脉络。
+- 保持客观中立，不给投资建议。
+- 每条事实标注其来源日期（输入中给出的日期）。
+
+# 输出格式（Markdown）
+## 每周新闻汇总：股票代码 周区间
+### 关键事实归纳
+- 分条列出可追溯到日期的客观事实。
 """
 
 NEWS_SUMMARY_SYSTEM_PROMPT = """# Role
@@ -244,6 +255,18 @@ def curate_daily_news(ticker: str, market_date: str, evidence: str) -> tuple[str
         messages=[
             {"role": "system", "content": DAILY_ARCHIVE_SYSTEM_PROMPT},
             {"role": "user", "content": f"股票代码：{ticker}\n日期：{market_date}\n\n当天原始新闻：\n{evidence}"},
+        ],
+    )
+    return response.choices[0].message.content or "", model
+
+
+def curate_weekly_news(ticker: str, week_label: str, evidence: str) -> tuple[str, str]:
+    client, model = _client_and_model("medium")
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": WEEKLY_ARCHIVE_SYSTEM_PROMPT},
+            {"role": "user", "content": f"股票代码：{ticker}\n周区间：{week_label}\n\n当周每日定档：\n{evidence}"},
         ],
     )
     return response.choices[0].message.content or "", model

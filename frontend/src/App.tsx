@@ -21,7 +21,11 @@ type ReportDetail = Report & {content:string;sources:{title:string;url:string}[]
 type Settings = {threshold_20m:number;threshold_1h:number;threshold_day:number;alert_cooldown_minutes:number;investigation_interval_minutes:number;investigation_duration_minutes:number;price_poll_minutes:number}
 type NewsRow = {id:number;ticker:string;provider:string;title:string;translated_title:string|null;title_translation_model:string|null;title_translated_at:string|null;url:string;source:string|null;summary:string|null;image_url:string|null;published_at:string|null;found_at:string;relevance_score:number|null;sentiment_score:number|null;ai_summary:string|null;ai_summary_model:string|null}
 type NewsArchive = {ticker:string;market_date:string;content:string;model:string;version:number;updated_at:string;included_news_ids:number[]}
+type WeeklyArchive = {ticker:string;iso_year:number;iso_week:number;week_start:string;week_end:string;content:string;included_dates:string[];model:string;version:number;updated_at:string}
 type Financial = {fiscal_year:number;fiscal_period:string;period_end:string;filed_at:string|null;currency:string|null;revenue:number|null;eps:number|null;net_income:number|null;operating_income:number|null;gross_margin:number|null;net_margin:number|null;operating_cash_flow:number|null;free_cash_flow:number|null}
+type StatementValues = Record<string,number|null>
+type FinancialStatement = {fiscal_year:number;fiscal_period:string;period_end:string;currency:string|null;income_statement:StatementValues;balance_sheet:StatementValues;cash_flow:StatementValues;source:string}
+type StatementMetric = {label:string;english:string;description:string;impact:string;formula?:string}
 type Rating = {period:string|null;strongBuy:number;buy:number;hold:number;sell:number;strongSell:number}
 type Fundamentals = {ticker:string;metrics:{label:string;value:number|null}[];rating:Rating|null}
 type CrossMetric = {key:string;label:string;value:number|null;unit:string;status:'available'|'partial'|'insufficient'|'not_applicable';display?:string|null;missing_fields?:string[];warnings?:string[];available_components?:number;total_components?:number;components?:Record<string,boolean|null>;applicability?:'medium'|'low'|'not_applicable';formula_version?:string;inputs?:Record<string,unknown>;peer_median:number|null;peer_count:number;peer_delta_percent:number|null;comparison:string|null;formula:string;recommended_range:string;explanation:string;note:string|null}
@@ -38,6 +42,7 @@ type SecFin = {fiscal_year:number;fiscal_period:string;form:string;period_end:st
 type SecInsider = {id:number;insider_name:string;insider_title:string|null;transaction_date:string|null;transaction_code:string|null;shares:number|null;price:number|null;value:number|null;shares_owned_after:number|null;flag:string|null;filing_url:string}
 type Sec13FHolding = {id:number;manager_name:string;shares:number|null;value_usd:number|null;put_call:string|null;share_change:number|null;is_new:boolean;filing_date:string|null}
 type Sec13F = {report_period:string|null;prev_period:string|null;holdings:Sec13FHolding[]}
+type TemporarySnapshot = {ticker:string;section:string;expires_at:string}
 type Figure = {slug:string;display_name:string;kind:string;photo_url:string|null;note:string|null;is_seed:boolean;has_positions:boolean}
 type CongressTradeRow = {id:number;filer_id:string;filer_name:string;chamber:string|null;party:string|null;state:string|null;ticker:string|null;asset_name:string|null;transaction_type:string|null;transaction_date:string|null;filing_date:string|null;amount_label:string|null;is_late:boolean}
 type Position = {ticker:string|null;asset_name:string;category:string;value:number;is_percent:boolean;note:string|null}
@@ -81,6 +86,17 @@ const industryNames:Record<string,string> = {
 const localizeSector = (value:string|null|undefined,fallback='未分类') => value ? sectorNames[value]||value : fallback
 const localizeIndustry = (value:string|null|undefined,fallback='行业待同步') => value ? industryNames[value]||value : fallback
 
+function SnapshotTickerBar({section,tickers,current,onSelect}:{section:'news'|'fundamentals'|'financials'|'valuation'|'sec';tickers:string[];current:string;onSelect:(ticker:string)=>void}) {
+  const [input,setInput] = useState('')
+  const client = useQueryClient()
+  const snapshots = useQuery({queryKey:['snapshots',section],queryFn:()=>api<TemporarySnapshot[]>(`/snapshots/${section}`)})
+  const search = useMutation({mutationFn:(ticker:string)=>post<TemporarySnapshot>(`/snapshots/${section}?ticker=${encodeURIComponent(ticker)}`,{}),onSuccess:item=>{setInput('');onSelect(item.ticker);client.invalidateQueries({queryKey:['snapshots',section]})}})
+  const remove = useMutation({mutationFn:(ticker:string)=>api(`/snapshots/${section}/${ticker}`,{method:'DELETE'}),onSuccess:(_,ticker)=>{if(current===ticker) onSelect(tickers[0]||'');client.invalidateQueries({queryKey:['snapshots',section]});client.removeQueries({queryKey:[section,ticker]})}})
+  const temporary = snapshots.data||[]
+  const shown = [...tickers, ...temporary.map(item=>item.ticker).filter(ticker=>!tickers.includes(ticker))]
+  return <><form className="snapshot-search" onSubmit={event=>{event.preventDefault();const ticker=input.trim().toUpperCase();if(ticker)search.mutate(ticker)}}><input value={input} onChange={event=>setInput(event.target.value.toUpperCase())} placeholder="临时查看股票代码，例如 AAPL" maxLength={16}/><button disabled={search.isPending}>{search.isPending?'正在采集…':'查看快照'}</button></form><div className="news-tickers">{shown.map(ticker=>{const isTemporary=temporary.some(item=>item.ticker===ticker);return <span className={`ticker-chip${ticker===current?' active':''}${isTemporary?' temporary':''}`} key={ticker}><button onClick={()=>onSelect(ticker)}>{ticker}</button>{isTemporary&&<button className="ticker-remove" aria-label={`删除 ${ticker} 临时快照`} onClick={()=>remove.mutate(ticker)}>×</button>}</span>})}</div>{search.isError&&<p className="error">股票代码无效或暂时无法采集。</p>}</>
+}
+
 const demoDashboard:Dashboard = {
   market:{is_open:true,checked_at:new Date().toISOString()},
   stocks:[
@@ -112,6 +128,7 @@ function NavIcon({name}:{name:string}) {
     alerts:<><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></>,
     news:<><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></>,
     fundamentals:<><path d="m3 17 5-5 4 3 8-9"/><path d="M15 6h5v5"/></>,
+    financials:<><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h3M13 12h3M8 16h3M13 16h3"/></>,
     crossmodel:<><path d="M4 18V7M10 18V4M16 18v-8M22 18H2"/><path d="m5 11 5-3 4 4 6-6"/></>,
     sec:<><path d="M6 2h9l4 4v16H6z"/><path d="M14 2v5h5M9 12h6M9 16h6"/></>,
     congress:<><circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 4-7 8-7s7 2 8 7"/></>,
@@ -133,6 +150,7 @@ export default function App() {
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
   const [selectedModel,setSelectedModel] = useState<CrossMetric|null>(null)
   const [selectedWeight,setSelectedWeight] = useState<WeightDetail|null>(null)
+  const [selectedStatementMetric,setSelectedStatementMetric] = useState<StatementMetric|null>(null)
   const [stocksExpanded,setStocksExpanded] = useState(false)
   const client = useQueryClient()
   const live = !!authUser&&!demoMode
@@ -163,8 +181,8 @@ export default function App() {
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const tabs = [['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['crossmodel','估值'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面与财报'],['crossmodel','估值'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
+  const tabs = [['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
   const viewIndices = demoMode ? demoIndices : indices.data
   const viewAlerts = demoMode ? demoAlerts : alerts.data
@@ -177,7 +195,7 @@ export default function App() {
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
     <aside className={mobileNavOpen?'mobile-open':''}>
       <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div><div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{investigations.data?.length||0}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
-      <nav>{tabs.map(([key,label],index)=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{index===9&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
+      <nav>{tabs.map(([key,label],index)=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{index===10&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
       <div className="account-card"><span className="account-avatar">{authUser.username.slice(0,1)}</span><span><b>{demoMode?'演示空间':authUser.username}</b><small>{demoMode?'本地预览模式':'已安全连接'}</small></span><i className={viewDashboard?.market.is_open?'online':''}/></div>
       <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setDemoMode(false);setToken('');setAuthUser(null)}}>{demoMode?'退出预览':'退出登录'}</button></aside>
     {mobileNavOpen&&<button className="mobile-nav-scrim" onClick={()=>setMobileNavOpen(false)} aria-label="关闭菜单"/>}
@@ -196,6 +214,7 @@ export default function App() {
       {tab==='reports'&&<div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div>}
       {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
       {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
+      {tab==='financials'&&<FinancialStatementsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onStatementMetric={setSelectedStatementMetric}/>}
       {tab==='crossmodel'&&<CrossModelCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onMetric={setSelectedModel} onWeight={setSelectedWeight}/>}
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
       {tab==='congress'&&<CongressCenter/>}
@@ -211,6 +230,9 @@ export default function App() {
     </Sheet>
     <Sheet open={selectedWeight!==null} onClose={()=>setSelectedWeight(null)} title={selectedWeight?.label||'权重来源'}>
       {selectedWeight&&<article className="weight-drawer"><p className="eyebrow">WEIGHT EVIDENCE · 权重证据</p><h2>{selectedWeight.label}</h2><div className="weight-result"><span>基础分 <b>{selectedWeight.base_score}</b></span><span>最终权重 <strong>{(selectedWeight.weight*100).toFixed(0)}%</strong></span></div><div className="weight-evidence-list">{selectedWeight.adjustments.map(a=><div key={`${a.tag}${a.raw_adjustment}`}><span>✓ {a.label}<small>置信度 {Math.round(a.confidence*100)}%</small></span><b className={a.applied_adjustment<0?'negative':'positive'}>{a.applied_adjustment>=0?'+':''}{a.applied_adjustment}</b></div>)}{!selectedWeight.adjustments.length&&<div className="empty">当前仅使用基础权重。</div>}</div><div className="weight-final">调整后得分 <b>{selectedWeight.final_score}</b><span>归一化后</span><strong>{(selectedWeight.weight*100).toFixed(0)}%</strong></div></article>}
+    </Sheet>
+    <Sheet open={selectedStatementMetric!==null} onClose={()=>setSelectedStatementMetric(null)} title={selectedStatementMetric?.label||'指标说明'}>
+      {selectedStatementMetric&&<article className="statement-explainer"><p className="eyebrow">FINANCIAL STATEMENT · 指标释义</p><h2>{selectedStatementMetric.label}</h2><p className="statement-english">{selectedStatementMetric.english}</p><div className="learn-block"><b>这是什么</b><p>{selectedStatementMetric.description}</p></div><div className="learn-block"><b>对分析有什么影响</b><p>{selectedStatementMetric.impact}</p></div>{selectedStatementMetric.formula&&<div className="learn-block"><b>计算方式</b><p>{selectedStatementMetric.formula}</p></div>}<p className="statement-source">数据源：Yahoo Finance / yfinance。缺失字段会显示“数据不足”，不会以估算值替代。</p></article>}
     </Sheet>
   </div>
 }
@@ -262,7 +284,7 @@ function CrossModelCenter({tickers,onMetric,onWeight}:{tickers:string[];onMetric
   const [peerTicker,setPeerTicker] = useState('')
   const current = active||tickers[0]||''
   const client = useQueryClient()
-  const result = useQuery({queryKey:['cross-model',current],queryFn:()=>api<CrossModel>(`/cross-model?ticker=${current}`),enabled:!!current})
+  const result = useQuery({queryKey:['cross-model',current],queryFn:()=>api<CrossModel>(`/cross-model?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
   const peerList = useQuery({queryKey:['peers',current],queryFn:()=>api<PeerList>(`/peers/${current}`),enabled:!!current&&editingPeers})
   const refresh = useMutation({mutationFn:()=>post(`/cross-model/refresh?ticker=${current}`,{}),onSuccess:()=>setTimeout(()=>client.invalidateQueries({queryKey:['cross-model',current]}),12000)})
   const peersChanged = () => {client.invalidateQueries({queryKey:['peers',current]});client.invalidateQueries({queryKey:['stock-management']});setTimeout(()=>client.invalidateQueries({queryKey:['cross-model',current]}),12000)}
@@ -272,10 +294,10 @@ function CrossModelCenter({tickers,onMetric,onWeight}:{tickers:string[];onMetric
   const movePeer = async (item:PeerItem,delta:number) => {await patch(`/peers/${current}/${item.ticker}/order`,{display_order:Math.max(0,item.display_order+delta)});peersChanged()}
   const data = result.data
   const MetricGroup = ({title,subtitle,items,tone}:{title:string;subtitle:string;items:CrossMetric[];tone:string}) => <section className={`cross-group ${tone}`}><div className="section-title"><h2>{title}</h2><small>{subtitle}</small></div><div className="cross-metric-grid">{items.map(item=><button key={item.key} className={`cross-metric ${item.status}`} onClick={()=>onMetric(item)}><span>{item.label}</span><strong>{formatCrossMetric(item)}</strong>{item.peer_median!=null?<div className="peer-compare"><small>同行中位数</small><b>{item.peer_median.toFixed(2)}{item.unit==='multiple'?'×':item.unit==='%'?'%':''}</b><em className={(item.peer_delta_percent||0)>0?'negative':'positive'}>{item.comparison}</em></div>:<small>{metricHint(item)}</small>}<i aria-hidden="true">→</i></button>)}</div></section>
-  if(!tickers.length) return <div className="empty">请先在自选股中添加股票。</div>
   const consensusGap = data?.consensus.value!=null&&data.consensus.current!=null&&data.consensus.current!==0?(data.consensus.value-data.consensus.current)/data.consensus.current*100:null
   return <div className="news-center cross-model">
-    <div className="valuation-toolbar"><label htmlFor="valuation-ticker">选择股票</label><select id="valuation-ticker" value={current} onChange={event=>setActive(event.target.value)}>{tickers.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+    <SnapshotTickerBar section="valuation" tickers={tickers} current={current} onSelect={setActive}/>
+    {!current&&<div className="empty">输入股票代码，生成仅保留一天的临时估值快照。</div>}
     {result.isLoading&&<div className="empty">正在读取每日估值快照…</div>}{result.isError&&<div className="snapshot-empty"><p>该股票还没有每日估值快照。</p><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'正在抓取同行与估值…':'立即生成'}</button></div>}
     {data&&<><section className="cross-hero"><div><p className="eyebrow">{localizeSector(data.classification.sector)} · {localizeIndustry(data.classification.industry,'数据不足')}</p><h2>{data.company} <span>{data.classification.label}</span></h2><p>主模型：{data.classification.primary.map(modelLabel).join('、')||'数据不足'}　·　辅助模型：{data.classification.secondary.map(modelLabel).join('、')||'—'}</p><div className="tag-row">{data.tags.filter(t=>!t.name.includes(':')).map(t=><span key={t.name}>{t.label} <b>{Math.round(t.confidence*100)}%</b></span>)}</div></div><div className="valuation-focus"><small>本次估值重点</small><b>{data.classification.focus}</b></div></section>
       <section className="valuation-glance" aria-label="估值摘要"><div><span>当前市场价格</span><strong>{data.consensus.current==null?'数据不足':`$${data.consensus.current.toFixed(2)}`}</strong><small>市场正在支付的价格</small></div><div><span>模型估值共识</span><strong>{data.consensus.value==null?'数据不足':`$${data.consensus.value.toFixed(2)}`}</strong><small>{data.consensus.items.length} 个独立模型参与</small></div><div className={consensusGap==null?'':consensusGap>=0?'positive':'negative'}><span>共识相对现价</span><strong>{consensusGap==null?'数据不足':`${consensusGap>=0?'+':''}${consensusGap.toFixed(1)}%`}</strong><small>仅表示模型差值，不是预期收益</small></div><div><span>模型一致性</span><strong>{data.model_conflict?'存在分歧':'方向一致'}</strong><small>{data.peers.coverage}/{data.peers.symbols.length} 家同行可比</small></div></section>
@@ -383,11 +405,31 @@ function RatingGauge({r}:{r:Rating}) {
   </div>
 }
 
+const statementMetricInfo:Record<string,StatementMetric> = {
+  revenue:{label:'营业收入',english:'Revenue',description:'公司在报告期内从主营业务取得的总收入。',impact:'收入增长是规模扩张的起点，但需要结合毛利、利润和现金流判断增长质量。'},
+  gross_profit:{label:'毛利润',english:'Gross Profit',description:'收入扣除直接生产或采购成本后留下的利润。',impact:'毛利越高，通常代表定价能力或成本结构更优；应与同行和历史趋势一起看。'},
+  operating_income:{label:'营业利润',english:'Operating Income / EBIT',description:'主营业务在扣除营业费用后的利润，不含利息和所得税。',impact:'用于观察核心经营效率，也常作为 EBITDA 和 ROIC 的基础。'},
+  net_income:{label:'净利润',english:'Net Income',description:'扣除利息、税项及非经营项目后的最终利润。',impact:'反映归属经营成果，但会受到一次性项目、税项和资本结构影响。'},
+  eps:{label:'每股收益',english:'Diluted EPS',description:'按稀释后流通股数分摊的每股净利润。',impact:'是市盈率的重要分母；稀释股数上升会削弱每股价值。'},
+  ebitda:{label:'息税折旧摊销前利润',english:'EBITDA',description:'营业利润加回折旧与摊销；Yahoo 未提供时按该口径计算。',impact:'便于比较资本结构和折旧政策不同的非金融企业；金融公司通常不适用 EV/EBITDA。',formula:'Operating Income + Depreciation + Amortization'},
+  cash:{label:'现金及等价物',english:'Cash and Cash Equivalents',description:'可迅速用于支付、投资或偿债的现金及高流动性资产。',impact:'净现金更高通常增强抗风险能力，但过多现金也可能意味着资金效率有待提升。'},
+  inventory:{label:'存货',english:'Inventory',description:'尚未售出的原材料、在制品和商品。',impact:'存货持续快于收入增长可能预示需求走弱或库存管理压力。'},
+  current_assets:{label:'流动资产',english:'Current Assets',description:'预计一年内可变现、出售或消耗的资产。',impact:'与流动负债结合可判断短期流动性。'},
+  total_assets:{label:'总资产',english:'Total Assets',description:'公司控制的全部经济资源。',impact:'用于判断资产规模、资产周转与资本效率。'},
+  total_debt:{label:'总债务',english:'Total Debt',description:'短期和长期有息债务的合计。',impact:'债务需结合现金、利息覆盖和经营现金流判断偿债压力。'},
+  shareholders_equity:{label:'股东权益',english:'Stockholders Equity',description:'资产减去负债后归属于股东的账面净资产。',impact:'是 ROE、账面价值和 P/B 的重要基础，银行与保险公司尤其关注。'},
+  operating_cash_flow:{label:'经营活动现金流',english:'Operating Cash Flow',description:'主营经营活动实际产生或消耗的现金。',impact:'能检验利润的现金含量；长期为正且与净利润匹配通常更健康。'},
+  capital_expenditure:{label:'资本开支',english:'Capital Expenditure',description:'用于厂房、设备和长期资产的现金投入。Yahoo 通常将现金流出显示为负数。',impact:'高资本开支会压低当期自由现金流，但也可能支持未来增长。'},
+  free_cash_flow:{label:'自由现金流',english:'Free Cash Flow',description:'经营现金流扣除资本开支后可供债权人和股东使用的现金。',impact:'是 DCF、回购、分红和去杠杆能力的重要观察项。',formula:'Operating Cash Flow − Capital Expenditure（Yahoo 为负数时等价于相加）'},
+  financing_cash_flow:{label:'融资活动现金流',english:'Financing Cash Flow',description:'债务、股票发行、回购和分红等融资活动产生的现金流。',impact:'可帮助辨别公司是依赖外部融资，还是在向股东返还资本。'},
+  investing_cash_flow:{label:'投资活动现金流',english:'Investing Cash Flow',description:'收购、出售投资及长期资产投资相关的现金流。',impact:'需区分正常投资、并购扩张和资产处置等不同驱动。'},
+}
+
 function FundamentalsCenter({tickers}:{tickers:string[]}) {
   const [active,setActive] = useState(tickers[0]||'')
   const current = active||tickers[0]||''
-  const fundamentals = useQuery({queryKey:['fundamentals',current],queryFn:()=>api<Fundamentals>(`/fundamentals?ticker=${current}`),enabled:!!current})
-  const financials = useQuery({queryKey:['financials',current],queryFn:()=>api<Financial[]>(`/financials?ticker=${current}`),enabled:!!current})
+  const fundamentals = useQuery({queryKey:['fundamentals',current],queryFn:()=>api<Fundamentals>(`/fundamentals?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
+  const financials = useQuery({queryKey:['financials',current],queryFn:()=>api<Financial[]>(`/financials?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
   const fmtNum = (v:number|null) => {
     if(v==null) return '数据不足'
     const abs=Math.abs(v), sign=v<0?'-':''
@@ -397,9 +439,9 @@ function FundamentalsCenter({tickers}:{tickers:string[]}) {
   }
   const fmtMetric = (v:number|null) => v==null?'—':v.toLocaleString('en-US',{maximumFractionDigits:2})
   const r = fundamentals.data?.rating
-  if(!tickers.length) return <div className="empty">请先在自选股中添加股票。</div>
   return <div className="news-center">
-    <div className="news-tickers">{tickers.map(t=><button key={t} className={t===current?'active':''} onClick={()=>setActive(t)}>{t}</button>)}</div>
+    <SnapshotTickerBar section="fundamentals" tickers={tickers} current={current} onSelect={setActive}/>
+    {!current&&<div className="empty">输入股票代码，临时查看基本面数据。</div>}
     <div className="section-title"><h2>{current} 基本面指标</h2></div>
     <div className="metric-grid">{fundamentals.data?.metrics.map(m=><div className="metric-card" key={m.label}><span>{m.label}</span><strong>{fmtMetric(m.value)}</strong></div>)}{fundamentals.isError&&<div className="empty">基本面数据暂不可用。</div>}</div>
     <div className="section-title"><h2>分析师评级</h2></div>
@@ -407,6 +449,36 @@ function FundamentalsCenter({tickers}:{tickers:string[]}) {
     <div className="section-title"><h2>近四季度财报（SEC 单季，已去累计）</h2></div>
     <div className="table"><div className="table-head fin"><span>季度</span><span>报告期</span><span>营收</span><span>净利润</span><span>营业利润</span><span>EPS</span><span>净利率</span><span>经营现金流</span></div>{financials.data?.map(f=><div className="table-row fin" key={`${f.fiscal_year}${f.fiscal_period}`}><b>{f.fiscal_year} {f.fiscal_period}</b><span>{f.period_end}</span><span>{fmtNum(f.revenue)}</span><span>{fmtNum(f.net_income)}</span><span>{fmtNum(f.operating_income)}</span><span>{fmtNum(f.eps)}</span><span>{f.net_margin==null?'数据不足':f.net_margin.toFixed(1)+'%'}</span><span>{fmtNum(f.operating_cash_flow)}</span></div>)}{!financials.data?.length&&<div className="empty">暂无财报数据。</div>}</div>
   </div>
+}
+
+function FinancialStatementsCenter({tickers,onStatementMetric}:{tickers:string[];onStatementMetric:(metric:StatementMetric)=>void}) {
+  const [active,setActive] = useState(tickers[0]||'')
+  const [frequency,setFrequency] = useState<'annual'|'quarterly'>('annual')
+  const current = active||tickers[0]||''
+  const statements = useQuery({queryKey:['financial-statements',current,frequency],queryFn:()=>api<FinancialStatement[]>(`/financial-statements?ticker=${current}&frequency=${frequency}`),enabled:!!current,refetchInterval:current?5000:false})
+  return <div className="news-center"><SnapshotTickerBar section="financials" tickers={tickers} current={current} onSelect={setActive}/>{!current?<div className="empty">输入股票代码，临时查看财务报表。</div>:<FinancialStatementsPanel frequency={frequency} setFrequency={setFrequency} rows={statements.data||[]} loading={statements.isLoading} onMetric={onStatementMetric}/>}</div>
+}
+
+function FinancialStatementsPanel({frequency,setFrequency,rows,loading,onMetric}:{frequency:'annual'|'quarterly';setFrequency:(value:'annual'|'quarterly')=>void;rows:FinancialStatement[];loading:boolean;onMetric:(metric:StatementMetric)=>void}) {
+  const fmt = (value:number|null) => {
+    if(value==null) return '数据不足'
+    const sign=value<0?'−':''; const abs=Math.abs(value)
+    if(abs>=1e12) return `${sign}${(abs/1e12).toFixed(2)}T`
+    if(abs>=1e9) return `${sign}${(abs/1e9).toFixed(1)}B`
+    if(abs>=1e6) return `${sign}${(abs/1e6).toFixed(1)}M`
+    return value.toLocaleString('en-US',{maximumFractionDigits:2})
+  }
+  const groups:{title:string;key:keyof Pick<FinancialStatement,'income_statement'|'balance_sheet'|'cash_flow'>;items:string[]}[] = [
+    {title:'利润表',key:'income_statement',items:['revenue','gross_profit','operating_income','net_income','eps','ebitda']},
+    {title:'资产负债表',key:'balance_sheet',items:['cash','inventory','current_assets','total_assets','total_debt','shareholders_equity']},
+    {title:'现金流量表',key:'cash_flow',items:['operating_cash_flow','capital_expenditure','free_cash_flow','financing_cash_flow','investing_cash_flow']},
+  ]
+  return <section className="financial-statements">
+    <div className="statement-toolbar"><div><p className="eyebrow">YAHOO FINANCE · THREE STATEMENTS</p><h2>财务报表</h2><small>与 Yahoo Finance 三表同源；点击指标查看释义。</small></div><div className="frequency-toggle" role="tablist" aria-label="报表周期"><button role="tab" aria-selected={frequency==='annual'} className={frequency==='annual'?'active':''} onClick={()=>setFrequency('annual')}>年度</button><button role="tab" aria-selected={frequency==='quarterly'} className={frequency==='quarterly'?'active':''} onClick={()=>setFrequency('quarterly')}>季度</button></div></div>
+    {loading&&<div className="empty">正在读取 Yahoo Finance 财务报表…</div>}
+    {!loading&&!rows.length&&<div className="empty">尚未同步三大报表。系统会在下一次财务同步时拉取年度与季度数据。</div>}
+    {rows.length>0&&groups.map(group=><section className="statement-card" key={group.key}><h3>{group.title}</h3><div className="statement-table">{[<div className="statement-row statement-head" style={{gridTemplateColumns:`minmax(142px,.85fr) repeat(${rows.length},minmax(68px,1fr))`}} key="head"><span>指标</span>{rows.map(row=><span key={row.period_end}>{frequency==='annual'?row.fiscal_year:row.period_end.slice(0,10)}</span>)}</div>,...group.items.map(key=>{const info=statementMetricInfo[key];return <button className="statement-row" style={{gridTemplateColumns:`minmax(142px,.85fr) repeat(${rows.length},minmax(68px,1fr))`}} onClick={()=>onMetric(info)} key={key}><span><b>{info.label}</b><small>{info.english}</small></span>{rows.map(row=><span key={row.period_end}>{fmt(row[group.key][key])}</span>)}</button>})]}</div></section>)}
+  </section>
 }
 
 function SecCenter({tickers}:{tickers:string[]}) {
@@ -429,9 +501,9 @@ function SecCenter({tickers}:{tickers:string[]}) {
     return v.toLocaleString('en-US',{maximumFractionDigits:2})
   }
   const codeName:Record<string,string> = {P:'买入',S:'卖出',M:'期权行权',F:'税务代扣',A:'授予',G:'赠予',D:'处置'}
-  if(!tickers.length) return <div className="empty">请先在自选股中添加股票。</div>
   return <div className="news-center">
-    <div className="news-tickers">{tickers.map(t=><button key={t} className={t===current?'active':''} onClick={()=>setActive(t)}>{t}</button>)}</div>
+    <SnapshotTickerBar section="sec" tickers={tickers} current={current} onSelect={setActive}/>
+    {!current&&<div className="empty">输入股票代码，临时查看 SEC 公告。</div>}
     <div className="section-title"><h2>{current} SEC 官方数据</h2><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'刷新中…':'刷新数据'}</button></div>
     {refresh.isSuccess&&<p className="saved">已触发后台采集（含 XBRL 解析，约需 1-2 分钟），稍后自动刷新。</p>}
     <div className="news-tickers" style={{marginTop:4}}>{([['events','重大事件'],['financials','财务数据'],['insider','内幕交易'],['holdings','机构持仓']] as const).map(([k,l])=><button key={k} className={view===k?'active':''} onClick={()=>setView(k)}>{l}</button>)}</div>
@@ -465,20 +537,26 @@ function SecCenter({tickers}:{tickers:string[]}) {
 
 function NewsCenter({tickers}:{tickers:string[]}) {
   const [active,setActive] = useState(tickers[0]||'')
+  const [weeklyOpen,setWeeklyOpen] = useState(false)
   const client = useQueryClient()
   const current = active||tickers[0]||''
-  const news = useQuery({queryKey:['news',current],queryFn:()=>api<NewsRow[]>(`/news?ticker=${current}`),enabled:!!current})
+  const news = useQuery({queryKey:['news',current],queryFn:()=>api<NewsRow[]>(`/news?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
   const archive = useQuery({queryKey:['news-archive',current],queryFn:()=>api<NewsArchive|null>(`/news/archive?ticker=${current}`),enabled:!!current})
+  const weekly = useQuery({queryKey:['news-weekly',current],queryFn:()=>api<WeeklyArchive[]>(`/news/weekly?ticker=${current}`),enabled:!!current&&weeklyOpen})
   const refresh = useMutation({mutationFn:()=>post(`/news/refresh?ticker=${current}`,{})})
   const summarize = useMutation({mutationFn:(id:number)=>post<NewsRow>(`/news/${id}/summarize`,{}),onSuccess:()=>client.invalidateQueries({queryKey:['news',current]})})
-  const stripExcluded = (md:string) => md.replace(/###\s*剔除[\s\S]*?(?=\n###\s|$)/g,'').trim()
+  // 隐藏“采用与合并”和“剔除”过程段，只留关键事实归纳（兼容历史旧结构定档）
+  const keyFactsOnly = (md:string) => md.replace(/###\s*(?:采用与合并|剔除)[\s\S]*?(?=\n###\s|$)/g,'').trim()
   const includedIds = archive.data?.included_news_ids || []
   const orderNo = (id:number) => { const i = includedIds.indexOf(id); return i>=0 ? i+1 : null }
-  if(!tickers.length) return <div className="empty">请先在自选股中添加股票。</div>
   return <div className="news-center">
-    <div className="news-tickers">{tickers.map(t=><button key={t} className={t===current?'active':''} onClick={()=>setActive(t)}>{t}</button>)}</div>
-    <div className="section-title"><h2>每日定档（Luna 去重）</h2></div>
-    {archive.data?<article className="report-detail"><p className="eyebrow">{archive.data.market_date} · v{archive.data.version} · {archive.data.model}</p><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{stripExcluded(archive.data.content)}</ReactMarkdown></div></article>:<div className="empty">尚未生成每日定档。</div>}
+    <SnapshotTickerBar section="news" tickers={tickers} current={current} onSelect={setActive}/>
+    {!current&&<div className="empty">输入股票代码，临时查看新闻。</div>}
+    <div className="section-title"><h2>每日定档（Luna 去重）</h2><button onClick={()=>setWeeklyOpen(true)}>历史每周新闻</button></div>
+    {archive.data?<article className="report-detail"><p className="eyebrow">{archive.data.market_date} · v{archive.data.version} · {archive.data.model}</p><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{keyFactsOnly(archive.data.content)}</ReactMarkdown></div></article>:<div className="empty">尚未生成每日定档。</div>}
+    <Sheet open={weeklyOpen} onClose={()=>setWeeklyOpen(false)} title={`${current} 历史每周新闻`}>
+      {weekly.isLoading?<div className="empty">加载中…</div>:weekly.data?.length?<div className="weekly-list">{weekly.data.map(w=><article className="report-detail" key={`${w.iso_year}-${w.iso_week}`}><p className="eyebrow">{w.week_start} ~ {w.week_end} · {w.iso_year}W{w.iso_week} · v{w.version} · {w.model}</p><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{keyFactsOnly(w.content)}</ReactMarkdown></div></article>)}</div>:<div className="empty">暂无历史每周新闻。</div>}
+    </Sheet>
     <div className="section-title"><h2>{current} 新闻</h2><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'刷新中…':'刷新新闻'}</button></div>
     {refresh.isSuccess&&<p className="saved">已触发后台采集，稍后刷新查看。</p>}
     <div className="news-list">{news.data?.map(item=>{const no=orderNo(item.id);return <article className="news-card" key={item.id}>

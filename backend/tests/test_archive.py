@@ -23,6 +23,15 @@ def test_append_and_daily_archive(tmp_path, monkeypatch):
     assert path.endswith("daily.md")
 
 
+def test_write_weekly_archive(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "_root", lambda: tmp_path)
+    path = archive.write_weekly_archive("NVDA", 2026, 29, "# 周汇总", {"model": "luna"})
+    week_dir = tmp_path / "NVDA" / "news_weekly" / "2026-W29"
+    assert (week_dir / "weekly.md").read_text() == "# 周汇总"
+    assert (week_dir / "manifest.json").exists()
+    assert path.endswith("weekly.md")
+
+
 def test_prune_keeps_only_listed_quarters(tmp_path, monkeypatch):
     monkeypatch.setattr(archive, "_root", lambda: tmp_path)
     for label in ("2026-Q2", "2026-Q1", "2025-Q4", "2025-Q3", "2025-Q2"):

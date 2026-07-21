@@ -36,6 +36,17 @@ class WatchlistItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class TemporarySnapshot(Base):
+    """A short-lived, section-scoped ticker lookup that is not a watchlist item."""
+    __tablename__ = "temporary_snapshots"
+    __table_args__ = (UniqueConstraint("section", "ticker"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    section: Mapped[str] = mapped_column(String(24), index=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class StockProfile(Base):
     """股票基础资料缓存；官方分类与用户显示分组保持分离。"""
     __tablename__ = "stock_profiles"
@@ -168,6 +179,28 @@ class DailyNewsArchive(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class WeeklyNewsArchive(Base):
+    """每周新闻汇总；把当周每日定档的“关键事实归纳”合并成一份周报，
+    生成后当周的原始新闻与每日定档会被删除，只保留此汇总作为历史。
+    按 ISO 周（周一起）归档。"""
+    __tablename__ = "weekly_news_archives"
+    __table_args__ = (UniqueConstraint("ticker", "iso_year", "iso_week"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    iso_year: Mapped[int] = mapped_column(Integer, index=True)
+    iso_week: Mapped[int] = mapped_column(Integer, index=True)
+    week_start: Mapped[date] = mapped_column(Date, index=True)
+    week_end: Mapped[date] = mapped_column(Date)
+    content: Mapped[str] = mapped_column(Text)
+    included_dates: Mapped[list] = mapped_column(JSON, default=list)
+    model: Mapped[str] = mapped_column(String(128))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    file_path: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class QuarterlyFinancial(Base):
     __tablename__ = "quarterly_financials"
     __table_args__ = (UniqueConstraint("ticker", "fiscal_year", "fiscal_period"),)
@@ -189,6 +222,24 @@ class QuarterlyFinancial(Base):
     source: Mapped[str] = mapped_column(String(32), default="finnhub")
     raw_payload: Mapped[dict] = mapped_column(JSON, default=dict)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FinancialStatementSnapshot(Base):
+    """Yahoo 三大报表快照；保留每期原始行，供展示和后续指标复算。"""
+    __tablename__ = "financial_statement_snapshots"
+    __table_args__ = (UniqueConstraint("ticker", "frequency", "period_end"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    frequency: Mapped[str] = mapped_column(String(16), index=True)  # annual / quarterly
+    fiscal_year: Mapped[int] = mapped_column(Integer)
+    fiscal_period: Mapped[str] = mapped_column(String(16))
+    period_end: Mapped[date] = mapped_column(Date, index=True)
+    currency: Mapped[str | None] = mapped_column(String(16))
+    income_statement: Mapped[dict] = mapped_column(JSON, default=dict)
+    balance_sheet: Mapped[dict] = mapped_column(JSON, default=dict)
+    cash_flow: Mapped[dict] = mapped_column(JSON, default=dict)
+    source: Mapped[str] = mapped_column(String(32), default="yfinance")
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class ValuationSnapshot(Base):

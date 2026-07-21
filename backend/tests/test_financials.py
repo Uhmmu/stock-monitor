@@ -1,4 +1,7 @@
+import pandas as pd
+
 from app.services.financials import normalize_quarters
+from app.services import market_data
 
 
 def _row(year, quarter, end, revenue=None):
@@ -63,3 +66,22 @@ def test_normalizes_finnhub_quarterly_series_by_period():
 def test_ignores_non_list_finnhub_series_values():
     payload = {"series": {"quarterly": {"eps": None, "grossMargin": "invalid"}}}
     assert normalize_quarters(payload) == []
+
+
+def test_yahoo_statement_fetch_normalizes_aliases_and_calculates_fallbacks(monkeypatch):
+    end = pd.Timestamp("2025-12-31")
+    class FakeTicker:
+        income_stmt = pd.DataFrame({end: [1000, 200, 100, 10]}, index=["Total Revenue", "Gross Profit", "Operating Income", "Diluted EPS"])
+        balance_sheet = pd.DataFrame({end: [300, 120, 600]}, index=["Cash And Cash Equivalents", "Inventory", "Stockholders Equity"])
+        cash_flow = pd.DataFrame({end: [160, -40, 20]}, index=["Operating Cash Flow", "Capital Expenditure", "Depreciation"])
+        quarterly_income_stmt = income_stmt
+        quarterly_balance_sheet = balance_sheet
+        quarterly_cash_flow = cash_flow
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda _: FakeTicker())
+
+    row = market_data.fetch_yf_financial_statements("TEST", "annual")[0]
+    assert row["period_end"].isoformat() == "2025-12-31"
+    assert row["income_statement"]["revenue"] == 1000
+    assert row["income_statement"]["ebitda"] == 120
+    assert row["balance_sheet"]["cash"] == 300
+    assert row["cash_flow"]["free_cash_flow"] == 120

@@ -123,6 +123,41 @@ def test_altman_is_disabled_for_financial_companies():
     assert result["value"] is None
 
 
+def test_financial_services_disables_roic_and_ev_ebitda():
+    payload = build_cross_model("BANK", {"shortName": "Example Bank", "sector": "Financial Services", "industry": "Asset Management", "ebitda": 10, "enterpriseValue": 100}, [], financials=_annual_financials())
+    roic = next(item for item in payload["health"] if item["key"] == "roic")
+    ebitda = next(item for item in payload["valuation"] if item["key"] == "ev_ebitda")
+    assert roic["status"] == "not_applicable"
+    assert ebitda["status"] == "not_applicable"
+
+
+def test_supplied_statement_snapshots_skip_yahoo_statement_calls(monkeypatch):
+    from app.services import cross_model
+    class FakeStock:
+        def get_info(self): return {"symbol": "TEST"}
+        @property
+        def fast_info(self): return type("Fast", (), {"last_price": 1, "previous_close": 1})()
+        def get_income_stmt(self, **_): raise AssertionError("should use stored snapshot")
+    monkeypatch.setattr(cross_model.yf, "Ticker", lambda _: FakeStock())
+    stored = {"source": "financial_statement_snapshots", "periods": [{"date": "2025-12-31", "revenue": 100}]}
+    _, _, financials = cross_model.fetch_cross_model_inputs("TEST", [], financials=stored)
+    assert financials is stored
+
+
+def test_statement_snapshots_take_priority_over_yahoo_summary_values():
+    payload = build_cross_model("TEST", {
+        "shortName": "Test", "totalRevenue": 9999, "netIncomeToCommon": 9999, "totalDebt": 9999,
+        "totalCash": 9999, "enterpriseValue": 1200, "ebitda": 9999, "marketCap": 1000,
+    }, [], financials={"source": "financial_statement_snapshots", "periods": [
+        {"date": "2025-12-31", "revenue": 1200, "gross_profit": 600, "net_income": 180, "ebitda": 300,
+         "total_debt": 200, "cash": 100, "current_assets": 400, "current_liabilities": 200, "stockholders_equity": 600},
+        {"date": "2024-12-31", "revenue": 1000, "net_income": 120, "eps": 2, "stockholders_equity": 500},
+    ]})
+    assert next(item for item in payload["valuation"] if item["key"] == "ev_sales")["value"] == 1
+    assert next(item for item in payload["valuation"] if item["key"] == "ev_ebitda")["value"] == 4
+    assert next(item for item in payload["health"] if item["key"] == "current_ratio")["value"] == 2
+
+
 def test_build_payload_exposes_missing_fields_instead_of_generic_insufficient():
     payload = build_cross_model("TEST", {"shortName": "Test", "marketCap": 1000}, [], financials={"source": "yfinance_annual", "periods": []})
     roic = next(item for item in payload["health"] if item["key"] == "roic")

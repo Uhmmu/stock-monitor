@@ -55,6 +55,18 @@ def write_daily_archive(ticker: str, market_date: date, content: str, manifest: 
     return str(daily_path)
 
 
+def weekly_dir(ticker: str, iso_year: int, iso_week: int) -> Path:
+    return _root() / _safe_ticker(ticker) / "news_weekly" / f"{iso_year}-W{iso_week:02d}"
+
+
+def write_weekly_archive(ticker: str, iso_year: int, iso_week: int, content: str, manifest: dict) -> str:
+    directory = weekly_dir(ticker, iso_year, iso_week)
+    weekly_path = directory / "weekly.md"
+    _atomic_write(weekly_path, content)
+    _atomic_write(directory / "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, default=str))
+    return str(weekly_path)
+
+
 def earnings_dir(ticker: str) -> Path:
     return _root() / _safe_ticker(ticker) / "earnings"
 

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from typing import Any
 
 import yfinance as yf
 
@@ -34,6 +35,33 @@ _YF_INCOME = {
 }
 _YF_CASHFLOW = {"operating_cash_flow": "Operating Cash Flow", "free_cash_flow": "Free Cash Flow"}
 
+# 同一经济含义在 Yahoo / yfinance 版本和不同行业中可能使用不同名称。
+_STATEMENT_FIELDS = {
+    "income_statement": {
+        "revenue": ("Total Revenue", "Operating Revenue"), "gross_profit": ("Gross Profit",),
+        "operating_income": ("Operating Income", "EBIT"), "net_income": ("Net Income", "Net Income Common Stockholders"),
+        "pretax_income": ("Pretax Income", "Income Before Tax"), "tax_expense": ("Tax Provision", "Income Tax Expense"),
+        "eps": ("Diluted EPS", "DilutedEPS"), "ebitda": ("EBITDA",),
+    },
+    "balance_sheet": {
+        "cash": ("Cash Cash Equivalents And Short Term Investments", "Cash And Cash Equivalents", "Cash"),
+        "inventory": ("Inventory",), "current_assets": ("Current Assets", "Total Current Assets"),
+        "current_liabilities": ("Current Liabilities", "Total Current Liabilities"), "total_assets": ("Total Assets",),
+        "total_liabilities": ("Total Liabilities Net Minority Interest", "Total Liabilities"), "total_debt": ("Total Debt",),
+        "long_term_debt": ("Long Term Debt", "Long Term Debt And Capital Lease Obligation"),
+        "shareholders_equity": ("Stockholders Equity", "Common Stock Equity"), "retained_earnings": ("Retained Earnings",),
+        "shares_issued": ("Ordinary Shares Number", "Share Issued"),
+    },
+    "cash_flow": {
+        "operating_cash_flow": ("Operating Cash Flow", "Total Cash From Operating Activities"),
+        "capital_expenditure": ("Capital Expenditure", "Capital Expenditures"),
+        "free_cash_flow": ("Free Cash Flow",), "financing_cash_flow": ("Financing Cash Flow", "Cash Flow From Continuing Financing Activities"),
+        "investing_cash_flow": ("Investing Cash Flow", "Cash Flow From Continuing Investing Activities"),
+        "depreciation": ("Depreciation", "Depreciation And Amortization"),
+        "amortization": ("Amortization", "Amortization Of Intangibles"),
+    },
+}
+
 
 def _yf_val(df, key, col):
     if df is None or df.empty or key not in df.index or col not in df.columns:
@@ -44,6 +72,61 @@ def _yf_val(df, key, col):
     except (TypeError, ValueError):
         return None
     return value if value == value else None  # 过滤 NaN
+
+
+def _statement_value(df: Any, aliases: tuple[str, ...], column: Any) -> float | None:
+    if df is None or df.empty or column not in df.columns:
+        return None
+    rows = {"".join(char.lower() for char in str(row) if char.isalnum()): row for row in df.index}
+    for alias in aliases:
+        row = rows.get("".join(char.lower() for char in alias if char.isalnum()))
+        if row is not None:
+            return _yf_val(df, row, column)
+    return None
+
+
+def _period_label(period_end: str, frequency: str) -> tuple[int, str]:
+    point = datetime.fromisoformat(period_end).date()
+    return point.year, ("FY" if frequency == "annual" else f"Q{(point.month - 1) // 3 + 1}")
+
+
+def fetch_yf_financial_statements(ticker: str, frequency: str) -> list[dict]:
+    """读取 Yahoo 三表并标准化核心展示行；缺失字段显式保留为 None。
+
+    Yahoo 的资本开支通常为负数，展示时保持原值；缺少 FCF 时按 OCF - CapEx（负数 CapEx 等价于相加）补算。
+    """
+    stock = yf.Ticker(ticker)
+    if frequency == "annual":
+        income, balance, cashflow = stock.income_stmt, stock.balance_sheet, stock.cash_flow
+    elif frequency == "quarterly":
+        income, balance, cashflow = stock.quarterly_income_stmt, stock.quarterly_balance_sheet, stock.quarterly_cash_flow
+    else:
+        raise ValueError("frequency must be annual or quarterly")
+    columns: dict[str, Any] = {}
+    for statement in (income, balance, cashflow):
+        if statement is not None and not statement.empty:
+            for column in statement.columns:
+                columns[str(column)[:10]] = column
+    rows: list[dict] = []
+    for period_end, column in sorted(columns.items(), reverse=True):
+        statements = {}
+        for name, fields in _STATEMENT_FIELDS.items():
+            dataframe = {"income_statement": income, "balance_sheet": balance, "cash_flow": cashflow}[name]
+            statements[name] = {field: _statement_value(dataframe, aliases, column) for field, aliases in fields.items()}
+        cash = statements["cash_flow"]
+        income_values = statements["income_statement"]
+        if income_values["ebitda"] is None and income_values["operating_income"] is not None:
+            depreciation, amortization = cash["depreciation"], cash["amortization"]
+            if depreciation is not None or amortization is not None:
+                income_values["ebitda"] = income_values["operating_income"] + (depreciation or 0) + (amortization or 0)
+        if cash["free_cash_flow"] is None and cash["operating_cash_flow"] is not None and cash["capital_expenditure"] is not None:
+            capex = cash["capital_expenditure"]
+            cash["free_cash_flow"] = cash["operating_cash_flow"] + capex if capex < 0 else cash["operating_cash_flow"] - capex
+        if not any(value is not None for group in statements.values() for value in group.values()):
+            continue
+        fiscal_year, fiscal_period = _period_label(period_end, frequency)
+        rows.append({"period_end": date.fromisoformat(period_end), "fiscal_year": fiscal_year, "fiscal_period": fiscal_period, "currency": None, **statements})
+    return rows
 
 
 def fetch_yf_info_metrics(ticker: str) -> dict:

@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 import logging
 
 from celery import Celery
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 
 import hashlib
@@ -14,6 +14,7 @@ from app.models import (
     DailyNewsArchive,
     EarningsEvent,
     FigurePosition,
+    FinancialStatementSnapshot,
     Investigation,
     InvestigationStatus,
     NewsItem,
@@ -30,16 +31,17 @@ from app.models import (
     TrackedFigure,
     ValuationSnapshot,
     WatchlistItem,
+    WeeklyNewsArchive,
 )
 from app.services import archive
 from app.services.alerting import evaluate_quote
 from app.services.financials import quarters_from_yf
 from app.services.sec_edgar import fetch_filings
 from app.services.market_context import build_market_context
-from app.services.llm import curate_daily_news, generate_analysis
+from app.services.llm import curate_daily_news, curate_weekly_news, generate_analysis
 from app.services.llm import explain_cross_model
 from app.services.market_calendar import market_status
-from app.services.market_data import fetch_earnings_events, fetch_quotes, fetch_yf_quarterly
+from app.services.market_data import fetch_earnings_events, fetch_quotes, fetch_yf_financial_statements, fetch_yf_quarterly
 from app.services.news import collect_ticker_news, filter_news
 from app.services.news_store import news_for_day, persist_news
 from app.services.relevance import score_news
@@ -64,6 +66,8 @@ celery_app.conf.beat_schedule = {
     "earnings-reports": {"task": "app.tasks.celery_app.earnings_reports", "schedule": 1800},
     "poll-news": {"task": "app.tasks.celery_app.poll_news", "schedule": settings.news_poll_minutes * 60},
     "curate-daily-news": {"task": "app.tasks.celery_app.curate_daily_archives", "schedule": 1800},
+    # 每周汇总：每天跑一次，把已结束的完整 ISO 周（周一起）合并成周报后删除当周原始新闻与每日定档
+    "rollup-weekly-news": {"task": "app.tasks.celery_app.rollup_weekly_archives", "schedule": 3600},
     "sync-financials": {"task": "app.tasks.celery_app.sync_financials", "schedule": 43200},
     "sync-valuations": {"task": "app.tasks.celery_app.sync_valuations", "schedule": 86400},
     "translate-news-titles": {"task": "app.tasks.celery_app.translate_news_titles", "schedule": 60},
@@ -375,10 +379,10 @@ def poll_news(ticker: str | None = None):
     market_date = market_status()["checked_at"][:10]
     parsed = datetime.fromisoformat(market_date).date()
     with SessionLocal() as db:
-        query = select(WatchlistItem).where(WatchlistItem.enabled.is_(True))
+        items = db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all()
+        # A manually requested ticker is intentionally not promoted into the watchlist.
         if ticker:
-            query = query.where(WatchlistItem.ticker == ticker)
-        items = db.scalars(query).all()
+            items = [item for item in items if item.ticker == ticker] or [type("SnapshotTicker", (), {"ticker": ticker.upper()})()]
         total = 0
         now = datetime.now(UTC)
         for item in items:
@@ -457,14 +461,115 @@ def curate_daily_archives():
         return {"curated": curated}
 
 
+def _iso_week_bounds(d) -> tuple[int, int, "date", "date"]:
+    """返回 (iso_year, iso_week, 周一, 周日)。"""
+    iso_year, iso_week, iso_weekday = d.isocalendar()
+    monday = d - timedelta(days=iso_weekday - 1)
+    return iso_year, iso_week, monday, monday + timedelta(days=6)
+
+
+def _weekly_input_hash(archives: list[DailyNewsArchive]) -> str:
+    basis = "|".join(f"{a.market_date.isoformat()}:{a.input_hash}" for a in sorted(archives, key=lambda x: x.market_date))
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:64]
+
+
+@celery_app.task(name="app.tasks.celery_app.rollup_weekly_archives")
+def rollup_weekly_archives():
+    """把已结束的完整 ISO 周（周一起）合并成周报，随后删除当周的原始新闻与每日定档。
+
+    - 只处理周一严格早于“本周周一”的完整周，绝不动本周数据。
+    - 逐 ticker 逐周：合并当周每日定档的关键事实 → 落库 WeeklyNewsArchive → 删除当周 NewsItem + DailyNewsArchive。
+    - 整周删除（非滚动）；缺失一次调度也能在下次自愈。
+    """
+    from datetime import time
+
+    market_date = market_status()["checked_at"][:10]
+    today = datetime.fromisoformat(market_date).date()
+    _, _, current_monday, _ = _iso_week_bounds(today)
+
+    rolled, deleted_news, deleted_daily = 0, 0, 0
+    with SessionLocal() as db:
+        # 过去完整周里仍存在每日定档的行，按 ticker 分组
+        past = db.scalars(
+            select(DailyNewsArchive).where(DailyNewsArchive.market_date < current_monday)
+        ).all()
+        groups: dict[tuple[str, int, int], list[DailyNewsArchive]] = {}
+        for row in past:
+            iso_year, iso_week, _, _ = _iso_week_bounds(row.market_date)
+            groups.setdefault((row.ticker, iso_year, iso_week), []).append(row)
+
+        for (ticker, iso_year, iso_week), archives in groups.items():
+            _, _, week_start, week_end = _iso_week_bounds(archives[0].market_date)
+            week_label = f"{week_start.isoformat()} ~ {week_end.isoformat()}"
+            input_hash = _weekly_input_hash(archives)
+            existing = db.scalar(
+                select(WeeklyNewsArchive).where(
+                    WeeklyNewsArchive.ticker == ticker,
+                    WeeklyNewsArchive.iso_year == iso_year,
+                    WeeklyNewsArchive.iso_week == iso_week,
+                )
+            )
+            if existing and existing.input_hash == input_hash:
+                content, model = existing.content, existing.model
+            else:
+                evidence = "\n\n".join(
+                    f"—— {a.market_date.isoformat()} ——\n{a.content}"
+                    for a in sorted(archives, key=lambda x: x.market_date)
+                )
+                content, model = curate_weekly_news(ticker, week_label, evidence)
+            included_dates = [a.market_date.isoformat() for a in sorted(archives, key=lambda x: x.market_date)]
+            manifest = {
+                "ticker": ticker, "iso_year": iso_year, "iso_week": iso_week,
+                "week": week_label, "model": model, "input_hash": input_hash, "dates": included_dates,
+            }
+            file_path = archive.write_weekly_archive(ticker, iso_year, iso_week, content, manifest)
+            if existing:
+                existing.content = content
+                existing.included_dates = included_dates
+                existing.model = model
+                existing.input_hash = input_hash
+                existing.week_start = week_start
+                existing.week_end = week_end
+                existing.version += 1
+                existing.file_path = file_path
+            else:
+                db.add(
+                    WeeklyNewsArchive(
+                        ticker=ticker, iso_year=iso_year, iso_week=iso_week,
+                        week_start=week_start, week_end=week_end, content=content,
+                        included_dates=included_dates, model=model, input_hash=input_hash,
+                        version=1, file_path=file_path,
+                    )
+                )
+            rolled += 1
+
+        db.flush()
+        # 删除过去完整周的每日定档
+        deleted_daily = db.execute(
+            delete(DailyNewsArchive).where(DailyNewsArchive.market_date < current_monday)
+        ).rowcount or 0
+        # 删除过去完整周的原始新闻（整周删除；本周之前的调查早已完成，报告来源已固化到 Report.sources）
+        cutoff = datetime.combine(current_monday, time.min, tzinfo=UTC)
+        deleted_news = db.execute(
+            delete(NewsItem).where(NewsItem.found_at < cutoff)
+        ).rowcount or 0
+        db.commit()
+    return {"rolled": rolled, "deleted_daily": deleted_daily, "deleted_news": deleted_news}
+
+
 def _sync_ticker_financials(db, ticker: str) -> bool:
     """同步单只财报到 DB + 归档。成功返回 True，无数据/异常返回 False。"""
     try:
         rows = fetch_yf_quarterly(ticker)
+        statement_rows = [
+            (frequency, item)
+            for frequency in ("annual", "quarterly")
+            for item in fetch_yf_financial_statements(ticker, frequency)
+        ]
     except Exception:
         return False
     quarters = quarters_from_yf(rows)
-    if not quarters:
+    if not quarters and not statement_rows:
         return False
     for quarter in quarters:
         row = db.scalar(
@@ -490,12 +595,28 @@ def _sync_ticker_financials(db, ticker: str) -> bool:
         row.free_cash_flow = quarter.free_cash_flow
         row.raw_payload = quarter.raw_payload
         archive.write_quarter(ticker, quarter.label, quarter.raw_payload)
-    keep_labels = [q.label for q in quarters]
-    keep_pairs = {(q.fiscal_year, q.fiscal_period) for q in quarters}
-    for row in db.scalars(select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker)).all():
-        if (row.fiscal_year, row.fiscal_period) not in keep_pairs:
-            db.delete(row)
-    archive.prune_quarters(ticker, keep_labels)
+    for frequency, item in statement_rows:
+        snapshot = db.scalar(select(FinancialStatementSnapshot).where(
+            FinancialStatementSnapshot.ticker == ticker,
+            FinancialStatementSnapshot.frequency == frequency,
+            FinancialStatementSnapshot.period_end == item["period_end"],
+        ))
+        if not snapshot:
+            snapshot = FinancialStatementSnapshot(ticker=ticker, frequency=frequency, period_end=item["period_end"], fiscal_year=item["fiscal_year"], fiscal_period=item["fiscal_period"])
+            db.add(snapshot)
+        snapshot.fiscal_year = item["fiscal_year"]
+        snapshot.fiscal_period = item["fiscal_period"]
+        snapshot.currency = item["currency"]
+        snapshot.income_statement = item["income_statement"]
+        snapshot.balance_sheet = item["balance_sheet"]
+        snapshot.cash_flow = item["cash_flow"]
+    if quarters:
+        keep_labels = [q.label for q in quarters]
+        keep_pairs = {(q.fiscal_year, q.fiscal_period) for q in quarters}
+        for row in db.scalars(select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker)).all():
+            if (row.fiscal_year, row.fiscal_period) not in keep_pairs:
+                db.delete(row)
+        archive.prune_quarters(ticker, keep_labels)
     return True
 
 
@@ -503,8 +624,12 @@ def _sync_ticker_financials(db, ticker: str) -> bool:
 def sync_financials():
     with SessionLocal() as db:
         tickers = valuation_tickers(db)
-        synced = sum(1 for ticker in tickers if _sync_ticker_financials(db, ticker))
-        db.commit()
+        synced = 0
+        # 单只提交：外部源变慢或个别代码失败时，已完成的三表仍可立即被估值与前端使用。
+        for ticker in tickers:
+            if _sync_ticker_financials(db, ticker):
+                synced += 1
+            db.commit()
         return {"synced": synced}
 
 
@@ -526,7 +651,20 @@ def _sync_ticker_valuation(db, ticker: str, explain: bool = True) -> bool:
     if is_watched:
         cache_official_relations(db, ticker, official_peers)
     peers = effective_peer_symbols(db, ticker, official_peers)
-    info, peer_infos, financials = fetch_cross_model_inputs(ticker, peers)
+    statement_rows = db.scalars(select(FinancialStatementSnapshot).where(
+        FinancialStatementSnapshot.ticker == ticker,
+        FinancialStatementSnapshot.frequency == "annual",
+    ).order_by(FinancialStatementSnapshot.period_end.desc()).limit(4)).all()
+    stored_financials = None
+    if statement_rows:
+        periods = []
+        for row in statement_rows:
+            balance = dict(row.balance_sheet or {})
+            # 估值模块沿用历史命名；快照 API 使用更易读的 shareholders_equity。
+            balance["stockholders_equity"] = balance.pop("shareholders_equity", None)
+            periods.append({"date": row.period_end.isoformat(), **(row.income_statement or {}), **balance, **(row.cash_flow or {})})
+        stored_financials = {"source": "financial_statement_snapshots", "periods": periods}
+    info, peer_infos, financials = fetch_cross_model_inputs(ticker, peers, financials=stored_financials)
     if not info:
         return False
     upsert_profile(db, ticker, info)
@@ -534,15 +672,25 @@ def _sync_ticker_valuation(db, ticker: str, explain: bool = True) -> bool:
         symbol = peer_info.get("_peerTicker") or peer_info.get("symbol")
         if symbol:
             upsert_profile(db, symbol, peer_info)
-    quarters = db.scalars(
-        select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker)
-        .order_by(QuarterlyFinancial.period_end.desc()).limit(4)
-    ).all()
-    quarter_inputs = [
-        {"period_end": row.period_end.isoformat(), "eps": row.eps, "net_income": row.net_income,
-         "revenue": row.revenue, "free_cash_flow": row.free_cash_flow}
-        for row in quarters
-    ]
+    quarterly_statement_rows = db.scalars(select(FinancialStatementSnapshot).where(
+        FinancialStatementSnapshot.ticker == ticker,
+        FinancialStatementSnapshot.frequency == "quarterly",
+    ).order_by(FinancialStatementSnapshot.period_end.desc()).limit(4)).all()
+    quarter_inputs = [{
+        "period_end": row.period_end.isoformat(), "eps": (row.income_statement or {}).get("eps"),
+        "net_income": (row.income_statement or {}).get("net_income"), "revenue": (row.income_statement or {}).get("revenue"),
+        "free_cash_flow": (row.cash_flow or {}).get("free_cash_flow"),
+    } for row in quarterly_statement_rows]
+    if not quarter_inputs:  # 兼容首次同步尚未生成三表快照的旧数据。
+        quarters = db.scalars(
+            select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker)
+            .order_by(QuarterlyFinancial.period_end.desc()).limit(4)
+        ).all()
+        quarter_inputs = [
+            {"period_end": row.period_end.isoformat(), "eps": row.eps, "net_income": row.net_income,
+             "revenue": row.revenue, "free_cash_flow": row.free_cash_flow}
+            for row in quarters
+        ]
     latest_quote = db.scalar(
         select(PriceSnapshot).where(PriceSnapshot.ticker == ticker)
         .order_by(PriceSnapshot.quote_time.desc()).limit(1)
