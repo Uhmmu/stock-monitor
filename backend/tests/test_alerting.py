@@ -53,14 +53,21 @@ def test_change_percent():
     assert _change(90, 100) == -10
 
 
-def test_event_key_is_stable_inside_cooldown_bucket():
-    moment = datetime(2026, 1, 1, 12, 5, tzinfo=UTC)
-    assert _event_key("AAPL", "20m", moment, 60) == _event_key("AAPL", "20m", moment + timedelta(minutes=10), 60)
+def test_event_key_is_stable_within_market_day():
+    # 同一美东交易日内不同时刻共享同一事件键 → 一天一家公司只触发一个异动。
+    moment = datetime(2026, 1, 2, 15, 0, tzinfo=UTC)
+    assert _event_key("AAPL", moment) == _event_key("AAPL", moment + timedelta(hours=3))
 
 
-def test_event_key_changes_by_period():
-    moment = datetime(2026, 1, 1, 12, tzinfo=UTC)
-    assert _event_key("AAPL", "20m", moment, 60) != _event_key("AAPL", "1h", moment, 60)
+def test_event_key_changes_across_market_days():
+    day_one = datetime(2026, 1, 2, 15, 0, tzinfo=UTC)
+    day_two = day_one + timedelta(days=1)
+    assert _event_key("AAPL", day_one) != _event_key("AAPL", day_two)
+
+
+def test_event_key_is_ticker_scoped():
+    moment = datetime(2026, 1, 2, 15, 0, tzinfo=UTC)
+    assert _event_key("AAPL", moment) != _event_key("MSFT", moment)
 
 
 def test_market_status_supports_future_dates():

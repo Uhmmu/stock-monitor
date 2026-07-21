@@ -157,6 +157,7 @@ textarea{resize:vertical;min-height:140px}
   box-shadow:var(--shadow-s);transition:box-shadow .3s var(--spring)}
 .investigations article:hover{box-shadow:var(--shadow-m)}
 .investigations h2{margin:10px 0 4px;font-size:19px}
+.investigations h2 .group-count{font-style:normal;font-size:14px;color:var(--ink-3);font-weight:600;margin-left:4px}
 .investigations p{color:var(--ink-3);margin:0;font-size:13px}
 .investigations strong{font-size:30px;letter-spacing:-.03em}
 .investigations strong small{font-size:12px;color:var(--ink-3);font-weight:500}

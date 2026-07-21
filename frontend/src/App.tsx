@@ -53,6 +53,31 @@ type TradeLog = {id:number;trade_date:string;ticker:string|null;direction:string
 
 const formatPrice = (value:number|null) => value == null ? '等待行情' : `$${value.toFixed(2)}`
 const formatDate = (value:string) => new Date(value).toLocaleString('zh-CN')
+// 同一股票在同一美东交易日的多次异动调查归并为一张卡片（后端已限制一天一个，此处兜底并处理历史数据）
+const marketDayKey = (value:string) => new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value))
+type InvestigationGroup = {key:string;ticker:string;status:string;started_at:string;ends_at:string;news_count:number;last_error:string|null;items:Investigation[]}
+const groupInvestigations = (rows:Investigation[]|undefined):InvestigationGroup[] => {
+  if(!rows?.length) return []
+  const order:string[] = []
+  const map = new Map<string,InvestigationGroup>()
+  const rank:Record<string,number> = {active:0,reporting:1,completed:2}
+  for(const item of rows){
+    const key = `${item.ticker}:${marketDayKey(item.started_at)}`
+    const existing = map.get(key)
+    if(!existing){
+      order.push(key)
+      map.set(key,{key,ticker:item.ticker,status:item.status,started_at:item.started_at,ends_at:item.ends_at,news_count:item.news_count,last_error:item.last_error,items:[item]})
+      continue
+    }
+    existing.items.push(item)
+    existing.news_count += item.news_count
+    if(item.started_at < existing.started_at) existing.started_at = item.started_at
+    if(item.ends_at > existing.ends_at) existing.ends_at = item.ends_at
+    if((rank[item.status]??9) < (rank[existing.status]??9)) existing.status = item.status
+    if(!existing.last_error && item.last_error) existing.last_error = item.last_error
+  }
+  return order.map(key=>map.get(key)!)
+}
 const typeNames:Record<string,string> = {premarket:'盘前',postmarket:'盘后',movement:'价格异动',earnings_before:'财报前',earnings_after:'财报后'}
 const sectorNames:Record<string,string> = {
   'Basic Materials':'基础材料','Communication Services':'通信服务','Consumer Cyclical':'可选消费','Consumer Defensive':'必需消费',
@@ -194,7 +219,7 @@ export default function App() {
   return <div className="app">
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
     <aside className={mobileNavOpen?'mobile-open':''}>
-      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div><div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{investigations.data?.length||0}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
+      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div><div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{groupInvestigations(investigations.data).length}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
       <nav>{tabs.map(([key,label],index)=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{index===10&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
       <div className="account-card"><span className="account-avatar">{authUser.username.slice(0,1)}</span><span><b>{demoMode?'演示空间':authUser.username}</b><small>{demoMode?'本地预览模式':'已安全连接'}</small></span><i className={viewDashboard?.market.is_open?'online':''}/></div>
       <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setDemoMode(false);setToken('');setAuthUser(null)}}>{demoMode?'退出预览':'退出登录'}</button></aside>
@@ -210,7 +235,7 @@ export default function App() {
         <section className="split"><div><div className="section-title"><div><p>SIGNALS</p><h2>最近异动</h2></div></div>{viewAlerts?.slice(0,5).map(a=><div className="list-row" key={a.id}><span className="signal-symbol">{a.ticker.slice(0,1)}</span><b>{a.ticker}</b><span>{a.period}</span><em className={a.change_percent<0?'negative':'positive'}>{a.change_percent>=0?'+':''}{a.change_percent.toFixed(2)}%</em></div>)}</div><div><div className="section-title"><div><p>INTELLIGENCE</p><h2>最新报告</h2></div></div>{viewReports?.slice(0,5).map(r=><button className="report-row" key={r.id} onClick={()=>!demoMode&&setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{demoMode?'刚刚生成':formatDate(r.created_at)}</small></button>)}</div></section>
       </>}
       {tab==='watchlist'&&<StockManagement onWatchlistChanged={()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}}/>}
-      {tab==='alerts'&&<div className="investigations">{investigations.data?.map(item=><article key={item.id}><div><span className={`status ${item.status}`}>{item.status}</span><h2>{item.ticker} 异动调查</h2><p>{formatDate(item.started_at)} — {formatDate(item.ends_at)}</p></div><strong>{item.news_count}<small> 条新闻线索</small></strong>{item.last_error&&<p className="error">{item.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}
+      {tab==='alerts'&&<div className="investigations">{groupInvestigations(investigations.data).map(group=><article key={group.key}><div><span className={`status ${group.status}`}>{group.status}</span><h2>{group.ticker} 异动调查{group.items.length>1&&<em className="group-count"> ×{group.items.length}</em>}</h2><p>{formatDate(group.started_at)} — {formatDate(group.ends_at)}</p></div><strong>{group.news_count}<small> 条新闻线索</small></strong>{group.last_error&&<p className="error">{group.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}
       {tab==='reports'&&<div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div>}
       {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
       {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
