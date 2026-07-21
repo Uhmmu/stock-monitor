@@ -177,6 +177,7 @@ export default function App() {
   const [selectedWeight,setSelectedWeight] = useState<WeightDetail|null>(null)
   const [selectedStatementMetric,setSelectedStatementMetric] = useState<StatementMetric|null>(null)
   const [stocksExpanded,setStocksExpanded] = useState(false)
+  const [activeTicker,setActiveTicker] = useState('')
   const client = useQueryClient()
   const live = !!authUser&&!demoMode
   const dashboard = useQuery({queryKey:['dashboard'],queryFn:()=>api<Dashboard>('/dashboard'),refetchInterval:30000,enabled:live})
@@ -237,11 +238,11 @@ export default function App() {
       {tab==='watchlist'&&<StockManagement onWatchlistChanged={()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}}/>}
       {tab==='alerts'&&<div className="investigations">{groupInvestigations(investigations.data).map(group=><article key={group.key}><div><span className={`status ${group.status}`}>{group.status}</span><h2>{group.ticker} 异动调查{group.items.length>1&&<em className="group-count"> ×{group.items.length}</em>}</h2><p>{formatDate(group.started_at)} — {formatDate(group.ends_at)}</p></div><strong>{group.news_count}<small> 条新闻线索</small></strong>{group.last_error&&<p className="error">{group.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}
       {tab==='reports'&&<div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div>}
-      {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
-      {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
-      {tab==='financials'&&<FinancialStatementsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onStatementMetric={setSelectedStatementMetric}/>}
-      {tab==='crossmodel'&&<CrossModelCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onMetric={setSelectedModel} onWeight={setSelectedWeight}/>}
-      {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]}/>}
+      {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
+      {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
+      {tab==='financials'&&<FinancialStatementsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onStatementMetric={setSelectedStatementMetric} active={activeTicker} setActive={setActiveTicker}/>}
+      {tab==='crossmodel'&&<CrossModelCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onMetric={setSelectedModel} onWeight={setSelectedWeight} active={activeTicker} setActive={setActiveTicker}/>}
+      {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='congress'&&<CongressCenter/>}
       {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
       {tab==='settings'&&settings.data&&<><SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>{authUser.role==='admin'&&<AdminPanel/>}</> }
@@ -303,8 +304,7 @@ function GrahamPanel({ticker,initial}:{ticker:string;initial:GrahamAnalysis}) {
   </section>
 }
 
-function CrossModelCenter({tickers,onMetric,onWeight}:{tickers:string[];onMetric:(metric:CrossMetric)=>void;onWeight:(weight:WeightDetail)=>void}) {
-  const [active,setActive] = useState(tickers[0]||'')
+function CrossModelCenter({tickers,onMetric,onWeight,active,setActive}:{tickers:string[];onMetric:(metric:CrossMetric)=>void;onWeight:(weight:WeightDetail)=>void;active:string;setActive:(ticker:string)=>void}) {
   const [editingPeers,setEditingPeers] = useState(false)
   const [peerTicker,setPeerTicker] = useState('')
   const current = active||tickers[0]||''
@@ -450,8 +450,7 @@ const statementMetricInfo:Record<string,StatementMetric> = {
   investing_cash_flow:{label:'投资活动现金流',english:'Investing Cash Flow',description:'收购、出售投资及长期资产投资相关的现金流。',impact:'需区分正常投资、并购扩张和资产处置等不同驱动。'},
 }
 
-function FundamentalsCenter({tickers}:{tickers:string[]}) {
-  const [active,setActive] = useState(tickers[0]||'')
+function FundamentalsCenter({tickers,active,setActive}:{tickers:string[];active:string;setActive:(ticker:string)=>void}) {
   const current = active||tickers[0]||''
   const fundamentals = useQuery({queryKey:['fundamentals',current],queryFn:()=>api<Fundamentals>(`/fundamentals?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
   const financials = useQuery({queryKey:['financials',current],queryFn:()=>api<Financial[]>(`/financials?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
@@ -476,8 +475,7 @@ function FundamentalsCenter({tickers}:{tickers:string[]}) {
   </div>
 }
 
-function FinancialStatementsCenter({tickers,onStatementMetric}:{tickers:string[];onStatementMetric:(metric:StatementMetric)=>void}) {
-  const [active,setActive] = useState(tickers[0]||'')
+function FinancialStatementsCenter({tickers,onStatementMetric,active,setActive}:{tickers:string[];onStatementMetric:(metric:StatementMetric)=>void;active:string;setActive:(ticker:string)=>void}) {
   const [frequency,setFrequency] = useState<'annual'|'quarterly'>('annual')
   const current = active||tickers[0]||''
   const statements = useQuery({queryKey:['financial-statements',current,frequency],queryFn:()=>api<FinancialStatement[]>(`/financial-statements?ticker=${current}&frequency=${frequency}`),enabled:!!current,refetchInterval:current?5000:false})
@@ -506,8 +504,7 @@ function FinancialStatementsPanel({frequency,setFrequency,rows,loading,onMetric}
   </section>
 }
 
-function SecCenter({tickers}:{tickers:string[]}) {
-  const [active,setActive] = useState(tickers[0]||'')
+function SecCenter({tickers,active,setActive}:{tickers:string[];active:string;setActive:(ticker:string)=>void}) {
   const [view,setView] = useState<'events'|'financials'|'insider'|'holdings'>('events')
   const client = useQueryClient()
   const current = active||tickers[0]||''
@@ -560,8 +557,7 @@ function SecCenter({tickers}:{tickers:string[]}) {
   </div>
 }
 
-function NewsCenter({tickers}:{tickers:string[]}) {
-  const [active,setActive] = useState(tickers[0]||'')
+function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;setActive:(ticker:string)=>void}) {
   const [weeklyOpen,setWeeklyOpen] = useState(false)
   const client = useQueryClient()
   const current = active||tickers[0]||''
