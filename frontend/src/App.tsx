@@ -382,7 +382,7 @@ function CrossModelCenter({tickers,onMetric,onWeight,active,setActive}:{tickers:
   const [peerSecurity,setPeerSecurity] = useState<SecuritySearchResult|null>(null)
   const current = active||tickers[0]||''
   const client = useQueryClient()
-  const result = useQuery({queryKey:['cross-model',current],queryFn:()=>api<CrossModel>(`/cross-model?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
+  const result = useQuery({queryKey:['cross-model',current],queryFn:()=>api<CrossModel>(`/cross-model?ticker=${current}`),enabled:!!current,refetchInterval:current?60000:false})
   const peerList = useQuery({queryKey:['peers',current],queryFn:()=>api<PeerList>(`/peers/${current}`),enabled:!!current&&editingPeers})
   const refresh = useMutation({mutationFn:()=>post(`/cross-model/refresh?ticker=${current}`,{}),onSuccess:()=>setTimeout(()=>client.invalidateQueries({queryKey:['cross-model',current]}),12000)})
   const peersChanged = () => {client.invalidateQueries({queryKey:['peers',current]});client.invalidateQueries({queryKey:['stock-management']});setTimeout(()=>client.invalidateQueries({queryKey:['cross-model',current]}),12000)}

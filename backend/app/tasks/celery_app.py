@@ -687,8 +687,18 @@ def _sync_ticker_valuation(db, ticker: str, explain: bool = True) -> bool:
         official_peers = fetch_company_peers(finnhub_ticker) if finnhub_ticker else []
     except Exception:
         official_peers = []
+    # Finnhub 免费额度经常临时返回空/限流；此时回退到最近一份仍有官方同行的快照，
+    # 避免把已有官方同行整批清空（今日快照可能已被清空，故需跳过空结果向前找）。
+    if not official_peers:
+        recent = db.scalars(select(ValuationSnapshot).where(ValuationSnapshot.ticker == ticker).order_by(ValuationSnapshot.snapshot_date.desc(), ValuationSnapshot.id.desc()).limit(5)).all()
+        for snap in recent:
+            cached = list((snap.payload.get("peers") or {}).get("official_symbols") or [])
+            if cached:
+                official_peers = cached
+                break
     is_watched = bool(db.scalar(select(WatchlistItem.id).where(WatchlistItem.ticker == ticker, WatchlistItem.enabled.is_(True))))
-    if is_watched:
+    # 仅在确有官方结果时刷新官方关系缓存，空结果不落库以免误禁用。
+    if is_watched and official_peers:
         cache_official_relations(db, ticker, official_peers)
     peers = effective_peer_symbols(db, ticker, official_peers)
     statement_rows = db.scalars(select(FinancialStatementSnapshot).where(
