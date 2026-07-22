@@ -8,7 +8,7 @@
 
 - **实时行情与自选股**：按计划轮询自选标的，展示价格、涨跌幅、市场状态和 TradingView 图表。
 - **异动提醒与调查**：按 20 分钟、1 小时和日内阈值检测异常波动，并自动收集相关新闻与上下文。
-- **新闻与 SEC 数据**：个股新闻聚合 Yahoo、Finnhub、Marketaux 与 Tavily；“新闻中心”的紫色“全市场”入口以 Finnhub 市场新闻为主、Marketaux 为补充，并用本地规则过滤、事件聚类、重要度排序和主题均衡，不消耗 LLM 筛选额度。
+- **新闻与 SEC 数据**：个股新闻聚合 Yahoo、Finnhub、Marketaux 与 Tavily；“新闻中心”的紫色“全市场”入口以 Finnhub 市场新闻为主、Marketaux 为补充，并用本地规则过滤、事件聚类、重要度排序和主题均衡，不消耗 LLM 筛选额度。市场新闻与个股新闻都支持按卡片请求 AI 总结。
 - **基本面与估值**：展示财报、分析师评级、季度数据、DCF 情景和同行估值比较。
 - **轻量技术分析**：从 FMP 缓存最多约五年的日线 OHLCV，在本地聚合周线、计算指标与关键区域，并生成可持久化的静态 WebP 图表。
 - **多模型交叉**：根据行业与公司特征组合模型权重，并计算 Forward P/E、PEG、EV/Sales、DCF、ROIC、Piotroski F-Score、Altman Z-Score 等指标。计算结果会显示公式、数据来源、缺失字段和适用性，不把缺失数据伪装成 0 分。
@@ -55,6 +55,14 @@ DATABASE_URL=postgresql+psycopg://stock:change-this@postgres:5432/stock_monitor
 
 FINNHUB_API_KEY=your-finnhub-key
 TAVILY_API_KEY=your-tavily-key
+MARKETAUX_API_KEY=                  # 可选；用于补充市场/个股新闻
+MARKETAUX_ENABLED=true
+MARKET_NEWS_ENABLED=true
+FINNHUB_MARKET_NEWS_ENABLED=true
+MARKETAUX_MARKET_NEWS_ENABLED=true
+MARKET_NEWS_POLL_MINUTES=60
+MARKETAUX_MARKET_REQUESTS_RESERVE=12
+MARKET_NEWS_MAX_ITEMS=20
 FMP_API_KEY=your-fmp-key
 FMP_DAILY_REQUEST_LIMIT=150
 FMP_REQUEST_RESERVE=10
@@ -111,6 +119,13 @@ docker compose -f compose.yaml -f compose.override.yaml up -d
 登录后进入“自选股”，添加股票代码，例如 `AAPL`、`MSFT` 或 `NVDA`。后台任务会逐步拉取行情、财报、新闻和模型快照。
 
 FMP 配额按 UTC 自然日记账。每次 HTTP 尝试都会先原子预留并持久化，实际可用量为 `FMP_DAILY_REQUEST_LIMIT - FMP_REQUEST_RESERVE`；耗尽后保存当前队列位置，下一 UTC 日从未完成股票继续。公开读取接口只访问数据库与图表缓存，不会触发 FMP 请求。公司资料默认按 180 天长缓存处理，Yahoo 仍是财务报表来源。
+
+### 新闻采集与总结
+
+- “全市场”新闻默认每小时处理一次，Finnhub 是主源；Marketaux 是补充源，按独立状态和每日预留额度运行。没有 `MARKETAUX_API_KEY` 时，Finnhub 市场新闻仍可正常工作。
+- 个股新闻按现有轮询周期采集。所有新闻先经过字段校验、追踪参数清理、精确去重、相似事件聚类、质量/重要度评分和软性多样性重排，再写入数据库。
+- 市场新闻重点覆盖宏观经济、央行利率、美股市场、政策监管、地缘政治、能源和科技等主题；个股新闻会提高财报、并购、监管、管理层变化和融资等事件的优先级，并降低标题党内容的排序。
+- 新闻卡片不下载或展示图片。点击“AI 总结”后才会对单条已入库新闻调用配置的 OpenAI-compatible 模型；AI 失败不会影响新闻抓取和入库。
 
 ## 常用命令
 
