@@ -43,6 +43,12 @@ class FmpInvalidSymbol(FmpError):
     code = "invalid_symbol"
 
 
+class FmpPremiumRequired(FmpError):
+    """HTTP 402：该标的的数据超出当前 FMP 订阅套餐（付费墙），并非无效代码。"""
+
+    code = "premium_required"
+
+
 class FmpMalformedResponse(FmpError):
     code = "malformed_response"
 
@@ -185,6 +191,8 @@ def request_json(
             row.requests_used, row.status = _usable_limit(config), "quota_exhausted"
             db.commit()
         raise FmpQuotaExhausted("FMP upstream quota/rate limit reached")
+    if status == 402:
+        raise FmpPremiumRequired(f"{symbol}: HTTP 402 (超出当前 FMP 订阅套餐)")
     if status == 404:
         raise FmpInvalidSymbol(symbol)
     if status >= 500:

@@ -18,9 +18,32 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import HistoricalPrice, TechnicalAnalysis
+from app.services.market_data import fetch_daily_history
 
 ANALYSIS_VERSION = "weekly-v1"
+# 历史数据源优先级：FMP 优先（付费主源），其数据无法覆盖的标的（如 HTTP 402）回退 yfinance 免费源。
+HISTORY_SOURCES = ("fmp", "yahoo")
+FALLBACK_SOURCE = "yahoo"
 logger = logging.getLogger(__name__)
+
+
+def _load_history(db: Session, symbol: str) -> tuple[list[HistoricalPrice], str | None]:
+    """按 HISTORY_SOURCES 优先级返回该标的的历史行与命中的 source（都没有则 (空, None)）。"""
+    value = symbol.upper()
+    for source in HISTORY_SOURCES:
+        rows = list(
+            db.scalars(
+                select(HistoricalPrice)
+                .where(
+                    HistoricalPrice.symbol == value,
+                    HistoricalPrice.source == source,
+                )
+                .order_by(HistoricalPrice.date)
+            ).all()
+        )
+        if rows:
+            return rows, source
+    return [], None
 
 
 def _f(value: Any) -> float | None:
@@ -369,7 +392,7 @@ def trend_lines(
     return output
 
 
-def build_analysis(symbol: str, daily: list[Any]) -> tuple[dict, list[dict]]:
+def build_analysis(symbol: str, daily: list[Any], source: str = "fmp") -> tuple[dict, list[dict]]:
     weekly_all = aggregate_weekly(daily)
     weekly = weekly_all[-156:]
     if not weekly:
@@ -465,7 +488,7 @@ def build_analysis(symbol: str, daily: list[Any]) -> tuple[dict, list[dict]]:
         },
         "confluences": confluences,
         "omittedReasons": omitted,
-        "source": "fmp",
+        "source": source,
         "analysisVersion": ANALYSIS_VERSION,
     }
     return result, weekly
@@ -572,17 +595,55 @@ def render_chart(symbol: str, weekly: list[dict], analysis: dict, path: str) -> 
         Path(temp).unlink(missing_ok=True)
 
 
-def generate_for_symbol(db: Session, symbol: str, *, force: bool = False) -> dict:
-    rows = list(
-        db.scalars(
-            select(HistoricalPrice)
-            .where(
-                HistoricalPrice.symbol == symbol.upper(),
-                HistoricalPrice.source == "fmp",
+def _upsert_history(db: Session, rows: list[dict]) -> tuple[int, int]:
+    """按 (symbol, date, source) 幂等 upsert；返回 (处理行数, 变更行数)。与 fmp_market.upsert_history 同构。"""
+    if not rows:
+        return 0, 0
+    changed = 0
+    for values in rows:
+        existing = db.scalar(
+            select(HistoricalPrice).where(
+                HistoricalPrice.symbol == values["symbol"],
+                HistoricalPrice.date == values["date"],
+                HistoricalPrice.source == values["source"],
             )
-            .order_by(HistoricalPrice.date)
-        ).all()
+        )
+        if existing is None:
+            db.add(HistoricalPrice(**values))
+            changed += 1
+            continue
+        if any(
+            getattr(existing, key) != value
+            for key, value in values.items()
+            if key not in {"symbol", "date", "source"}
+        ):
+            for key, value in values.items():
+                if key not in {"symbol", "date", "source"}:
+                    setattr(existing, key, value)
+            changed += 1
+    db.flush()
+    return len(rows), changed
+
+
+def sync_fallback_history(db: Session, symbol: str, *, today: date | None = None) -> dict:
+    """yfinance 回退：仅当 FMP 无法提供该标的历史时使用。拉取日线 EOD 并 upsert 到 source=yahoo。"""
+    value = symbol.upper()
+    rows = fetch_daily_history(value, today=today)
+    total, changed = _upsert_history(db, rows)
+    db.commit()
+    logger.info(
+        "[technical-analysis] yahoo fallback sync symbol=%s received=%d changed=%d",
+        value,
+        total,
+        changed,
     )
+    # generate_for_symbol 幂等：input_hash 未变且已有 ready 图表时自动跳过重算。
+    analysis = generate_for_symbol(db, value)
+    return {"received": total, "changed": changed, "analysis": analysis}
+
+
+def generate_for_symbol(db: Session, symbol: str, *, force: bool = False) -> dict:
+    rows, source = _load_history(db, symbol)
     if not rows:
         return {"status": "pending", "reason": "historical_data_unavailable"}
     digest = input_hash(rows)
@@ -601,7 +662,7 @@ def generate_for_symbol(db: Session, symbol: str, *, force: bool = False) -> dic
         Path(settings.technical_chart_dir) / f"{symbol.upper()}-{digest[:12]}.webp"
     )
     try:
-        analysis, weekly = build_analysis(symbol.upper(), rows)
+        analysis, weekly = build_analysis(symbol.upper(), rows, source or "fmp")
         render_chart(symbol.upper(), weekly, analysis, path)
     except Exception as exc:
         row = existing or TechnicalAnalysis(

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import yfinance as yf
@@ -247,3 +248,72 @@ def fetch_quotes(tickers: list[str]) -> list[Quote]:
             )
         )
     return quotes
+
+
+# 技术分析的日线 EOD 历史来源（yfinance 免费源）。校验规则与 fmp_market.parse_history 对齐：
+# 只保留正价、high>=low、OHLC 自洽的交易日，绝不编造缺失字段。
+_HISTORY_MAX_DAYS = 5 * 366 + 10
+
+
+def _hist_decimal(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def fetch_daily_history(
+    ticker: str, *, today: date | None = None, period: str = "5y"
+) -> list[dict]:
+    """拉取约 5 年日线 EOD，返回按日期升序、字段与 HistoricalPrice 对齐的候选行（source=yahoo）。
+
+    Yahoo 不提供 vwap，vwap 留空由周聚合按 (H+L+C)/3 兜底；change/change_percent 由收盘价日环比推导。
+    """
+    symbol = ticker.upper()
+    frame = yf.Ticker(symbol).history(period=period, interval="1d", auto_adjust=False)
+    if frame is None or frame.empty:
+        return []
+    cutoff = (today or datetime.now(UTC).date()) - timedelta(days=_HISTORY_MAX_DAYS)
+    unique: dict[date, dict] = {}
+    prev_close: Decimal | None = None
+    for index, raw in frame.iterrows():
+        try:
+            day = index.date()
+        except AttributeError:
+            continue
+        if not isinstance(day, date) or day < cutoff:
+            continue
+        o, h, low, close = (
+            _hist_decimal(raw.get(key)) for key in ("Open", "High", "Low", "Close")
+        )
+        volume = _hist_decimal(raw.get("Volume"))
+        if None in (o, h, low, close) or min(o, h, low, close) <= 0 or h < low:
+            prev_close = None
+            continue
+        if o > h or o < low or close > h or close < low or (volume is not None and volume < 0):
+            prev_close = None
+            continue
+        # 量化到列精度 Numeric(_, 6)，避免 upsert 因浮点/精度差异误判"已变化"。
+        _q = Decimal("0.000001")
+        change = (close - prev_close).quantize(_q) if prev_close and prev_close > 0 else None
+        change_percent = (
+            (close - prev_close) / prev_close * 100
+        ).quantize(_q) if prev_close and prev_close > 0 else None
+        unique[day] = {
+            "symbol": symbol,
+            "date": day,
+            "open": o,
+            "high": h,
+            "low": low,
+            "close": close,
+            "volume": int(volume) if volume is not None else None,
+            "vwap": None,
+            "change": change,
+            "change_percent": change_percent,
+            "source": "yahoo",
+        }
+        prev_close = close
+    return [unique[key] for key in sorted(unique)]

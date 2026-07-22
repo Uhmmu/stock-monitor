@@ -320,9 +320,9 @@ def technical_analysis_detail(symbol: str, db: Session = Depends(get_db)):
     result["profile"] = _profile_out(db, value, db.get(CompanyProfile, value))
     oldest = db.scalar(select(HistoricalPrice.date).where(HistoricalPrice.symbol == value).order_by(HistoricalPrice.date).limit(1))
     newest = db.scalar(select(HistoricalPrice.date).where(HistoricalPrice.symbol == value).order_by(HistoricalPrice.date.desc()).limit(1))
-    state = db.scalar(select(FmpSyncState).where(FmpSyncState.symbol == value, FmpSyncState.sync_type == "price"))
-    result["data_status"] = {"source": "fmp", "oldest_stored_date": oldest, "latest_stored_date": newest,
-                             "last_successful_sync": state.last_success_at if state else None,
+    analysis = result.get("analysis") or {}
+    result["data_status"] = {"source": analysis.get("source"), "oldest_stored_date": oldest, "latest_stored_date": newest,
+                             "last_successful_sync": result.get("generated_at"),
                              "profile_status": result["profile"]["status"], "analysis_status": result["status"]}
     return result
 
@@ -380,8 +380,9 @@ def fmp_admin_sync_symbol(symbol: str, db: Session = Depends(get_db)):
 @router.post("/admin/technical-analysis/regenerate/{symbol}", dependencies=[Depends(get_admin_user)], status_code=status.HTTP_202_ACCEPTED)
 def regenerate_technical_analysis(symbol: str, db: Session = Depends(get_db)):
     value = _require_watched_ticker(db, symbol)
-    from app.tasks.celery_app import generate_technical_analysis
-    generate_technical_analysis.delay(value, True)
+    from app.tasks.celery_app import sync_technical_analysis
+    # 先从 yfinance 拉取日线历史，再重算——保证从未同步过的标的也能生成。
+    sync_technical_analysis.delay(value)
     return {"status": "queued", "symbol": value}
 
 

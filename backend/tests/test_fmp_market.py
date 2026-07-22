@@ -8,8 +8,11 @@ from sqlalchemy.orm import Session
 from app.database import Base
 from app.models import CompanyProfile, HistoricalPrice
 from app.services.fmp_market import (
+    FmpInvalidSymbol,
+    FmpPremiumRequired,
     FmpQuotaExhausted,
     parse_history,
+    request_json,
     reserve_request,
     store_profile,
     upsert_history,
@@ -71,6 +74,37 @@ def test_reverse_history_deduplicates_and_rejects_invalid_rows(db):
     db.commit()
     assert upsert_history(db, rows) == (2, 0)
     assert len(db.scalars(select(HistoricalPrice)).all()) == 2
+
+
+def _http_config(status_code):
+    return SimpleNamespace(
+        fmp_sync_enabled=True,
+        fmp_api_key="secret",
+        fmp_base_url="https://fmp.test/stable",
+        fmp_daily_request_limit=100,
+        fmp_request_reserve=0,
+        fmp_request_timeout_seconds=15,
+    )
+
+
+def test_http_402_is_premium_not_invalid_symbol(db):
+    def get(url, **kwargs):
+        return SimpleNamespace(status_code=402, text="Premium", json=lambda: {})
+
+    with pytest.raises(FmpPremiumRequired) as exc:
+        request_json(db, "historical-price-eod/full", "IREN",
+                     config=_http_config(402), now=datetime(2026, 7, 22, tzinfo=UTC), http_get=get)
+    assert exc.value.code == "premium_required"
+    assert not isinstance(exc.value, FmpInvalidSymbol)
+
+
+def test_http_404_still_invalid_symbol(db):
+    def get(url, **kwargs):
+        return SimpleNamespace(status_code=404, text="Not found", json=lambda: {})
+
+    with pytest.raises(FmpInvalidSymbol):
+        request_json(db, "historical-price-eod/full", "NOPE",
+                     config=_http_config(404), now=datetime(2026, 7, 22, tzinfo=UTC), http_get=get)
 
 
 def test_budget_reservation_and_utc_reset(db):

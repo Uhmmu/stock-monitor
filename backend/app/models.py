@@ -245,7 +245,7 @@ class NewsProviderState(Base):
 
 
 class HistoricalPrice(Base):
-    """Validated daily EOD candles. FMP is the only writer for this table."""
+    """Validated daily EOD candles. Written by FMP (primary) and yfinance (fallback); distinguished by `source`."""
     __tablename__ = "historical_prices"
     __table_args__ = (
         UniqueConstraint("symbol", "date", "source", name="uq_historical_prices_symbol_date_source"),

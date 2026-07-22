@@ -48,8 +48,8 @@ from app.services.market_data import fetch_earnings_events, fetch_quotes, fetch_
 from app.services.marketaux import fetch_marketaux_market_news, fetch_marketaux_news
 # Legacy FMP news records remain readable, but FMP is no longer scheduled as a
 # news source: the provider is reserved for profile and EOD history endpoints.
-from app.services.fmp_market import FmpAuthenticationError, FmpError, FmpQuotaExhausted, checkpoint, sync_history as sync_fmp_history_service, sync_profile as sync_fmp_profile_service
-from app.services.technical_analysis import generate_for_symbol
+from app.services.fmp_market import FmpAuthenticationError, FmpError, FmpInvalidSymbol, FmpPremiumRequired, FmpQuotaExhausted, checkpoint, sync_history as sync_fmp_history_service, sync_profile as sync_fmp_profile_service
+from app.services.technical_analysis import generate_for_symbol, sync_fallback_history
 from app.services.company_profile_translation import translate_description
 from app.services.news import MARKET_TICKER, collect_ticker_news, prepare_news
 from app.services.news_store import news_for_day, persist_news
@@ -832,7 +832,7 @@ def sync_ticker_full(ticker: str):
     sync_ticker_congress.delay(value)
     sync_ticker_valuation.delay(value)
     poll_news.delay(value)
-    sync_fmp_symbol.delay(value)
+    sync_fmp_symbol.delay(value)  # FMP 优先，其失败时内部回退 yahoo，并生成技术分析
     return {"ticker": value, "status": "queued_full_sync"}
 
 
@@ -877,6 +877,14 @@ def _run_fmp_symbol(db, symbol: str, position: int = 0, *, profile: bool = True,
         except FmpQuotaExhausted as exc:
             checkpoint(db, "history", symbol, "price", status="pending", now=now, error=exc, position=position)
             raise
+        except (FmpPremiumRequired, FmpInvalidSymbol) as exc:
+            # FMP 套餐不覆盖该标的（402）或代码无效（404）：回退 yfinance 免费日线源。
+            checkpoint(db, "history", symbol, "price", status="failed", now=now, error=exc, position=position)
+            try:
+                result["history"] = sync_fallback_history(db, symbol, today=now.date())
+                result["history_source"] = "yahoo"
+            except Exception:
+                logger.exception("[technical-analysis] yahoo fallback failed symbol=%s", symbol)
         except FmpError as exc:
             checkpoint(db, "history", symbol, "price", status="failed", now=now, error=exc, position=position)
             if isinstance(exc, FmpAuthenticationError):
@@ -992,6 +1000,32 @@ def translate_fmp_profiles():
 def generate_technical_analysis(symbol: str, force: bool = False):
     with SessionLocal() as db:
         return generate_for_symbol(db, symbol.upper(), force=force)
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_technical_analysis")
+def sync_technical_analysis(symbol: str):
+    """单只技术分析同步：FMP 优先，其数据无法覆盖时回退 yfinance，随后强制重算。
+
+    供自选股初始化与管理端 regenerate 使用。FMP 已禁用/无 key 时直接走 yahoo 回退。
+    """
+    value = symbol.upper()
+    with SessionLocal() as db:
+        if settings.fmp_sync_enabled and settings.fmp_api_key.strip():
+            try:
+                _run_fmp_symbol(db, value, profile=False)
+            except FmpQuotaExhausted:
+                return {"symbol": value, "status": "pending_quota"}
+            except FmpError:
+                logger.exception("[technical-analysis] fmp sync failed symbol=%s", value)
+        # 若上面 FMP 成功写入了 fmp 源、或回退写入了 yahoo 源，force 重算确保出图。
+        analysis = generate_for_symbol(db, value, force=True)
+        if analysis.get("status") == "pending":
+            # FMP 完全不可用且尚无任何历史：直接尝试 yahoo 回退。
+            try:
+                return sync_fallback_history(db, value)
+            except Exception:
+                logger.exception("[technical-analysis] yahoo fallback failed symbol=%s", value)
+        return {"symbol": value, "analysis": analysis}
 
 
 def _sync_ticker_filings(db, ticker: str) -> int:
