@@ -47,3 +47,14 @@ def test_market_pipeline_clusters_and_diversifies():
     assert len(final) == 2
     assert stats["clustered"] == 1
     assert {row.topic for row in final} >= {"央行与利率", "能源与大宗商品"}
+
+
+def test_market_diversity_soft_limits_backfill_articles_without_tickers():
+    now = datetime.now(UTC)
+    labels = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet"]
+    rows = [
+        NewsDTO("finnhub", "__MARKET__", f"Market update {label} oil", f"https://r.test/{index}", external_id=str(index), source="Reuters", published_at=now)
+        for index, label in enumerate(labels)
+    ]
+    final, _ = prepare_news(rows, scope="market", now=now, limit=8)
+    assert len(final) == 8

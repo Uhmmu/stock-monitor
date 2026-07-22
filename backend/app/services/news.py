@@ -200,13 +200,22 @@ def cluster_news(items: list[NewsDTO]) -> tuple[list[NewsDTO], int]:
 def diversify(items: list[NewsDTO], limit: int) -> list[NewsDTO]:
     topic_count: dict[str, int] = {}; source_count: dict[str, int] = {}; ticker_count: dict[str, int] = {}; result: list[NewsDTO] = []
     ranked = sorted(items, key=lambda row: row.importance_score + row.quality_score, reverse=True)
+    deferred: list[NewsDTO] = []
     for item in ranked:
         source = normalize_news_source(item.source)
         ticker = (item.symbols or [item.ticker])[0]
-        if topic_count.get(item.topic, 0) >= 5 or source_count.get(source, 0) >= 4 or ticker_count.get(ticker, 0) >= 3:
+        # A market article without an identified company must not be treated as
+        # one synthetic company merely because it uses the storage sentinel.
+        ticker_limited = not (item.scope == "market" and not item.symbols)
+        if topic_count.get(item.topic, 0) >= 5 or source_count.get(source, 0) >= 4 or (ticker_limited and ticker_count.get(ticker, 0) >= 3):
+            deferred.append(item)
             continue
         result.append(item); topic_count[item.topic] = topic_count.get(item.topic, 0) + 1; source_count[source] = source_count.get(source, 0) + 1; ticker_count[ticker] = ticker_count.get(ticker, 0) + 1
         if len(result) >= limit: break
+    # These are soft limits: do not leave a thin market-news page just because
+    # one wire service or topic dominates an otherwise useful feed.
+    if len(result) < limit:
+        result.extend(deferred[:limit - len(result)])
     return result or ranked[:limit]
 
 
