@@ -202,6 +202,8 @@ class NewsItem(Base):
     summary: Mapped[str | None] = mapped_column(Text)
     raw_content: Mapped[str | None] = mapped_column(Text)
     image_url: Mapped[str | None] = mapped_column(Text)
+    symbols: Mapped[list | None] = mapped_column(JSON)
+    news_type: Mapped[str] = mapped_column(String(32), default="article", server_default="article")
     raw_payload: Mapped[dict | None] = mapped_column(JSON)
     relevance_score: Mapped[float | None] = mapped_column(Float)
     sentiment_score: Mapped[float | None] = mapped_column(Float)

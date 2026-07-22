@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     marketaux_enabled: bool = True
     marketaux_max_requests_per_day: int = 100
     marketaux_batch_size: int = 5
+    fmp_enabled: bool = True
+    fmp_api_key: str = ""
+    fmp_base_url: str = "https://financialmodelingprep.com/stable"
+    fmp_news_batch_size: int = 10
+    fmp_news_interval_seconds: int = 7200
+    fmp_request_timeout_seconds: int = 15
+    fmp_daily_call_limit: int = 200
     sec_user_agent: str = "stockMonitor/1.0 self-hosted@example.com"
     edgar_local_data_dir: str = "/data/edgar"
     sec_insider_heavy_sell_value: float = 1_000_000.0

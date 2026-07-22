@@ -542,6 +542,8 @@ def _news_out(item: NewsItem) -> dict:
         "source": item.source,
         "summary": item.summary,
         "image_url": item.image_url,
+        "symbols": item.symbols or [],
+        "news_type": item.news_type,
         "published_at": item.published_at,
         "found_at": item.found_at,
         "relevance_score": item.relevance_score,

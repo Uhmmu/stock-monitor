@@ -94,6 +94,8 @@ class NewsDTO:
     raw_content: str | None = None
     image_url: str | None = None
     published_at: datetime | None = None
+    symbols: list[str] = field(default_factory=list)
+    news_type: str = "article"
     raw_payload: dict = field(default_factory=dict)
 
     @property

@@ -20,7 +20,7 @@ def persist_news(
         fingerprint = dto.fingerprint
         normalized_url = normalize_url(dto.url)
         duplicate_conditions = [NewsItem.fingerprint == fingerprint]
-        if dto.provider == "marketaux":
+        if dto.provider in {"marketaux", "fmp"}:
             # URL deduplication is cross-provider so the same publisher article
             # is not reinserted after Yahoo or Finnhub found it first.
             duplicate_conditions.extend([
@@ -29,7 +29,7 @@ def persist_news(
             ])
             if dto.external_id:
                 duplicate_conditions.append(
-                    (NewsItem.provider == "marketaux") & (NewsItem.external_id == dto.external_id)
+                    (NewsItem.provider == dto.provider) & (NewsItem.external_id == dto.external_id)
                 )
         exists = db.scalar(select(NewsItem.id).where(or_(*duplicate_conditions)))
         if exists:
@@ -47,6 +47,8 @@ def persist_news(
             summary=dto.summary,
             raw_content=dto.raw_content,
             image_url=dto.image_url,
+            symbols=dto.symbols or None,
+            news_type=dto.news_type,
             raw_payload=dto.raw_payload or None,
             published_at=dto.published_at,
             relevance_score=relevance,
@@ -64,6 +66,8 @@ def persist_news(
                 "source": dto.source,
                 "summary": dto.summary,
                 "published_at": dto.published_at,
+                "symbols": dto.symbols,
+                "news_type": dto.news_type,
                 "payload": dto.raw_payload,
             }
         )

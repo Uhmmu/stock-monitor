@@ -43,6 +43,7 @@ from app.services.llm import explain_cross_model
 from app.services.market_calendar import market_status
 from app.services.market_data import fetch_earnings_events, fetch_quotes, fetch_yf_financial_statements, fetch_yf_quarterly
 from app.services.marketaux import fetch_marketaux_news
+from app.services.fmp import fetch_fmp_news
 from app.services.news import collect_ticker_news, deduplicate, filter_news
 from app.services.news_store import news_for_day, persist_news
 from app.services.relevance import score_news
@@ -84,6 +85,11 @@ celery_app.conf.beat_schedule = {
     "sync-congress-trades": {"task": "app.tasks.celery_app.sync_congress_trades", "schedule": 21600},
     "sync-tracked-figures": {"task": "app.tasks.celery_app.sync_tracked_figures", "schedule": 43200},
 }
+if settings.fmp_enabled and settings.fmp_api_key.strip():
+    celery_app.conf.beat_schedule["poll-fmp-news"] = {
+        "task": "app.tasks.celery_app.poll_fmp_news",
+        "schedule": settings.fmp_news_interval_seconds,
+    }
 
 
 def _save_report(db, key: str, ticker: str | None, report_type: ReportType, title: str, evidence: str, tier: str, sources: list[dict], start=None, end=None):
@@ -427,6 +433,44 @@ def poll_news(ticker: str | None = None):
         if total:
             translate_news_titles.delay()
         return {"tickers": len(items), "new": total}
+
+
+@celery_app.task(name="app.tasks.celery_app.poll_fmp_news")
+def poll_fmp_news():
+    """Fetch one FMP watchlist batch and send it through the normal news pipeline."""
+    if not settings.fmp_enabled or not settings.fmp_api_key.strip():
+        return {"skipped": "disabled"}
+    market_date = market_status()["checked_at"][:10]
+    parsed = datetime.fromisoformat(market_date).date()
+    with SessionLocal() as db:
+        items = db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all()
+        try:
+            fetched = fetch_fmp_news(db, [item.ticker for item in items], now=datetime.now(UTC))
+        except Exception as exc:
+            db.rollback()
+            logger.error("[FMP] scheduler integration failed: %s", type(exc).__name__)
+            return {"tickers": len(items), "new": 0, "skipped": "request_failed"}
+        total = 0
+        for item in items:
+            provider_items = fetched.items_by_ticker.get(item.ticker.upper(), [])
+            final = deduplicate(provider_items)
+            if len(final) < len(provider_items):
+                logger.info("[FMP] Skipped duplicated article")
+            kept = [dto for dto in final if filter_news(dto)]
+            if not kept:
+                continue
+            scores = score_news(item.ticker, [(dto.title, dto.summary or dto.raw_content or "") for dto in kept])
+            ranked = sorted(
+                ((dto, *scores.get(index, (None, None))) for index, dto in enumerate(kept)),
+                key=lambda row: row[1] if row[1] is not None else -1.0,
+                reverse=True,
+            )[:NEWS_PER_TICKER]
+            saved = persist_news(db, item.ticker, parsed, [row[0] for row in ranked], [(row[1], row[2]) for row in ranked])
+            total += len(saved)
+        db.commit()
+        if total:
+            translate_news_titles.delay()
+        return {"tickers": len(items), "new": total, "batch": list(fetched.batch)}
 
 
 def _daily_input_hash(news: list[NewsItem]) -> str:
