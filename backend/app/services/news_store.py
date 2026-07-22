@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 
 from app.models import NewsItem
 from app.services import archive
@@ -19,7 +19,7 @@ def persist_news(
     for position, dto in enumerate(dtos):
         fingerprint = dto.fingerprint
         normalized_url = normalize_url(dto.url)
-        duplicate_conditions = [NewsItem.scope == dto.scope, NewsItem.fingerprint == fingerprint]
+        duplicate_conditions = [and_(NewsItem.scope == dto.scope, NewsItem.fingerprint == fingerprint)]
         if dto.provider in {"marketaux", "fmp"}:
             # URL deduplication is cross-provider so the same publisher article
             # is not reinserted after Yahoo or Finnhub found it first.

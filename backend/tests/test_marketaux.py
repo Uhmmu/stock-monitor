@@ -266,6 +266,15 @@ def test_market_news_does_not_use_ticker_archive_path(db, monkeypatch):
     assert len(persist_news(db, "__MARKET__", date(2026, 7, 22), [item])) == 1
 
 
+def test_scope_aware_fingerprint_dedup_does_not_block_distinct_news(db, monkeypatch):
+    monkeypatch.setattr("app.services.news_store.archive.append_raw_news", lambda *args: None)
+    rows = [
+        NewsDTO(provider="finnhub", ticker="AAPL", external_id="one", title="First article", url="https://example.com/one"),
+        NewsDTO(provider="finnhub", ticker="AAPL", external_id="two", title="Second article", url="https://example.com/two"),
+    ]
+    assert len(persist_news(db, "AAPL", date(2026, 7, 22), rows)) == 2
+
+
 @pytest.mark.parametrize(
     "config",
     [
