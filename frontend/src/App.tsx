@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import rehypeSanitize from 'rehype-sanitize'
-import { api, patch, post } from './api'
+import { api, getToken, patch, post } from './api'
 import { Sheet } from './Sheet'
 import { SecuritySearchAutocomplete, securityPayload, type SecuritySearchResult } from './SecuritySearchAutocomplete'
 
@@ -12,7 +12,10 @@ type ManagedStock = {ticker:string;company_name:string|null;official_sector:stri
 type StockManagementData = {groups:{id:number;name:string;display_order:number}[];watchlisted:ManagedStock[];matched:ManagedStock[]}
 type PeerItem = {ticker:string;source:'official'|'manual';excluded:boolean;display_order:number;is_watchlisted:boolean}
 type PeerList = {base_ticker:string;items:PeerItem[]}
-type Dashboard = { market:{is_open:boolean; checked_at:string}; stocks:{ticker:string;price:number|null;previous_close:number|null;updated_at:string|null;volume:number|null;volume_ratio:number|null;volume_label:string|null}[] }
+type Dashboard = { market:{is_open:boolean; checked_at:string}; stocks:{ticker:string;company_name?:string|null;logo_url?:string|null;price:number|null;previous_close:number|null;updated_at:string|null;volume:number|null;volume_ratio:number|null;volume_label:string|null}[] }
+type CompanyProfile = {symbol:string;status:string;company_name:string|null;logo_url?:string|null;website?:string|null;ceo?:string|null;exchange?:string|null;exchange_full_name?:string|null;ipo_date?:string|null;employee_count?:number|null;description_en?:string|null;description_zh?:string|null;translation_status?:string;profile_fetched_at?:string|null;local_classification:{sector:string|null;industry:string|null}}
+type Zone = {low:number;high:number;center:number;type:'support'|'resistance';touchCount:number;strength:number;mostRecentTouchDate:string;distancePercent:number}
+type TechnicalItem = {symbol:string;status:string;company_name:string|null;logo_url:string|null;chart_url:string|null;data_through?:string;generated_at?:string;stale?:boolean;analysis?:{latestClose:number;weeklyTrend:string;nearestSupport:Zone|null;nearestResistance:Zone|null;supportZones:Zone[];resistanceZones:Zone[];fibonacci:{available:boolean;direction?:string;levels?:Record<string,number>;omissionReason?:string};trendLines:{type:string;projectedPrice:number;priceRelation:string;confidence:number}[];indicators:Record<string,number|null>;omittedReasons:string[]};profile?:CompanyProfile;data_status?:Record<string,string|null>}
 type IndexQuote = {symbol:string;name:string;price:number|null;previous_close:number|null;change_points:number|null;change_percent:number|null}
 type Indices = {indices:IndexQuote[];market:{is_open:boolean;checked_at:string}}
 type Alert = {id:number;ticker:string;period:string;change_percent:number;triggered_at:string}
@@ -156,6 +159,7 @@ function NavIcon({name}:{name:string}) {
     fundamentals:<><path d="m3 17 5-5 4 3 8-9"/><path d="M15 6h5v5"/></>,
     financials:<><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h3M13 12h3M8 16h3M13 16h3"/></>,
     crossmodel:<><path d="M4 18V7M10 18V4M16 18v-8M22 18H2"/><path d="m5 11 5-3 4 4 6-6"/></>,
+    technical:<><path d="M3 17 8 12l4 3 8-9"/><path d="M4 21h16M7 9v6M12 11v7M17 4v8"/></>,
     sec:<><path d="M6 2h9l4 4v16H6z"/><path d="M14 2v5h5M9 12h6M9 16h6"/></>,
     congress:<><circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 4-7 8-7s7 2 8 7"/></>,
     reports:<><path d="M5 3h14v18H5z"/><path d="M9 8h6M9 12h6M9 16h4"/></>,
@@ -163,6 +167,41 @@ function NavIcon({name}:{name:string}) {
     settings:<><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></>,
   }
   return <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
+}
+
+function ProfileLogo({symbol,url,className='' }:{symbol:string;url?:string|null;className?:string}) {
+  const [failed,setFailed] = useState(false)
+  useEffect(()=>setFailed(false),[url])
+  if(!url||failed) return <span className={`profile-logo fallback ${className}`}>{symbol.slice(0,2)}</span>
+  return <img className={`profile-logo ${className}`} src={url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={()=>setFailed(true)}/>
+}
+
+function AuthChart({url,symbol}:{url:string;symbol:string}) {
+  const [src,setSrc] = useState<string|null>(null)
+  useEffect(()=>{
+    let active=true, objectUrl=''
+    fetch(url,{headers:{Authorization:`Bearer ${getToken()}`}}).then(response=>{if(!response.ok)throw new Error('chart unavailable');return response.blob()}).then(blob=>{
+      if(!active)return; objectUrl=URL.createObjectURL(blob);setSrc(objectUrl)
+    }).catch(()=>active&&setSrc(null))
+    return ()=>{active=false;if(objectUrl)URL.revokeObjectURL(objectUrl)}
+  },[url])
+  return src?<a href={src} target="_blank" rel="noreferrer"><img className="technical-chart" src={src} alt={`${symbol} 周线技术分析图`}/></a>:<div className="technical-chart-empty">图表缓存读取中…</div>
+}
+
+function CompanyProfileSheet({symbol,onClose}:{symbol:string|null;onClose:()=>void}) {
+  const profile = useQuery({queryKey:['company-profile',symbol],queryFn:()=>api<CompanyProfile>(`/company-profile/${symbol}`),enabled:!!symbol})
+  const p=profile.data
+  return <Sheet open={symbol!==null} onClose={onClose} title="公司概览">{p?.status==='ready'?<article className="company-profile"><header><ProfileLogo symbol={p.symbol} url={p.logo_url}/><div><p className="eyebrow">FMP CACHED PROFILE</p><h2>{p.company_name||p.symbol} <small>{p.symbol}</small></h2></div></header><dl><div><dt>CEO</dt><dd>{p.ceo||'数据不足'}</dd></div><div><dt>交易所</dt><dd>{p.exchange_full_name||p.exchange||'数据不足'}</dd></div><div><dt>IPO 日期</dt><dd>{p.ipo_date||'数据不足'}</dd></div><div><dt>员工数</dt><dd>{p.employee_count?.toLocaleString()||'数据不足'}</dd></div><div><dt>本地分类</dt><dd>{localizeSector(p.local_classification.sector,'数据不足')} · {localizeIndustry(p.local_classification.industry,'数据不足')}</dd></div><div><dt>资料更新</dt><dd>{p.profile_fetched_at?formatDate(p.profile_fetched_at):'数据不足'}</dd></div></dl>{p.website&&<a href={p.website} target="_blank" rel="noreferrer">访问公司网站 ↗</a>}<section><h3>公司简介</h3><p>{p.description_zh||p.description_en||'公司简介暂不可用。'}</p>{p.description_zh&&p.description_en&&<details><summary>查看英文原文</summary><p>{p.description_en}</p></details>}{p.translation_status==='pending'&&<small>中文简介正在后台翻译，当前展示英文原文。</small>}</section></article>:<div className="empty">{profile.isLoading?'正在读取本地资料…':'公司资料尚未同步，股票其他功能不受影响。'}</div>}</Sheet>
+}
+
+function TechnicalAnalysisCenter() {
+  const [selected,setSelected] = useState<string|null>(null)
+  const list = useQuery({queryKey:['technical-analysis'],queryFn:()=>api<TechnicalItem[]>('/technical-analysis'),staleTime:60_000})
+  const detail = useQuery({queryKey:['technical-analysis',selected],queryFn:()=>api<TechnicalItem>(`/technical-analysis/${selected}`),enabled:!!selected,staleTime:60_000})
+  const d=detail.data, a=d?.analysis
+  const trendLabel:Record<string,string>={bullish:'偏多',bearish:'偏空',neutral:'中性'}
+  const zone=(value:Zone|null|undefined)=>value?`$${value.low.toFixed(2)}–${value.high.toFixed(2)}`:'数据不足'
+  return <div className="technical-workspace"><div className="section-title"><div><p>FMP EOD · LOCAL CALCULATION</p><h2>周线技术分析</h2></div><small>图表与指标来自缓存，不会在页面打开时请求 FMP。</small></div><div className="technical-list">{list.data?.map(item=><button key={item.symbol} className={selected===item.symbol?'active':''} onClick={()=>setSelected(item.symbol)}><ProfileLogo symbol={item.symbol} url={item.logo_url}/><span><b>{item.symbol}</b><small>{item.company_name||'公司资料待同步'}</small></span>{item.analysis?<><strong>${item.analysis.latestClose.toFixed(2)}</strong><em className={`trend-${item.analysis.weeklyTrend}`}>{trendLabel[item.analysis.weeklyTrend]||item.analysis.weeklyTrend}</em><span className="zone-mini"><small>支撑 {zone(item.analysis.nearestSupport)}</small><small>阻力 {zone(item.analysis.nearestResistance)}</small></span><time>{item.data_through}{item.stale?' · 已过期':''}</time></>:<em>分析{item.status==='pending'?'排队中':'暂不可用'}</em>}</button>)}{list.isLoading&&<div className="empty">正在读取技术分析缓存…</div>}{!list.isLoading&&!list.data?.length&&<div className="empty">自选列表为空。</div>}</div>{selected&&<section className="technical-detail">{d?.status==='ready'&&a?<><header><div><ProfileLogo symbol={d.symbol} url={d.logo_url}/><span><p className="eyebrow">WEEKLY TECHNICAL SNAPSHOT</p><h2>{d.symbol} <small>{d.company_name}</small></h2></span></div><strong>${a.latestClose.toFixed(2)}<small>数据截至 {d.data_through}{d.stale?' · 已过期':''}</small></strong></header>{d.chart_url?<AuthChart url={d.chart_url} symbol={d.symbol}/>:<div className="technical-chart-empty">图表尚未生成。</div>}<div className="technical-metrics"><div><span>周线趋势</span><b>{trendLabel[a.weeklyTrend]||a.weeklyTrend}</b></div><div><span>最近支撑</span><b>{zone(a.nearestSupport)}</b><small>{a.nearestSupport?`${Math.abs(a.nearestSupport.distancePercent).toFixed(1)}% 下方`:'—'}</small></div><div><span>最近阻力</span><b>{zone(a.nearestResistance)}</b><small>{a.nearestResistance?`${Math.abs(a.nearestResistance.distancePercent).toFixed(1)}% 上方`:'—'}</small></div><div><span>RSI 14</span><b>{a.indicators.rsi14?.toFixed(1)||'—'}</b></div><div><span>MACD</span><b>{(a.indicators.macdHistogram||0)>0?'偏多':(a.indicators.macdHistogram||0)<0?'偏空':'中性'}</b></div><div><span>ATR 14</span><b>{a.indicators.atr14?.toFixed(2)||'—'}</b></div></div><div className="technical-columns"><section><h3>支撑与阻力区域</h3><div className="zone-table">{[...a.supportZones,...a.resistanceZones].map(z=><div key={`${z.type}-${z.center}`}><b>{z.type==='support'?'支撑':'阻力'}</b><span>{zone(z)}</span><span>{Math.round(z.strength*100)} 分</span><span>{z.touchCount} 次触及</span><time>{z.mostRecentTouchDate}</time></div>)}</div></section><section><h3>斐波那契与趋势线</h3>{a.fibonacci.available?<p>{a.fibonacci.direction==='up'?'上升':'下降'}主摆动；关键回撤位由最近已确认周线枢轴确定。</p>:<p>{a.fibonacci.omissionReason}</p>}{a.trendLines.map(line=><p key={line.type}>{line.type==='rising_support'?'上升支撑线':'下降阻力线'}投影 ${line.projectedPrice.toFixed(2)} · 置信度 {Math.round(line.confidence*100)}%</p>)}{a.omittedReasons.map(reason=><small key={reason}>{reason}</small>)}</section></div><footer>来源：FMP 历史日线；本地确定性计算 · 图表生成 {d.generated_at&&formatDate(d.generated_at)}</footer></>:<div className="empty">{detail.isLoading?'正在读取详情…':'历史数据或分析正在后台同步；已有有效缓存会继续保留。'}</div>}</section>}</div>
 }
 
 export default function App() {
@@ -177,6 +216,7 @@ export default function App() {
   const [selectedModel,setSelectedModel] = useState<CrossMetric|null>(null)
   const [selectedWeight,setSelectedWeight] = useState<WeightDetail|null>(null)
   const [selectedStatementMetric,setSelectedStatementMetric] = useState<StatementMetric|null>(null)
+  const [selectedProfileSymbol,setSelectedProfileSymbol] = useState<string|null>(null)
   const [stocksExpanded,setStocksExpanded] = useState(false)
   const [activeTicker,setActiveTicker] = useState('')
   const client = useQueryClient()
@@ -208,8 +248,8 @@ export default function App() {
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const tabs = [['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
+  const tabs = [['overview','总览'],['watchlist','自选股'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
   const viewIndices = demoMode ? demoIndices : indices.data
   const viewAlerts = demoMode ? demoAlerts : alerts.data
@@ -222,7 +262,7 @@ export default function App() {
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
     <aside className={mobileNavOpen?'mobile-open':''}>
       <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div><div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{groupInvestigations(investigations.data).length}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
-      <nav>{tabs.map(([key,label],index)=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{index===10&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
+      <nav>{tabs.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{key==='journal'&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
       <div className="account-card"><span className="account-avatar">{authUser.username.slice(0,1)}</span><span><b>{demoMode?'演示空间':authUser.username}</b><small>{demoMode?'本地预览模式':'已安全连接'}</small></span><i className={viewDashboard?.market.is_open?'online':''}/></div>
       <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setDemoMode(false);setToken('');setAuthUser(null)}}>{demoMode?'退出预览':'退出登录'}</button></aside>
     {mobileNavOpen&&<button className="mobile-nav-scrim" onClick={()=>setMobileNavOpen(false)} aria-label="关闭菜单"/>}
@@ -233,7 +273,7 @@ export default function App() {
       <div className="view-stage" key={tab}>
       {tab==='overview'&&<>
         <section className="hero index-hero"><div className="hero-copy"><span className={`badge${viewIndices?.market.is_open?'':' closed'}`}><i/>{viewIndices?.market.is_open?'LIVE MARKET':'MARKET CLOSED'}</span><h2>早上好，{authUser.username}</h2><p>你的市场雷达保持安静。我们只在真正值得注意时打扰你。</p></div><div className="index-row">{(viewIndices?.indices||[{symbol:'^GSPC',name:'标普500'},{symbol:'^IXIC',name:'纳斯达克'},{symbol:'^DJI',name:'道琼斯'}] as IndexQuote[]).map(idx=>{const up=idx.change_percent!=null&&idx.change_percent>=0;return <div className="index-card" key={idx.symbol}><span className="index-name">{idx.name}</span><strong>{idx.price!=null?idx.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}</strong><span className={idx.change_percent==null?'':up?'positive':'negative'}>{idx.change_points==null||idx.change_percent==null?'数据不足':`${up?'+':''}${idx.change_points.toFixed(2)} (${up?'+':''}${idx.change_percent.toFixed(2)}%)`}</span></div>})}</div></section>
-        <section><div className="section-title"><div><p>WATCHLIST</p><h2>市场快照</h2></div><div className="section-actions"><button className="stock-collapse-btn" onClick={()=>setStocksExpanded(v=>!v)}>{stocksExpanded?'收起':'展开更多'} <span>{stocksExpanded?'↑':'↓'}</span></button><button onClick={()=>setTab('watchlist')}>管理自选股 <span>→</span></button></div></div><div className={`stock-grid${stocksExpanded?' is-expanded':' is-collapsed'}`}>{overviewStocks.map(stock=>{const change=stock.price&&stock.previous_close?(stock.price-stock.previous_close)/stock.previous_close*100:null;return <article className="stock-card" key={stock.ticker}><div><span className="ticker">{stock.ticker}</span><small>{stock.updated_at?'刚刚更新':'等待首次采集'}</small></div><strong>{formatPrice(stock.price)}</strong><span className={change!=null&&change<0?'negative':'positive'}>{change==null?'—':`${change>=0?'+':''}${change.toFixed(2)}% 今日`}</span>{stock.volume_label&&stock.volume_label!=='正常'&&<span className={`vol-tag ${stock.volume_label==='放量'?'heavy':'light'}`}>{stock.volume_label} · {stock.volume_ratio?.toFixed(2)}×</span>}<div className="card-glow"/></article>})}{!overviewStocks.length&&<div className="empty">添加第一只股票，开始建立你的市场雷达。</div>}</div></section>
+        <section><div className="section-title"><div><p>WATCHLIST</p><h2>市场快照</h2></div><div className="section-actions"><button className="stock-collapse-btn" onClick={()=>setStocksExpanded(v=>!v)}>{stocksExpanded?'收起':'展开更多'} <span>{stocksExpanded?'↑':'↓'}</span></button><button onClick={()=>setTab('watchlist')}>管理自选股 <span>→</span></button></div></div><div className={`stock-grid${stocksExpanded?' is-expanded':' is-collapsed'}`}>{overviewStocks.map(stock=>{const change=stock.price&&stock.previous_close?(stock.price-stock.previous_close)/stock.previous_close*100:null;return <article className="stock-card" key={stock.ticker}><div><ProfileLogo symbol={stock.ticker} url={stock.logo_url}/><span className="ticker">{stock.ticker}</span><small>{stock.updated_at?'刚刚更新':'等待首次采集'}</small></div><strong>{formatPrice(stock.price)}</strong><span className={change!=null&&change<0?'negative':'positive'}>{change==null?'—':`${change>=0?'+':''}${change.toFixed(2)}% 今日`}</span><button className="company-overview-btn" onClick={()=>setSelectedProfileSymbol(stock.ticker)}>公司概览</button>{stock.volume_label&&stock.volume_label!=='正常'&&<span className={`vol-tag ${stock.volume_label==='放量'?'heavy':'light'}`}>{stock.volume_label} · {stock.volume_ratio?.toFixed(2)}×</span>}<div className="card-glow"/></article>})}{!overviewStocks.length&&<div className="empty">添加第一只股票，开始建立你的市场雷达。</div>}</div></section>
         <section className="split"><div><div className="section-title"><div><p>SIGNALS</p><h2>最近异动</h2></div></div>{viewAlerts?.slice(0,5).map(a=><div className="list-row" key={a.id}><span className="signal-symbol">{a.ticker.slice(0,1)}</span><b>{a.ticker}</b><span>{a.period}</span><em className={a.change_percent<0?'negative':'positive'}>{a.change_percent>=0?'+':''}{a.change_percent.toFixed(2)}%</em></div>)}</div><div><div className="section-title"><div><p>INTELLIGENCE</p><h2>最新报告</h2></div></div>{viewReports?.slice(0,5).map(r=><button className="report-row" key={r.id} onClick={()=>!demoMode&&setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{demoMode?'刚刚生成':formatDate(r.created_at)}</small></button>)}</div></section>
       </>}
       {tab==='watchlist'&&<StockManagement onWatchlistChanged={()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}}/>}
@@ -243,6 +283,7 @@ export default function App() {
       {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='financials'&&<FinancialStatementsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onStatementMetric={setSelectedStatementMetric} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='crossmodel'&&<CrossModelCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onMetric={setSelectedModel} onWeight={setSelectedWeight} active={activeTicker} setActive={setActiveTicker}/>}
+      {tab==='technical'&&<TechnicalAnalysisCenter/>}
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='congress'&&<CongressCenter/>}
       {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
@@ -252,6 +293,7 @@ export default function App() {
     <Sheet open={selectedReport!==null} onClose={()=>setSelectedReport(null)} title={report.data?typeNames[report.data.report_type]||report.data.report_type:'报告'}>
       {report.data?<article className="report-detail sheet-report"><p className="eyebrow">{typeNames[report.data.report_type]} · {report.data.model}</p><h2>{report.data.title}</h2><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{report.data.content}</ReactMarkdown></div><h3>信息来源</h3>{report.data.sources.map((s,i)=><a href={s.url} target="_blank" rel="noreferrer" key={i}>{i+1}. {s.title}</a>)}</article>:<div className="empty">加载中…</div>}
     </Sheet>
+    <CompanyProfileSheet symbol={selectedProfileSymbol} onClose={()=>setSelectedProfileSymbol(null)}/>
     <Sheet open={selectedModel!==null} onClose={()=>setSelectedModel(null)} title={selectedModel?.label||'指标说明'}>
       {selectedModel&&<article className="model-drawer"><p className="eyebrow">MODEL EXPLAINER · 指标学习</p><h2>{selectedModel.label}</h2><strong>{formatCrossMetric(selectedModel)}</strong>{selectedModel.applicability&&<div className={`applicability ${selectedModel.applicability}`}>适用性：{{medium:'中',low:'低',not_applicable:'不适用'}[selectedModel.applicability]}</div>}{selectedModel.peer_median!=null&&<div className="drawer-peer"><span>同行中位数</span><b>{selectedModel.peer_median.toFixed(2)}{selectedModel.unit==='multiple'?'×':selectedModel.unit==='%'?'%':''}</b><em>{selectedModel.comparison}</em></div>}<p>{selectedModel.explanation}</p>{selectedModel.missing_fields?.length?<div className="missing-data"><b>{selectedModel.status==='not_applicable'?'不适用':'数据不足'}</b><p>{selectedModel.status==='not_applicable'?'该公司类型不使用此模型。':`缺少：${selectedModel.missing_fields.map(fieldLabel).join('、')}`}</p></div>:null}{selectedModel.warnings?.map(warning=><div className="metric-warning" key={warning}>{warning}</div>)}<div className="learn-block"><b>公式 Formula</b><p>{selectedModel.formula}</p></div><div className="learn-block"><b>参考区间 Reference Range</b><p>{selectedModel.recommended_range}</p></div>{selectedModel.note&&<div className="explainer"><b>计算说明</b><p>{selectedModel.note}</p></div>}</article>}
     </Sheet>
@@ -859,14 +901,19 @@ function JournalSection({username}:{username:string}) {
 
 // ── 管理员用户管理 ────────────────────────────────────────────────
 type UserRow = {id:number;username:string;role:string;status:string;created_at:string}
+type FmpStatus = {quota_day:string;requests_used:number;requests_remaining:number;usable_limit:number;last_processed_ticker:string|null;pending_profile_count:number;pending_history_count:number;pending_analysis_count:number;failed_item_count:number;quota_timezone:string}
 
 function AdminPanel() {
   const client = useQueryClient()
   const users = useQuery({queryKey:['admin-users'],queryFn:()=>api<UserRow[]>('/auth/admin/users')})
+  const fmp = useQuery({queryKey:['admin-fmp-status'],queryFn:()=>api<FmpStatus>('/admin/fmp/status'),refetchInterval:60_000})
+  const syncFmp = useMutation({mutationFn:()=>post('/admin/fmp/sync',{}),onSuccess:()=>setTimeout(()=>client.invalidateQueries({queryKey:['admin-fmp-status']}),1500)})
   const approve = useMutation({mutationFn:(id:number)=>post<unknown>(`/auth/admin/users/${id}/approve`,{}),onSuccess:()=>client.invalidateQueries({queryKey:['admin-users']})})
   const del = useMutation({mutationFn:(id:number)=>api<unknown>(`/auth/admin/users/${id}`,{method:'DELETE'}),onSuccess:()=>client.invalidateQueries({queryKey:['admin-users']})})
   const statusLabel:Record<string,string> = {active:'已激活',pending:'待审核'}
   return <div style={{marginTop:32}}>
+    <div className="section-title"><div><p>FMP · UTC QUOTA</p><h2>资料与技术分析同步</h2></div><button onClick={()=>syncFmp.mutate()} disabled={syncFmp.isPending}>{syncFmp.isPending?'正在排队…':'排队同步'}</button></div>
+    {fmp.data?<div className="technical-metrics admin-fmp"><div><span>今日已用</span><b>{fmp.data.requests_used} / {fmp.data.usable_limit}</b></div><div><span>剩余请求</span><b>{fmp.data.requests_remaining}</b></div><div><span>资料待处理</span><b>{fmp.data.pending_profile_count}</b></div><div><span>行情待处理</span><b>{fmp.data.pending_history_count}</b></div><div><span>分析待处理</span><b>{fmp.data.pending_analysis_count}</b></div><div><span>失败项目</span><b>{fmp.data.failed_item_count}</b><small>{fmp.data.last_processed_ticker&&`最近 ${fmp.data.last_processed_ticker}`}</small></div></div>:<div className="empty">正在读取 FMP 配额状态…</div>}
     <div className="section-title"><h2>用户管理</h2></div>
     <div className="table">
       <div className="table-head"><span>用户名</span><span>角色</span><span>状态</span><span>注册时间</span><span/></div>

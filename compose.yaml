@@ -38,6 +38,7 @@ services:
     volumes:
       - archive_data:/data/archive
       - edgar_data:/data/edgar
+      - technical_chart_data:/data/technical-charts
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,3 +101,4 @@ volumes:
   archive_data:
   finnhub_data:
   edgar_data:
+  technical_chart_data:

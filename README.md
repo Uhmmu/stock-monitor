@@ -10,6 +10,7 @@
 - **异动提醒与调查**：按 20 分钟、1 小时和日内阈值检测异常波动，并自动收集相关新闻与上下文。
 - **新闻与 SEC 数据**：聚合 Tavily、SEC EDGAR、Finnhub 等来源，支持相关性、情绪和标题翻译处理。
 - **基本面与估值**：展示财报、分析师评级、季度数据、DCF 情景和同行估值比较。
+- **轻量技术分析**：从 FMP 缓存最多约五年的日线 OHLCV，在本地聚合周线、计算指标与关键区域，并生成可持久化的静态 WebP 图表。
 - **多模型交叉**：根据行业与公司特征组合模型权重，并计算 Forward P/E、PEG、EV/Sales、DCF、ROIC、Piotroski F-Score、Altman Z-Score 等指标。计算结果会显示公式、数据来源、缺失字段和适用性，不把缺失数据伪装成 0 分。
 - **多用户登录**：支持注册申请、登录、JWT 会话、管理员审核/删除用户和管理员权限控制。
 - **交易日志区**：按用户记录交易计划、买卖方向、数量、价格、标签、图片和复盘内容，并可调用 AI 生成总结。
@@ -24,7 +25,7 @@
 | 后端 | FastAPI、SQLAlchemy 2、Alembic、Pydantic Settings |
 | 后台任务 | Celery、Redis |
 | 数据库 | PostgreSQL 16 |
-| 数据源 | yfinance、Finnhub MCP、Tavily、SEC EDGAR / edgartools |
+| 数据源 | yfinance、Finnhub MCP、FMP（仅历史日线与公司资料）、Tavily、SEC EDGAR / edgartools |
 | AI | 可配置的 OpenAI-compatible API |
 | 网关 | Caddy（HTTPS 和 Basic Auth） |
 | 部署 | Docker Compose |
@@ -54,6 +55,13 @@ DATABASE_URL=postgresql+psycopg://stock:change-this@postgres:5432/stock_monitor
 
 FINNHUB_API_KEY=your-finnhub-key
 TAVILY_API_KEY=your-tavily-key
+FMP_API_KEY=your-fmp-key
+FMP_DAILY_REQUEST_LIMIT=150
+FMP_REQUEST_RESERVE=10
+FMP_SYNC_ENABLED=true
+FMP_PROFILE_SYNC_ENABLED=true
+FMP_PRICE_SYNC_ENABLED=true
+FMP_TRANSLATION_ENABLED=true
 
 OPENAI_API_KEY=your-key
 OPENAI_BASE_URL=https://api.openai.com/v1
@@ -101,6 +109,8 @@ docker compose -f compose.yaml -f compose.override.yaml up -d
 ### 4. 添加自选股
 
 登录后进入“自选股”，添加股票代码，例如 `AAPL`、`MSFT` 或 `NVDA`。后台任务会逐步拉取行情、财报、新闻和模型快照。
+
+FMP 配额按 UTC 自然日记账。每次 HTTP 尝试都会先原子预留并持久化，实际可用量为 `FMP_DAILY_REQUEST_LIMIT - FMP_REQUEST_RESERVE`；耗尽后保存当前队列位置，下一 UTC 日从未完成股票继续。公开读取接口只访问数据库与图表缓存，不会触发 FMP 请求。公司资料默认按 180 天长缓存处理，Yahoo 仍是财务报表来源。
 
 ## 常用命令
 

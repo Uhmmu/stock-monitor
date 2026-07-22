@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     fmp_news_interval_seconds: int = 7200
     fmp_request_timeout_seconds: int = 15
     fmp_daily_call_limit: int = 200
+    # FMP is restricted to cached company profiles and historical EOD prices.
+    # Quota accounting resets on the UTC calendar day.
+    fmp_daily_request_limit: int = 150
+    fmp_request_reserve: int = 10
+    fmp_sync_enabled: bool = True
+    fmp_profile_sync_enabled: bool = True
+    fmp_price_sync_enabled: bool = True
+    fmp_translation_enabled: bool = True
+    fmp_profile_refresh_days: int = 180
+    technical_chart_dir: str = "/data/technical-charts"
     sec_user_agent: str = "stockMonitor/1.0 self-hosted@example.com"
     edgar_local_data_dir: str = "/data/edgar"
     sec_insider_heavy_sell_value: float = 1_000_000.0

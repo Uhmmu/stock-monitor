@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date as date_type, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import FileResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -16,6 +17,9 @@ from app.models import (
     DailyNewsArchive,
     FigurePosition,
     FinancialStatementSnapshot,
+    CompanyProfile,
+    FmpSyncState,
+    HistoricalPrice,
     Investigation,
     NewsItem,
     PriceAlert,
@@ -35,6 +39,8 @@ from app.models import (
     User,
     ValuationSnapshot,
     StockGroup,
+    StockProfile,
+    TechnicalAnalysis,
     TemporarySnapshot,
     WatchlistItem,
     WeeklyNewsArchive,
@@ -55,7 +61,8 @@ from app.schemas import (
     WatchlistOut,
     WatchlistUpdate,
 )
-from app.auth import get_current_user
+from app.auth import get_admin_user, get_current_user
+from app.services.fmp_market import budget_status
 from app.services.article_fetch import fetch_article_text
 from app.services.finnhub_mcp import fetch_basic_metrics, fetch_recommendations
 from app.services.market_data import fetch_index_quotes, fetch_yf_info_metrics, fetch_yf_recommendations
@@ -267,6 +274,117 @@ def remove_watchlist(item_id: int, db: Session = Depends(get_db)):
     return Response(status_code=204)
 
 
+def _profile_out(db: Session, symbol: str, row: CompanyProfile | None) -> dict:
+    local = db.get(StockProfile, symbol)
+    if not row:
+        return {"symbol": symbol, "status": "pending", "company_name": local.company_name if local else None,
+                "local_classification": {"sector": local.official_sector if local else None, "industry": local.official_industry if local else None}}
+    return {"symbol": symbol, "status": "ready", "company_name": row.company_name, "logo_url": row.logo_url,
+            "website": row.website, "ceo": row.ceo, "sector": row.sector, "industry": row.industry,
+            "country": row.country, "exchange": row.exchange, "exchange_full_name": row.exchange_full_name,
+            "currency": row.currency, "ipo_date": row.ipo_date, "employee_count": row.employee_count,
+            "description_en": row.description_en, "description_zh": row.description_zh,
+            "translation_status": row.translation_status, "profile_source": row.profile_source,
+            "profile_fetched_at": row.profile_fetched_at,
+            "local_classification": {"sector": local.official_sector if local else None, "industry": local.official_industry if local else None}}
+
+
+@router.get("/company-profile/{symbol}")
+def company_profile(symbol: str, db: Session = Depends(get_db)):
+    value = _require_watched_ticker(db, symbol)
+    return _profile_out(db, value, db.get(CompanyProfile, value))
+
+
+def _technical_out(db: Session, symbol: str, row: TechnicalAnalysis | None) -> dict:
+    profile = db.get(CompanyProfile, symbol)
+    if not row:
+        return {"symbol": symbol, "status": "pending", "company_name": profile.company_name if profile else None,
+                "logo_url": profile.logo_url if profile else None, "chart_url": None}
+    age = (datetime.now(UTC).date() - row.data_through).days if row.data_through else None
+    return {"symbol": symbol, "status": row.status, "company_name": profile.company_name if profile else None,
+            "logo_url": profile.logo_url if profile else None, "analysis": row.analysis, "data_through": row.data_through,
+            "generated_at": row.generated_at, "stale": age is None or age > 7,
+            "chart_url": f"/api/technical-analysis/{symbol}/chart?v={row.input_hash[:12]}" if row.image_path else None}
+
+
+@router.get("/technical-analysis")
+def technical_analysis_list(db: Session = Depends(get_db)):
+    symbols = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True)).order_by(WatchlistItem.display_order, WatchlistItem.ticker)).all())
+    return [_technical_out(db, symbol, db.get(TechnicalAnalysis, symbol)) for symbol in symbols]
+
+
+@router.get("/technical-analysis/{symbol}")
+def technical_analysis_detail(symbol: str, db: Session = Depends(get_db)):
+    value = _require_watched_ticker(db, symbol)
+    result = _technical_out(db, value, db.get(TechnicalAnalysis, value))
+    result["profile"] = _profile_out(db, value, db.get(CompanyProfile, value))
+    oldest = db.scalar(select(HistoricalPrice.date).where(HistoricalPrice.symbol == value).order_by(HistoricalPrice.date).limit(1))
+    newest = db.scalar(select(HistoricalPrice.date).where(HistoricalPrice.symbol == value).order_by(HistoricalPrice.date.desc()).limit(1))
+    state = db.scalar(select(FmpSyncState).where(FmpSyncState.symbol == value, FmpSyncState.sync_type == "price"))
+    result["data_status"] = {"source": "fmp", "oldest_stored_date": oldest, "latest_stored_date": newest,
+                             "last_successful_sync": state.last_success_at if state else None,
+                             "profile_status": result["profile"]["status"], "analysis_status": result["status"]}
+    return result
+
+
+@router.get("/technical-analysis/{symbol}/chart")
+def technical_analysis_chart(symbol: str, db: Session = Depends(get_db)):
+    value = _require_watched_ticker(db, symbol)
+    row = db.get(TechnicalAnalysis, value)
+    if not row or not row.image_path:
+        raise HTTPException(404, "技术图表尚未生成")
+    from pathlib import Path
+    path = Path(row.image_path)
+    if not path.is_file():
+        raise HTTPException(404, "技术图表缓存暂不可用")
+    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/admin/fmp/status", dependencies=[Depends(get_admin_user)])
+def fmp_admin_status(db: Session = Depends(get_db)):
+    budget = budget_status(db)
+    states = list(db.scalars(select(FmpSyncState).where(FmpSyncState.symbol != "*")).all())
+    last = max(states, key=lambda row: row.last_attempt_at or datetime.min.replace(tzinfo=UTC), default=None)
+    counts = {key: sum(row.status == key for row in states) for key in ("pending", "pending_quota", "failed", "completed")}
+    next_run = datetime.now(UTC).replace(hour=23, minute=30, second=0, microsecond=0)
+    if next_run <= datetime.now(UTC):
+        next_run += timedelta(days=1)
+    while next_run.weekday() >= 5:
+        next_run += timedelta(days=1)
+    failed_translations = db.scalar(select(func.count()).select_from(CompanyProfile).where(CompanyProfile.translation_status == "failed")) or 0
+    return {"quota_day": budget.quota_day, "requests_used": budget.used, "requests_remaining": budget.remaining,
+            "usable_limit": budget.usable_limit, "last_processed_ticker": last.symbol if last else None,
+            "pending_profile_count": sum(row.sync_type == "profile" and row.status != "completed" for row in states),
+            "pending_history_count": sum(row.sync_type == "price" and row.status != "completed" for row in states),
+            "pending_analysis_count": db.scalar(select(func.count()).select_from(WatchlistItem).where(~WatchlistItem.ticker.in_(select(TechnicalAnalysis.symbol).where(TechnicalAnalysis.status == "ready")))) or 0,
+            "failed_item_count": counts["failed"] + failed_translations, "status_counts": counts,
+            "next_scheduled_run": next_run, "quota_timezone": "UTC"}
+
+
+@router.post("/admin/fmp/sync", dependencies=[Depends(get_admin_user)], status_code=status.HTTP_202_ACCEPTED)
+def fmp_admin_sync():
+    from app.tasks.celery_app import sync_fmp_history, sync_fmp_profiles
+    sync_fmp_profiles.delay()
+    sync_fmp_history.delay()
+    return {"status": "queued"}
+
+
+@router.post("/admin/fmp/sync/{symbol}", dependencies=[Depends(get_admin_user)], status_code=status.HTTP_202_ACCEPTED)
+def fmp_admin_sync_symbol(symbol: str, db: Session = Depends(get_db)):
+    value = _require_watched_ticker(db, symbol)
+    from app.tasks.celery_app import sync_fmp_symbol
+    sync_fmp_symbol.delay(value)
+    return {"status": "queued", "symbol": value}
+
+
+@router.post("/admin/technical-analysis/regenerate/{symbol}", dependencies=[Depends(get_admin_user)], status_code=status.HTTP_202_ACCEPTED)
+def regenerate_technical_analysis(symbol: str, db: Session = Depends(get_db)):
+    value = _require_watched_ticker(db, symbol)
+    from app.tasks.celery_app import generate_technical_analysis
+    generate_technical_analysis.delay(value, True)
+    return {"status": "queued", "symbol": value}
+
+
 @router.get("/stock-management")
 def stock_management(db: Session = Depends(get_db)):
     return stock_management_payload(db)
@@ -446,6 +564,7 @@ def dashboard(db: Session = Depends(get_db)):
         )
         vol = quote.volume if quote else None
         ctx = volume_context(item.ticker, float(vol)) if vol else {"ratio": None, "label": None}
+        profile = db.get(CompanyProfile, item.ticker)
         stocks.append(
             {
                 "ticker": item.ticker,
@@ -455,6 +574,8 @@ def dashboard(db: Session = Depends(get_db)):
                 "volume": vol,
                 "volume_ratio": ctx["ratio"],
                 "volume_label": ctx["label"],
+                "company_name": profile.company_name if profile else None,
+                "logo_url": profile.logo_url if profile else None,
             }
         )
     return {"market": market_status(), "stocks": stocks}

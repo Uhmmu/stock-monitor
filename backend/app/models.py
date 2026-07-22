@@ -1,7 +1,7 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import JSON, BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -232,6 +232,104 @@ class NewsProviderState(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class HistoricalPrice(Base):
+    """Validated daily EOD candles. FMP is the only writer for this table."""
+    __tablename__ = "historical_prices"
+    __table_args__ = (
+        UniqueConstraint("symbol", "date", "source", name="uq_historical_prices_symbol_date_source"),
+        Index("ix_historical_prices_symbol_date", "symbol", "date"),
+        CheckConstraint("volume IS NULL OR volume >= 0", name="ck_historical_prices_volume"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    open: Mapped[float] = mapped_column(Numeric(20, 6))
+    high: Mapped[float] = mapped_column(Numeric(20, 6))
+    low: Mapped[float] = mapped_column(Numeric(20, 6))
+    close: Mapped[float] = mapped_column(Numeric(20, 6))
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    vwap: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    change: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    change_percent: Mapped[float | None] = mapped_column(Numeric(16, 6))
+    source: Mapped[str] = mapped_column(String(16), default="fmp")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class CompanyProfile(Base):
+    """Long-lived FMP metadata; never replaces StockProfile classification."""
+    __tablename__ = "company_profiles"
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    company_name: Mapped[str | None] = mapped_column(String(256))
+    logo_url: Mapped[str | None] = mapped_column(Text)
+    website: Mapped[str | None] = mapped_column(Text)
+    ceo: Mapped[str | None] = mapped_column(String(256))
+    sector: Mapped[str | None] = mapped_column(String(128))
+    industry: Mapped[str | None] = mapped_column(String(192))
+    country: Mapped[str | None] = mapped_column(String(64))
+    exchange: Mapped[str | None] = mapped_column(String(32))
+    exchange_full_name: Mapped[str | None] = mapped_column(String(128))
+    currency: Mapped[str | None] = mapped_column(String(16))
+    ipo_date: Mapped[date | None] = mapped_column(Date)
+    employee_count: Mapped[int | None] = mapped_column(BigInteger)
+    description_en: Mapped[str | None] = mapped_column(Text)
+    description_zh: Mapped[str | None] = mapped_column(Text)
+    description_source_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    profile_source: Mapped[str] = mapped_column(String(16), default="fmp")
+    profile_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    translation_status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    translation_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    translation_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    translation_last_error: Mapped[str | None] = mapped_column(Text)
+    translation_model: Mapped[str | None] = mapped_column(String(128))
+    translation_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class FmpSyncState(Base):
+    """Durable quota ledger and per-symbol queue checkpoint."""
+    __tablename__ = "fmp_sync_states"
+    __table_args__ = (
+        UniqueConstraint("task_name", "symbol", "sync_type", name="uq_fmp_sync_state_key"),
+        CheckConstraint("requests_used >= 0", name="ck_fmp_sync_requests_used"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_name: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    sync_type: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_successful_date: Mapped[date | None] = mapped_column(Date)
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error_code: Mapped[str | None] = mapped_column(String(48))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    quota_day: Mapped[date] = mapped_column(Date, index=True)
+    requests_used: Mapped[int] = mapped_column(Integer, default=0)
+    cursor_position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class TechnicalAnalysis(Base):
+    __tablename__ = "technical_analyses"
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    analysis: Mapped[dict] = mapped_column(JSON, default=dict)
+    analysis_version: Mapped[str] = mapped_column(String(32))
+    input_hash: Mapped[str] = mapped_column(String(64), index=True)
+    structured_hash: Mapped[str | None] = mapped_column(String(64))
+    image_path: Mapped[str | None] = mapped_column(Text)
+    image_format: Mapped[str | None] = mapped_column(String(8))
+    data_through: Mapped[date | None] = mapped_column(Date)
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class DailyNewsArchive(Base):

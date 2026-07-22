@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 import logging
 
 from celery import Celery
+from celery.schedules import crontab
 from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 
@@ -15,6 +16,8 @@ from app.models import (
     EarningsEvent,
     FigurePosition,
     FinancialStatementSnapshot,
+    CompanyProfile,
+    FmpSyncState,
     Investigation,
     InvestigationStatus,
     NewsItem,
@@ -43,7 +46,11 @@ from app.services.llm import explain_cross_model
 from app.services.market_calendar import market_status
 from app.services.market_data import fetch_earnings_events, fetch_quotes, fetch_yf_financial_statements, fetch_yf_quarterly
 from app.services.marketaux import fetch_marketaux_news
-from app.services.fmp import fetch_fmp_news
+# Legacy FMP news records remain readable, but FMP is no longer scheduled as a
+# news source: the provider is reserved for profile and EOD history endpoints.
+from app.services.fmp_market import FmpAuthenticationError, FmpError, FmpQuotaExhausted, checkpoint, sync_history as sync_fmp_history_service, sync_profile as sync_fmp_profile_service
+from app.services.technical_analysis import generate_for_symbol
+from app.services.company_profile_translation import translate_description
 from app.services.news import collect_ticker_news, deduplicate, filter_news
 from app.services.news_store import news_for_day, persist_news
 from app.services.relevance import score_news
@@ -85,10 +92,16 @@ celery_app.conf.beat_schedule = {
     "sync-congress-trades": {"task": "app.tasks.celery_app.sync_congress_trades", "schedule": 21600},
     "sync-tracked-figures": {"task": "app.tasks.celery_app.sync_tracked_figures", "schedule": 43200},
 }
-if settings.fmp_enabled and settings.fmp_api_key.strip():
-    celery_app.conf.beat_schedule["poll-fmp-news"] = {
-        "task": "app.tasks.celery_app.poll_fmp_news",
-        "schedule": settings.fmp_news_interval_seconds,
+if settings.fmp_sync_enabled and settings.fmp_api_key.strip():
+    celery_app.conf.beat_schedule["sync-fmp-history"] = {
+        # 23:30 UTC on US trading weekdays, after the regular close in both DST modes.
+        "task": "app.tasks.celery_app.sync_fmp_history", "schedule": crontab(hour=23, minute=30, day_of_week="1-5"),
+    }
+    celery_app.conf.beat_schedule["sync-fmp-profiles"] = {
+        "task": "app.tasks.celery_app.sync_fmp_profiles", "schedule": 604800,
+    }
+    celery_app.conf.beat_schedule["translate-fmp-profiles"] = {
+        "task": "app.tasks.celery_app.translate_fmp_profiles", "schedule": 300,
     }
 
 
@@ -433,44 +446,6 @@ def poll_news(ticker: str | None = None):
         if total:
             translate_news_titles.delay()
         return {"tickers": len(items), "new": total}
-
-
-@celery_app.task(name="app.tasks.celery_app.poll_fmp_news")
-def poll_fmp_news():
-    """Fetch one FMP watchlist batch and send it through the normal news pipeline."""
-    if not settings.fmp_enabled or not settings.fmp_api_key.strip():
-        return {"skipped": "disabled"}
-    market_date = market_status()["checked_at"][:10]
-    parsed = datetime.fromisoformat(market_date).date()
-    with SessionLocal() as db:
-        items = db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all()
-        try:
-            fetched = fetch_fmp_news(db, [item.ticker for item in items], now=datetime.now(UTC))
-        except Exception as exc:
-            db.rollback()
-            logger.error("[FMP] scheduler integration failed: %s", type(exc).__name__)
-            return {"tickers": len(items), "new": 0, "skipped": "request_failed"}
-        total = 0
-        for item in items:
-            provider_items = fetched.items_by_ticker.get(item.ticker.upper(), [])
-            final = deduplicate(provider_items)
-            if len(final) < len(provider_items):
-                logger.info("[FMP] Skipped duplicated article")
-            kept = [dto for dto in final if filter_news(dto)]
-            if not kept:
-                continue
-            scores = score_news(item.ticker, [(dto.title, dto.summary or dto.raw_content or "") for dto in kept])
-            ranked = sorted(
-                ((dto, *scores.get(index, (None, None))) for index, dto in enumerate(kept)),
-                key=lambda row: row[1] if row[1] is not None else -1.0,
-                reverse=True,
-            )[:NEWS_PER_TICKER]
-            saved = persist_news(db, item.ticker, parsed, [row[0] for row in ranked], [(row[1], row[2]) for row in ranked])
-            total += len(saved)
-        db.commit()
-        if total:
-            translate_news_titles.delay()
-        return {"tickers": len(items), "new": total, "batch": list(fetched.batch)}
 
 
 def _daily_input_hash(news: list[NewsItem]) -> str:
@@ -842,7 +817,166 @@ def sync_ticker_full(ticker: str):
     sync_ticker_congress.delay(value)
     sync_ticker_valuation.delay(value)
     poll_news.delay(value)
+    sync_fmp_symbol.delay(value)
     return {"ticker": value, "status": "queued_full_sync"}
+
+
+def _fmp_symbols(db):
+    return list(
+        db.scalars(
+            select(WatchlistItem.ticker)
+            .where(WatchlistItem.enabled.is_(True))
+            .order_by(WatchlistItem.created_at, WatchlistItem.ticker)
+        ).all()
+    )
+
+
+def _run_fmp_symbol(db, symbol: str, position: int = 0, *, profile: bool = True, history: bool = True):
+    now = datetime.now(UTC)
+    result = {"symbol": symbol}
+    if profile and settings.fmp_profile_sync_enabled:
+        try:
+            result["profile"] = sync_fmp_profile_service(db, symbol)
+            checkpoint(
+                db, "profiles", symbol, "profile",
+                status="completed" if result["profile"]["status"] == "completed" else "empty",
+                now=now, position=position,
+            )
+        except FmpQuotaExhausted as exc:
+            checkpoint(db, "profiles", symbol, "profile", status="pending", now=now, error=exc, position=position)
+            raise
+        except FmpError as exc:
+            checkpoint(db, "profiles", symbol, "profile", status="failed", now=now, error=exc, position=position)
+            if isinstance(exc, FmpAuthenticationError):
+                raise
+    if history and settings.fmp_price_sync_enabled:
+        try:
+            synced = sync_fmp_history_service(db, symbol)
+            result["history"] = synced
+            checkpoint(
+                db, "history", symbol, "price", status="completed", now=now,
+                successful_date=synced["latest"], position=position,
+            )
+            if synced["changed"]:
+                result["analysis"] = generate_for_symbol(db, symbol)
+        except FmpQuotaExhausted as exc:
+            checkpoint(db, "history", symbol, "price", status="pending", now=now, error=exc, position=position)
+            raise
+        except FmpError as exc:
+            checkpoint(db, "history", symbol, "price", status="failed", now=now, error=exc, position=position)
+            if isinstance(exc, FmpAuthenticationError):
+                raise
+    return result
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_fmp_symbol")
+def sync_fmp_symbol(symbol: str):
+    if not settings.fmp_sync_enabled:
+        return {"skipped": "disabled"}
+    with SessionLocal() as db:
+        try:
+            return _run_fmp_symbol(db, symbol.upper())
+        except FmpQuotaExhausted:
+            return {"symbol": symbol.upper(), "status": "pending_quota"}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_fmp_history")
+def sync_fmp_history():
+    if not settings.fmp_sync_enabled or not settings.fmp_price_sync_enabled:
+        return {"skipped": "disabled"}
+    with SessionLocal() as db:
+        completed = 0
+        symbols = _fmp_symbols(db)
+        queue = db.scalar(
+            select(FmpSyncState).where(
+                FmpSyncState.task_name == "history_queue",
+                FmpSyncState.symbol == "*",
+                FmpSyncState.sync_type == "queue",
+            )
+        )
+        start = min(queue.cursor_position if queue else 0, len(symbols))
+        for position in range(start, len(symbols)):
+            symbol = symbols[position]
+            try:
+                _run_fmp_symbol(db, symbol, position, profile=False)
+                completed += 1
+                checkpoint(
+                    db, "history_queue", "*", "queue", status="completed",
+                    now=datetime.now(UTC), position=position + 1,
+                )
+            except FmpQuotaExhausted:
+                checkpoint(
+                    db, "history_queue", "*", "queue", status="pending",
+                    now=datetime.now(UTC), position=position,
+                )
+                return {"completed": completed, "status": "quota_exhausted", "next": symbol}
+        checkpoint(
+            db, "history_queue", "*", "queue", status="completed",
+            now=datetime.now(UTC), position=0,
+        )
+        return {"completed": completed}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_fmp_profiles")
+def sync_fmp_profiles():
+    if not settings.fmp_sync_enabled or not settings.fmp_profile_sync_enabled:
+        return {"skipped": "disabled"}
+    cutoff = datetime.now(UTC) - timedelta(days=settings.fmp_profile_refresh_days)
+    with SessionLocal() as db:
+        completed = 0
+        for position, symbol in enumerate(_fmp_symbols(db)):
+            profile = db.get(CompanyProfile, symbol)
+            if profile and profile.profile_fetched_at and profile.profile_fetched_at >= cutoff and profile.description_en:
+                continue
+            try:
+                _run_fmp_symbol(db, symbol, position, history=False)
+                completed += 1
+            except FmpQuotaExhausted:
+                return {"completed": completed, "status": "quota_exhausted", "next": symbol}
+        return {"completed": completed}
+
+
+@celery_app.task(name="app.tasks.celery_app.translate_fmp_profiles")
+def translate_fmp_profiles():
+    if not settings.fmp_translation_enabled:
+        return {"skipped": "disabled"}
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        rows = list(
+            db.scalars(
+                select(CompanyProfile)
+                .where(
+                    CompanyProfile.translation_status.in_(["pending", "failed"]),
+                    CompanyProfile.description_en.is_not(None),
+                    or_(CompanyProfile.translation_next_retry_at.is_(None), CompanyProfile.translation_next_retry_at <= now),
+                )
+                .order_by(CompanyProfile.updated_at)
+                .limit(10)
+            ).all()
+        )
+        completed = 0
+        for row in rows:
+            try:
+                row.description_zh, row.translation_model = translate_description(row.description_en or "")
+                row.translation_status = "completed"
+                row.translation_updated_at = now
+                row.translation_last_error = None
+                completed += 1
+                logger.info("[FMP] profile translation completed symbol=%s", row.symbol)
+            except Exception as exc:
+                row.translation_attempts += 1
+                row.translation_status = "failed"
+                row.translation_last_error = type(exc).__name__
+                row.translation_next_retry_at = now + timedelta(minutes=min(360, 2 ** row.translation_attempts))
+                logger.warning("[FMP] profile translation failed symbol=%s error=%s", row.symbol, type(exc).__name__)
+            db.commit()
+        return {"completed": completed, "attempted": len(rows)}
+
+
+@celery_app.task(name="app.tasks.celery_app.generate_technical_analysis")
+def generate_technical_analysis(symbol: str, force: bool = False):
+    with SessionLocal() as db:
+        return generate_for_symbol(db, symbol.upper(), force=force)
 
 
 def _sync_ticker_filings(db, ticker: str) -> int:
