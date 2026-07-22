@@ -4,7 +4,7 @@ from sqlalchemy import or_, select
 
 from app.models import NewsItem
 from app.services import archive
-from app.services.news import NewsDTO, normalize_url
+from app.services.news import MARKET_TICKER, NewsDTO, normalize_url
 
 
 def persist_news(
@@ -78,7 +78,9 @@ def persist_news(
                 "payload": dto.raw_payload,
             }
         )
-    if raw_records:
+    # Market news is not associated with a security. Its internal storage
+    # sentinel deliberately cannot be used as an archive directory ticker.
+    if raw_records and ticker != MARKET_TICKER:
         archive.append_raw_news(ticker, market_date, raw_records)
     return saved
 

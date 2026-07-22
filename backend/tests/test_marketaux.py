@@ -260,6 +260,12 @@ def test_market_and_company_scope_can_keep_same_article(db, monkeypatch):
     assert {row.scope for row in db.scalars(select(NewsItem)).all()} == {"company", "market"}
 
 
+def test_market_news_does_not_use_ticker_archive_path(db, monkeypatch):
+    monkeypatch.setattr("app.services.news_store.archive.append_raw_news", lambda *args: (_ for _ in ()).throw(AssertionError("market rows must not archive by ticker")))
+    item = NewsDTO(provider="finnhub", ticker="__MARKET__", title="Fed news", url="https://example.com/fed", scope="market")
+    assert len(persist_news(db, "__MARKET__", date(2026, 7, 22), [item])) == 1
+
+
 @pytest.mark.parametrize(
     "config",
     [
