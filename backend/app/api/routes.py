@@ -1,4 +1,5 @@
 import hashlib
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date as date_type, datetime, timedelta
 
@@ -512,13 +513,24 @@ def investigations(db: Session = Depends(get_db)):
     ]
 
 
+_CONFIDENCE_RE = re.compile(r"因果置信度[^高中低]{0,8}?([高中低])")
+
+
+def _extract_confidence(content: str | None) -> str | None:
+    """从异动报告正文中解析“因果置信度：高/中/低”，仅取首个匹配。"""
+    if not content:
+        return None
+    match = _CONFIDENCE_RE.search(content)
+    return match.group(1) if match else None
+
+
 @router.get("/reports")
 def reports(report_type: str | None = None, db: Session = Depends(get_db)):
     query = select(Report).order_by(Report.created_at.desc())
     if report_type:
         query = query.where(Report.report_type == report_type)
     rows = db.scalars(query.limit(100)).all()
-    return [{"id": r.id, "ticker": r.ticker, "report_type": r.report_type, "title": r.title, "model": r.model, "created_at": r.created_at} for r in rows]
+    return [{"id": r.id, "ticker": r.ticker, "report_type": r.report_type, "title": r.title, "model": r.model, "created_at": r.created_at, "confidence": _extract_confidence(r.content)} for r in rows]
 
 
 @router.get("/reports/{report_id}")
