@@ -16,6 +16,7 @@ from app.services.news import NewsDTO, normalize_url
 logger = logging.getLogger(__name__)
 
 _PROVIDER = "marketaux"
+_MARKET_PROVIDER = "marketaux_market"
 _ENDPOINT = "https://api.marketaux.com/v1/news/all"
 _FREE_TIER_HARD_LIMIT = 100
 _EXECUTION_INTERVAL = timedelta(hours=2)
@@ -59,15 +60,15 @@ def _batches(symbols: list[str], batch_size: int) -> list[tuple[str, ...]]:
     return [tuple(normalized[index:index + size]) for index in range(0, len(normalized), size)]
 
 
-def _locked_state(db, now: datetime) -> NewsProviderState:
+def _locked_state(db, now: datetime, provider: str = _PROVIDER) -> NewsProviderState:
     state = db.scalar(
         select(NewsProviderState)
-        .where(NewsProviderState.provider == _PROVIDER)
+        .where(NewsProviderState.provider == provider)
         .with_for_update()
     )
     if state is None:
         state = NewsProviderState(
-            provider=_PROVIDER,
+            provider=provider,
             quota_utc_date=now.date(),
             request_count=0,
             next_batch_index=0,
@@ -85,6 +86,7 @@ def _reserve_request(
     batches: list[tuple[str, ...]],
     now: datetime,
     max_requests: int,
+    provider: str = _PROVIDER,
 ) -> _Reservation:
     """Durably reserve one request immediately before dispatch.
 
@@ -92,7 +94,7 @@ def _reserve_request(
     the same time. The committed reservation also survives a worker restart.
     """
     limit = _effective_limit(max_requests)
-    state = _locked_state(db, now)
+    state = _locked_state(db, now, provider)
     last_execution = _utc(state.last_execution_at) if state.last_execution_at else None
     if last_execution is not None and now < last_execution + _EXECUTION_INTERVAL:
         usage = state.request_count
@@ -127,8 +129,8 @@ def _reserve_request(
     )
 
 
-def _mark_success(db, request_started_at: datetime) -> None:
-    state = _locked_state(db, request_started_at)
+def _mark_success(db, request_started_at: datetime, provider: str = _PROVIDER) -> None:
+    state = _locked_state(db, request_started_at, provider)
     previous = _utc(state.last_successful_fetch) if state.last_successful_fetch else None
     if previous is None or previous < request_started_at:
         # Use request start, not response completion, so news published in flight
@@ -200,7 +202,7 @@ def _parse_articles(rows: list[Any], batch: tuple[str, ...]) -> dict[str, list[N
                     source=source,
                     summary=summary,
                     raw_content=summary,
-                    image_url=str(raw.get("image_url") or "").strip() or None,
+                    image_url=None,
                     published_at=_parse_datetime(raw.get("published_at")),
                     raw_payload=raw,
                 )
@@ -235,7 +237,7 @@ def fetch_marketaux_news(
         db,
         batches,
         request_started_at,
-        config.marketaux_max_requests_per_day,
+        max(0, config.marketaux_max_requests_per_day - getattr(config, "marketaux_market_requests_reserve", 0)),
     )
     if reservation.status == "interval_not_elapsed":
         return MarketauxFetchResult(
@@ -306,3 +308,38 @@ def fetch_marketaux_news(
         usage=usage,
         remaining=remaining,
     )
+
+
+def fetch_marketaux_market_news(db, *, config: Settings | None = None, now: datetime | None = None,
+                                http_get: Callable[..., Any] = httpx.get) -> list[NewsDTO]:
+    """One quota-reserved broad market request; it never fans out by ticker."""
+    config = config or get_settings()
+    if not (config.marketaux_enabled and getattr(config, "marketaux_market_news_enabled", True) and config.marketaux_api_key.strip()):
+        logger.info("Marketaux market news skipped: disabled or token unavailable")
+        return []
+    started = _utc(now or datetime.now(UTC))
+    reservation = _reserve_request(db, [tuple()], started, min(getattr(config, "marketaux_market_requests_reserve", 0), config.marketaux_max_requests_per_day), _MARKET_PROVIDER)
+    if reservation.status != "request_reserved":
+        logger.info("Marketaux market news skipped: %s", reservation.status)
+        return []
+    params = {"api_token": config.marketaux_api_key, "language": "en", "group_similar": "true", "limit": 50,
+              "published_after": (started - _INITIAL_LOOKBACK).strftime("%Y-%m-%dT%H:%M:%S")}
+    try:
+        response = http_get(_ENDPOINT, params=params, timeout=_REQUEST_TIMEOUT, follow_redirects=True)
+        response.raise_for_status(); payload = response.json(); rows = payload.get("data", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list): raise ValueError("invalid response shape")
+    except Exception as exc:
+        logger.warning("Marketaux market request failed: %s", _error_label(exc)); return []
+    result: list[NewsDTO] = []
+    for raw in rows:
+        if not isinstance(raw, dict): continue
+        title, url = str(raw.get("title") or "").strip(), str(raw.get("url") or "").strip()
+        if not title or not url: continue
+        entities = raw.get("entities") if isinstance(raw.get("entities"), list) else []
+        symbols = sorted({str(entity.get("symbol") or "").upper() for entity in entities if isinstance(entity, dict) and entity.get("symbol")})
+        result.append(NewsDTO(provider="marketaux", ticker="__MARKET__", external_id=str(raw.get("uuid") or "") or None,
+            title=title[:512], url=url, source=str(raw.get("source") or "") or None,
+            summary=str(raw.get("description") or raw.get("snippet") or "") or None, published_at=_parse_datetime(raw.get("published_at")), symbols=symbols, raw_payload=raw, scope="market"))
+    _mark_success(db, started, _MARKET_PROVIDER)
+    logger.info("Marketaux market news fetched=%d accepted_input=%d usage=%d", len(rows), len(result), reservation.usage)
+    return result

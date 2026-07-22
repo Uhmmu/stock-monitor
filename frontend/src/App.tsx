@@ -23,7 +23,8 @@ type Investigation = {id:number;ticker:string;status:string;started_at:string;en
 type Report = {id:number;ticker:string|null;report_type:string;title:string;model:string;created_at:string;confidence?:'高'|'中'|'低'|null}
 type ReportDetail = Report & {content:string;sources:{title:string;url:string}[]}
 type Settings = {threshold_20m:number;threshold_1h:number;threshold_day:number;alert_cooldown_minutes:number;investigation_interval_minutes:number;investigation_duration_minutes:number;price_poll_minutes:number}
-type NewsRow = {id:number;ticker:string;provider:string;title:string;translated_title:string|null;title_translation_model:string|null;title_translated_at:string|null;url:string;source:string|null;summary:string|null;image_url:string|null;symbols:string[];news_type:string;published_at:string|null;found_at:string;relevance_score:number|null;sentiment_score:number|null;ai_summary:string|null;ai_summary_model:string|null}
+type NewsRow = {id:number;ticker:string;provider:string;title:string;translated_title:string|null;title_translation_model:string|null;title_translated_at:string|null;url:string;source:string|null;summary:string|null;symbols:string[];news_type:string;scope:'market'|'company';topic:string|null;importance_score:number|null;quality_score:number|null;published_at:string|null;found_at:string;relevance_score:number|null;sentiment_score:number|null;ai_summary:string|null;ai_summary_model:string|null}
+type MarketNewsResponse = {items:NewsRow[];total:number;generated_at:string;last_updated_at:string|null;sources:string[]}
 type NewsArchive = {ticker:string;market_date:string;content:string;model:string;version:number;updated_at:string;included_news_ids:number[]}
 type WeeklyArchive = {ticker:string;iso_year:number;iso_week:number;week_start:string;week_end:string;content:string;included_dates:string[];model:string;version:number;updated_at:string}
 type Financial = {fiscal_year:number;fiscal_period:string;period_end:string;filed_at:string|null;currency:string|null;revenue:number|null;eps:number|null;net_income:number|null;operating_income:number|null;gross_margin:number|null;net_margin:number|null;operating_cash_flow:number|null;free_cash_flow:number|null;source:string;synced_at:string}
@@ -115,7 +116,7 @@ const industryNames:Record<string,string> = {
 const localizeSector = (value:string|null|undefined,fallback='未分类') => value ? sectorNames[value]||value : fallback
 const localizeIndustry = (value:string|null|undefined,fallback='行业待同步') => value ? industryNames[value]||value : fallback
 
-function SnapshotTickerBar({section,tickers,current,onSelect}:{section:'news'|'fundamentals'|'financials'|'valuation'|'sec';tickers:string[];current:string;onSelect:(ticker:string)=>void}) {
+function SnapshotTickerBar({section,tickers,current,onSelect,leading}:{section:'news'|'fundamentals'|'financials'|'valuation'|'sec';tickers:string[];current:string;onSelect:(ticker:string)=>void;leading?:React.ReactNode}) {
   const [selectedSecurity,setSelectedSecurity] = useState<SecuritySearchResult|null>(null)
   const client = useQueryClient()
   const snapshots = useQuery({queryKey:['snapshots',section],queryFn:()=>api<TemporarySnapshot[]>(`/snapshots/${section}`)})
@@ -123,7 +124,7 @@ function SnapshotTickerBar({section,tickers,current,onSelect}:{section:'news'|'f
   const remove = useMutation({mutationFn:(ticker:string)=>api(`/snapshots/${section}/${ticker}`,{method:'DELETE'}),onSuccess:(_,ticker)=>{if(current===ticker) onSelect(tickers[0]||'');client.invalidateQueries({queryKey:['snapshots',section]});client.removeQueries({queryKey:[section,ticker]})}})
   const temporary = snapshots.data||[]
   const shown = [...tickers, ...temporary.map(item=>item.ticker).filter(ticker=>!tickers.includes(ticker))]
-  return <><form className="snapshot-search" onSubmit={event=>{event.preventDefault();if(selectedSecurity)search.mutate(selectedSecurity)}}><SecuritySearchAutocomplete value={selectedSecurity} onSelect={setSelectedSecurity} placeholder="临时查看代码或公司名称" compact/><button disabled={!selectedSecurity||search.isPending}>{search.isPending?'正在采集…':'查看快照'}</button></form><div className="news-tickers">{shown.map(ticker=>{const isTemporary=temporary.some(item=>item.ticker===ticker);return <span className={`ticker-chip${ticker===current?' active':''}${isTemporary?' temporary':''}`} key={ticker}><button onClick={()=>onSelect(ticker)}>{ticker}</button>{isTemporary&&<button className="ticker-remove" aria-label={`删除 ${ticker} 临时快照`} onClick={()=>remove.mutate(ticker)}>×</button>}</span>})}</div>{search.isError&&<p className="error">候选证券已失效或暂时无法采集，请重新搜索。</p>}</>
+  return <><form className="snapshot-search" onSubmit={event=>{event.preventDefault();if(selectedSecurity)search.mutate(selectedSecurity)}}><SecuritySearchAutocomplete value={selectedSecurity} onSelect={setSelectedSecurity} placeholder="临时查看代码或公司名称" compact/><button disabled={!selectedSecurity||search.isPending}>{search.isPending?'正在采集…':'查看快照'}</button></form><div className="news-tickers">{leading}{shown.map(ticker=>{const isTemporary=temporary.some(item=>item.ticker===ticker);return <span className={`ticker-chip${ticker===current?' active':''}${isTemporary?' temporary':''}`} key={ticker}><button onClick={()=>onSelect(ticker)}>{ticker}</button>{isTemporary&&<button className="ticker-remove" aria-label={`删除 ${ticker} 临时快照`} onClick={()=>remove.mutate(ticker)}>×</button>}</span>})}</div>{search.isError&&<p className="error">候选证券已失效或暂时无法采集，请重新搜索。</p>}</>
 }
 
 const demoDashboard:Dashboard = {
@@ -633,37 +634,41 @@ function SecCenter({tickers,active,setActive}:{tickers:string[];active:string;se
 
 function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;setActive:(ticker:string)=>void}) {
   const [weeklyOpen,setWeeklyOpen] = useState(false)
+  const [scope,setScope] = useState<'market'|'company'>('market')
   const client = useQueryClient()
   const current = active||tickers[0]||''
-  const news = useQuery({queryKey:['news',current],queryFn:()=>api<NewsRow[]>(`/news?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
-  const archive = useQuery({queryKey:['news-archive',current],queryFn:()=>api<NewsArchive|null>(`/news/archive?ticker=${current}`),enabled:!!current})
-  const weekly = useQuery({queryKey:['news-weekly',current],queryFn:()=>api<WeeklyArchive[]>(`/news/weekly?ticker=${current}`),enabled:!!current&&weeklyOpen})
-  const refresh = useMutation({mutationFn:()=>post(`/news/refresh?ticker=${current}`,{})})
+  const companyNews = useQuery({queryKey:['news',current],queryFn:()=>api<NewsRow[]>(`/news?ticker=${current}`),enabled:scope==='company'&&!!current})
+  const marketNews = useQuery({queryKey:['news','market'],queryFn:()=>api<MarketNewsResponse>('/news/market'),enabled:scope==='market'})
+  const news = scope==='market' ? marketNews.data?.items : companyNews.data
+  const archive = useQuery({queryKey:['news-archive',current],queryFn:()=>api<NewsArchive|null>(`/news/archive?ticker=${current}`),enabled:scope==='company'&&!!current})
+  const weekly = useQuery({queryKey:['news-weekly',current],queryFn:()=>api<WeeklyArchive[]>(`/news/weekly?ticker=${current}`),enabled:scope==='company'&&!!current&&weeklyOpen})
+  const refresh = useMutation({mutationFn:()=>post(scope==='market'?'/news/market/refresh':`/news/refresh?ticker=${current}`,{})})
   const summarize = useMutation({mutationFn:(id:number)=>post<NewsRow>(`/news/${id}/summarize`,{}),onSuccess:()=>client.invalidateQueries({queryKey:['news',current]})})
   // 隐藏“采用与合并”和“剔除”过程段，只留关键事实归纳（兼容历史旧结构定档）
   const keyFactsOnly = (md:string) => md.replace(/###\s*(?:采用与合并|剔除)[\s\S]*?(?=\n###\s|$)/g,'').trim()
   const includedIds = archive.data?.included_news_ids || []
   const orderNo = (id:number) => { const i = includedIds.indexOf(id); return i>=0 ? i+1 : null }
   return <div className="news-center">
-    <SnapshotTickerBar section="news" tickers={tickers} current={current} onSelect={setActive}/>
-    {!current&&<div className="empty">搜索并选择证券，临时查看新闻。</div>}
-    <div className="section-title"><h2>每日定档（Luna 去重）</h2><button onClick={()=>setWeeklyOpen(true)}>历史每周新闻</button></div>
+    <SnapshotTickerBar section="news" tickers={tickers} current={scope==='company'?current:''} onSelect={ticker=>{setActive(ticker);setScope('company')}} leading={<button className={`market-entry ${scope==='market'?'active':''}`} onClick={()=>setScope('market')}>全市场</button>}/>
+    {scope==='company'&&!current&&<div className="empty">搜索并选择证券，临时查看新闻。</div>}
+    {scope==='company'&&<><div className="section-title"><h2>每日定档（Luna 去重）</h2><button onClick={()=>setWeeklyOpen(true)}>历史每周新闻</button></div>
     {archive.data?<article className="report-detail"><p className="eyebrow">{archive.data.market_date} · v{archive.data.version} · {archive.data.model}</p><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{keyFactsOnly(archive.data.content)}</ReactMarkdown></div></article>:<div className="empty">尚未生成每日定档。</div>}
     <Sheet open={weeklyOpen} onClose={()=>setWeeklyOpen(false)} title={`${current} 历史每周新闻`}>
       {weekly.isLoading?<div className="empty">加载中…</div>:weekly.data?.length?<div className="weekly-list">{weekly.data.map(w=><article className="report-detail" key={`${w.iso_year}-${w.iso_week}`}><p className="eyebrow">{w.week_start} ~ {w.week_end} · {w.iso_year}W{w.iso_week} · v{w.version} · {w.model}</p><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{keyFactsOnly(w.content)}</ReactMarkdown></div></article>)}</div>:<div className="empty">暂无历史每周新闻。</div>}
-    </Sheet>
-    <div className="section-title"><h2>{current} 新闻</h2><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'刷新中…':'刷新新闻'}</button></div>
+    </Sheet></>}
+    <div className="section-title"><h2>{scope==='market'?'市场要闻':`${current} 新闻`}</h2><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'刷新中…':'刷新新闻'}</button></div>
+    {scope==='market'&&marketNews.data?.last_updated_at&&<p className="market-updated">最近更新：{formatDate(marketNews.data.last_updated_at)}</p>}
     {refresh.isSuccess&&<p className="saved">已触发后台采集，稍后刷新查看。</p>}
-    <div className="news-list">{news.data?.map(item=>{const no=orderNo(item.id);return <article className="news-card" key={item.id}>
+    <div className="news-list">{news?.map(item=>{const no=orderNo(item.id);return <article className="news-card" key={item.id}>
       <div className="news-body">
-        <div className="news-meta">{no&&<span className="news-no">[{no}]</span>}<span className={`prov ${item.provider}`}>{item.provider==='finnhub'?'Finnhub':item.provider==='tavily'?'Tavily':item.provider==='yfinance'?'Yahoo财经':item.provider==='marketaux'?'Marketaux':item.provider}</span>{item.source&&<span>{item.source}</span>}<span>{item.published_at?formatDate(item.published_at):formatDate(item.found_at)}</span></div>
+        <div className="news-meta">{no&&<span className="news-no">[{no}]</span>}<span className={`prov ${item.provider}`}>{item.provider==='finnhub'?'Finnhub':item.provider==='tavily'?'Tavily':item.provider==='yfinance'?'Yahoo财经':item.provider==='marketaux'?'Marketaux':item.provider}</span>{item.topic&&<span className="news-topic">{item.topic}</span>}{item.importance_score!==null&&item.importance_score>=.65&&<span className="news-important">重要</span>}{item.source&&<span>{item.source}</span>}<span>{item.published_at?formatDate(item.published_at):formatDate(item.found_at)}</span></div>
         <a className="news-title" href={item.url} target="_blank" rel="noreferrer">{item.translated_title||item.title}</a>
         {item.translated_title&&item.translated_title!==item.title&&<p className="news-original-title">{item.title}</p>}
         {item.summary&&<p className="news-summary">{item.summary}</p>}
-        <button className="ai-btn" onClick={()=>summarize.mutate(item.id)} disabled={summarize.isPending&&summarize.variables===item.id}>{summarize.isPending&&summarize.variables===item.id?'AI 总结中…':item.ai_summary?'重新总结':'AI 总结'}</button>
+        {scope==='company'&&<button className="ai-btn" onClick={()=>summarize.mutate(item.id)} disabled={summarize.isPending&&summarize.variables===item.id}>{summarize.isPending&&summarize.variables===item.id?'AI 总结中…':item.ai_summary?'重新总结':'AI 总结'}</button>}
         {item.ai_summary&&<div className="ai-summary"><span className="ai-tag">Luna · {item.ai_summary_model}</span><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{item.ai_summary}</ReactMarkdown></div>}
       </div>
-    </article>})}{!news.data?.length&&<div className="empty">暂无原始新闻，点击"刷新新闻"触发采集。</div>}</div>
+    </article>})}{!news?.length&&<div className="empty">暂无原始新闻，点击"刷新新闻"触发采集。</div>}</div>
   </div>
 }
 

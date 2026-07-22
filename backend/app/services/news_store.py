@@ -19,17 +19,17 @@ def persist_news(
     for position, dto in enumerate(dtos):
         fingerprint = dto.fingerprint
         normalized_url = normalize_url(dto.url)
-        duplicate_conditions = [NewsItem.fingerprint == fingerprint]
+        duplicate_conditions = [NewsItem.scope == dto.scope, NewsItem.fingerprint == fingerprint]
         if dto.provider in {"marketaux", "fmp"}:
             # URL deduplication is cross-provider so the same publisher article
             # is not reinserted after Yahoo or Finnhub found it first.
             duplicate_conditions.extend([
-                NewsItem.normalized_url == normalized_url,
-                NewsItem.url == dto.url,
+                (NewsItem.scope == dto.scope) & (NewsItem.normalized_url == normalized_url),
+                (NewsItem.scope == dto.scope) & (NewsItem.url == dto.url),
             ])
             if dto.external_id:
                 duplicate_conditions.append(
-                    (NewsItem.provider == dto.provider) & (NewsItem.external_id == dto.external_id)
+                    (NewsItem.scope == dto.scope) & (NewsItem.provider == dto.provider) & (NewsItem.external_id == dto.external_id)
                 )
         exists = db.scalar(select(NewsItem.id).where(or_(*duplicate_conditions)))
         if exists:
@@ -40,13 +40,18 @@ def persist_news(
             provider=dto.provider,
             external_id=dto.external_id,
             fingerprint=fingerprint,
+            scope=dto.scope,
+            topic=dto.topic,
+            importance_score=dto.importance_score,
+            quality_score=dto.quality_score,
+            cluster_key=dto.cluster_key,
             title=dto.title[:512],
             url=dto.url,
             normalized_url=normalized_url,
             source=dto.source,
             summary=dto.summary,
             raw_content=dto.raw_content,
-            image_url=dto.image_url,
+            image_url=None,
             symbols=dto.symbols or None,
             news_type=dto.news_type,
             raw_payload=dto.raw_payload or None,
@@ -68,6 +73,8 @@ def persist_news(
                 "published_at": dto.published_at,
                 "symbols": dto.symbols,
                 "news_type": dto.news_type,
+                "scope": dto.scope,
+                "topic": dto.topic,
                 "payload": dto.raw_payload,
             }
         )

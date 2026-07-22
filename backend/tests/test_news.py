@@ -1,4 +1,6 @@
-from app.services.news import NewsDTO, deduplicate, news_fingerprint, normalize_url
+from datetime import UTC, datetime, timedelta
+
+from app.services.news import NewsDTO, deduplicate, news_fingerprint, normalize_title, normalize_url, prepare_news
 
 
 def test_normalize_url_strips_tracking_and_trailing_slash():
@@ -27,3 +29,21 @@ def test_deduplicate_removes_cross_source_duplicates():
     ]
     unique = deduplicate(items)
     assert len(unique) == 2
+
+
+def test_title_and_url_normalization_are_stable():
+    assert normalize_url("https://example.com/a?ref=x&utm_source=y&id=1") == "https://example.com/a?id=1"
+    assert normalize_title("Breaking: Fed—Holds Rates Steady - Reuters") == "fed-holds rates steady"
+
+
+def test_market_pipeline_clusters_and_diversifies():
+    now = datetime.now(UTC)
+    rows = [
+        NewsDTO("finnhub", "__MARKET__", "Fed holds rates steady", "https://r.test/1", source="Reuters", published_at=now),
+        NewsDTO("marketaux", "__MARKET__", "Federal Reserve holds interest rates steady", "https://b.test/2", source="Bloomberg", published_at=now + timedelta(minutes=1)),
+        NewsDTO("finnhub", "__MARKET__", "Oil rises as OPEC weighs supply", "https://r.test/3", source="Reuters", published_at=now),
+    ]
+    final, stats = prepare_news(rows, scope="market", now=now, limit=20)
+    assert len(final) == 2
+    assert stats["clustered"] == 1
+    assert {row.topic for row in final} >= {"央行与利率", "能源与大宗商品"}

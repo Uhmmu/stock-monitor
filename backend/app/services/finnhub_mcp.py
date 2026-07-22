@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,7 @@ from app.config import get_settings
 from app.services.news import NewsDTO
 
 _REQUEST_TIMEOUT = 30
+logger = logging.getLogger(__name__)
 
 
 async def _call_tool(name: str, arguments: dict) -> dict | list:
@@ -71,11 +73,35 @@ def fetch_company_news(ticker: str, days: int = 7) -> list[NewsDTO]:
                 source=row.get("source"),
                 summary=row.get("summary"),
                 raw_content=row.get("summary"),
-                image_url=row.get("image") or None,
+                image_url=None,
                 published_at=_parse_time(row.get("datetime")),
                 raw_payload=row,
             )
         )
+    return items
+
+
+def fetch_market_news() -> list[NewsDTO]:
+    """Finnhub's documented general market-news endpoint, bounded and defensive."""
+    settings = get_settings()
+    if not settings.finnhub_api_key:
+        logger.info("Finnhub market news skipped: API key unavailable")
+        return []
+    request = Request("https://finnhub.io/api/v1/news?category=general", headers={"X-Finnhub-Token": settings.finnhub_api_key, "User-Agent": "stock-monitor/2.0"})
+    try:
+        with urlopen(request, timeout=_REQUEST_TIMEOUT) as response:
+            if response.status == 429: logger.warning("Finnhub market news rate limited"); return []
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        status = getattr(exc, "code", None)
+        logger.warning("Finnhub market news request failed%s", f": HTTP {status}" if status else f": {type(exc).__name__}")
+        return []
+    if not isinstance(payload, list): return []
+    items: list[NewsDTO] = []
+    for row in payload[:100]:
+        if not isinstance(row, dict) or not row.get("headline") or not row.get("url"): continue
+        symbols = [str(value).upper() for value in row.get("related", "").split(",") if value.strip()]
+        items.append(NewsDTO(provider="finnhub", ticker="__MARKET__", external_id=str(row.get("id")) if row.get("id") is not None else None, title=str(row["headline"])[:512], url=str(row["url"]), source=row.get("source"), summary=row.get("summary"), published_at=_parse_time(row.get("datetime")), symbols=symbols, raw_payload=row, scope="market"))
     return items
 
 

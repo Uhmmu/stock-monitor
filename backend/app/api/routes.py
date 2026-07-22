@@ -674,8 +674,11 @@ def _news_out(item: NewsItem) -> dict:
         "url": item.url,
         "source": item.source,
         "summary": item.summary,
-        "image_url": item.image_url,
         "symbols": item.symbols or [],
+        "scope": item.scope,
+        "topic": item.topic,
+        "importance_score": item.importance_score,
+        "quality_score": item.quality_score,
         "news_type": item.news_type,
         "published_at": item.published_at,
         "found_at": item.found_at,
@@ -695,7 +698,7 @@ def _current_week_start() -> date_type:
 @router.get("/news")
 def list_news(ticker: str = Query(...), date: date_type | None = None, db: Session = Depends(get_db)):
     value = _require_watched_ticker(db, ticker, "news")
-    query = select(NewsItem).where(NewsItem.ticker == value)
+    query = select(NewsItem).where(NewsItem.ticker == value, NewsItem.scope == "company")
     if date:
         start = datetime.combine(date, datetime.min.time(), tzinfo=UTC)
         end = datetime.combine(date, datetime.max.time(), tzinfo=UTC)
@@ -704,8 +707,25 @@ def list_news(ticker: str = Query(...), date: date_type | None = None, db: Sessi
         # 仅本周：早于本周的原始新闻已被每周汇总任务清理，这里也做上界防御
         week_start = datetime.combine(_current_week_start(), datetime.min.time(), tzinfo=UTC)
         query = query.where(NewsItem.found_at >= week_start)
-    query = query.order_by(NewsItem.published_at.desc().nullslast(), NewsItem.found_at.desc()).limit(200)
+    query = query.order_by(NewsItem.importance_score.desc().nullslast(), NewsItem.quality_score.desc().nullslast(), NewsItem.published_at.desc().nullslast(), NewsItem.found_at.desc()).limit(200)
     return [_news_out(item) for item in db.scalars(query).all()]
+
+
+@router.get("/news/market")
+def list_market_news(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), topic: str | None = None, db: Session = Depends(get_db)):
+    query = select(NewsItem).where(NewsItem.scope == "market")
+    if topic:
+        query = query.where(NewsItem.topic == topic)
+    total = len(db.scalars(query).all())
+    rows = db.scalars(query.order_by(NewsItem.importance_score.desc().nullslast(), NewsItem.quality_score.desc().nullslast(), NewsItem.published_at.desc().nullslast()).offset(offset).limit(limit)).all()
+    return {"items": [_news_out(item) for item in rows], "total": total, "generated_at": datetime.now(UTC), "last_updated_at": max((item.found_at for item in rows), default=None), "sources": sorted({item.provider for item in rows})}
+
+
+@router.post("/news/market/refresh")
+def refresh_market_news():
+    from app.tasks.celery_app import poll_market_news
+    poll_market_news.delay()
+    return {"status": "queued", "scope": "market"}
 
 
 @router.post("/news/{news_id}/summarize")

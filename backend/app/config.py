@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     marketaux_enabled: bool = True
     marketaux_max_requests_per_day: int = 100
     marketaux_batch_size: int = 5
+    market_news_enabled: bool = True
+    finnhub_market_news_enabled: bool = True
+    marketaux_market_news_enabled: bool = True
+    market_news_poll_minutes: int = 60
+    marketaux_market_requests_reserve: int = 12
+    market_news_max_items: int = 20
     fmp_enabled: bool = True
     fmp_api_key: str = ""
     fmp_base_url: str = "https://financialmodelingprep.com/stable"

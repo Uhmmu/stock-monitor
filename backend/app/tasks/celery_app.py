@@ -45,27 +45,25 @@ from app.services.llm import curate_daily_news, curate_weekly_news, generate_ana
 from app.services.llm import explain_cross_model
 from app.services.market_calendar import market_status
 from app.services.market_data import fetch_earnings_events, fetch_quotes, fetch_yf_financial_statements, fetch_yf_quarterly
-from app.services.marketaux import fetch_marketaux_news
+from app.services.marketaux import fetch_marketaux_market_news, fetch_marketaux_news
 # Legacy FMP news records remain readable, but FMP is no longer scheduled as a
 # news source: the provider is reserved for profile and EOD history endpoints.
 from app.services.fmp_market import FmpAuthenticationError, FmpError, FmpQuotaExhausted, checkpoint, sync_history as sync_fmp_history_service, sync_profile as sync_fmp_profile_service
 from app.services.technical_analysis import generate_for_symbol
 from app.services.company_profile_translation import translate_description
-from app.services.news import collect_ticker_news, deduplicate, filter_news
+from app.services.news import MARKET_TICKER, collect_ticker_news, prepare_news
 from app.services.news_store import news_for_day, persist_news
-from app.services.relevance import score_news
 from app.services.search import search_ticker_news
 from app.services.title_translation import title_input_hash, translate_title
 from app.services.cross_model import build_cross_model, fetch_cross_model_inputs, opinion_evidence
-from app.services.finnhub_mcp import fetch_basic_metrics, fetch_company_peers
+from app.services.finnhub_mcp import fetch_basic_metrics, fetch_company_peers, fetch_market_news
 from app.services.graham import build_graham_from_sources, get_latest_aaa_corporate_bond_yield
 from app.services.stock_management import cache_official_relations, effective_peer_symbols, referenced_tickers, upsert_profile, valuation_tickers
 from app.services.securities import provider_symbol
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-NEWS_PER_TICKER = 12  # 每只股票入库上限，按相关性取 top N
-MIN_NEWS_PER_TICKER = 5  # 保底：新闻少的股票不被阈值砍光，按关联度降序至少留 N 篇
+NEWS_PER_TICKER = 12  # 每只股票入库上限；低信息时允许少于该值，避免用噪声补位。
 celery_app = Celery("stock_monitor", broker=settings.redis_url, backend=settings.redis_url)
 celery_app.conf.timezone = "UTC"
 celery_app.conf.beat_schedule = {
@@ -75,6 +73,7 @@ celery_app.conf.beat_schedule = {
     "sync-earnings": {"task": "app.tasks.celery_app.sync_earnings", "schedule": 21600},
     "earnings-reports": {"task": "app.tasks.celery_app.earnings_reports", "schedule": 1800},
     "poll-news": {"task": "app.tasks.celery_app.poll_news", "schedule": settings.news_poll_minutes * 60},
+    "poll-market-news": {"task": "app.tasks.celery_app.poll_market_news", "schedule": settings.market_news_poll_minutes * 60},
     "curate-daily-news": {"task": "app.tasks.celery_app.curate_daily_archives", "schedule": 1800},
     # 每周汇总：每天跑一次，把已结束的完整 ISO 周（周一起）合并成周报后删除当周原始新闻与每日定档
     "rollup-weekly-news": {"task": "app.tasks.celery_app.rollup_weekly_archives", "schedule": 3600},
@@ -421,31 +420,37 @@ def poll_news(ticker: str | None = None):
                 db.rollback()
                 logger.error("Marketaux scheduler integration failed: %s", type(exc).__name__)
         for item in items:
-            dtos = collect_ticker_news(item.ticker, finnhub_symbol=provider_symbol(db, item.ticker, "finnhub"))
-            dtos = deduplicate(dtos + marketaux_items.get(item.ticker.upper(), []))
-            kept = [dto for dto in dtos if filter_news(dto, now)]
-            if not kept:
+            dtos = collect_ticker_news(item.ticker, finnhub_symbol=provider_symbol(db, item.ticker, "finnhub")) + marketaux_items.get(item.ticker.upper(), [])
+            final, stats = prepare_news(dtos, scope="company", now=now, limit=NEWS_PER_TICKER)
+            if not final:
                 continue
-            scores = score_news(item.ticker, [(dto.title, dto.summary or dto.raw_content or "") for dto in kept])
-            threshold = settings.news_relevance_threshold
-            # 全部按相关性降序（无分的排最后）
-            ranked = sorted(
-                ((dto, *scores.get(index, (None, None))) for index, dto in enumerate(kept)),
-                key=lambda row: row[1] if row[1] is not None else -1.0,
-                reverse=True,
-            )
-            # 达标的（≥阈值）优先；若达标不足 MIN_NEWS_PER_TICKER，按关联度降序补齐保底篇数
-            above = [row for row in ranked if row[1] is not None and row[1] >= threshold]
-            scored = above if len(above) >= MIN_NEWS_PER_TICKER else ranked[:MIN_NEWS_PER_TICKER]
-            scored = scored[:NEWS_PER_TICKER]
-            final = [row[0] for row in scored]
-            final_scores = [(row[1], row[2]) for row in scored]
-            saved = persist_news(db, item.ticker, parsed, final, final_scores)
+            saved = persist_news(db, item.ticker, parsed, final, [(dto.importance_score, None) for dto in final])
+            logger.info("news provider/company ticker=%s fetched=%d accepted=%d filtered=%d clustered=%d inserted=%d", item.ticker, stats["fetched"], stats["accepted"], stats["filtered"], stats["clustered"], len(saved))
             total += len(saved)
         db.commit()
         if total:
             translate_news_titles.delay()
         return {"tickers": len(items), "new": total}
+
+
+@celery_app.task(name="app.tasks.celery_app.poll_market_news")
+def poll_market_news():
+    if not settings.market_news_enabled:
+        return {"skipped": "disabled"}
+    now = datetime.now(UTC); inputs = []
+    with SessionLocal() as db:
+        if settings.finnhub_market_news_enabled:
+            try: inputs.extend(fetch_market_news())
+            except Exception as exc: logger.warning("Finnhub market collection failed: %s", type(exc).__name__)
+        if settings.marketaux_market_news_enabled:
+            try: inputs.extend(fetch_marketaux_market_news(db, now=now))
+            except Exception as exc: db.rollback(); logger.warning("Marketaux market collection failed: %s", type(exc).__name__)
+        final, stats = prepare_news(inputs, scope="market", now=now, limit=settings.market_news_max_items)
+        saved = persist_news(db, MARKET_TICKER, now.date(), final, [(dto.importance_score, None) for dto in final])
+        db.commit()
+        if saved: translate_news_titles.delay()
+        logger.info("news provider=combined scope=market fetched=%d accepted=%d filtered=%d clustered=%d inserted=%d", stats["fetched"], stats["accepted"], stats["filtered"], stats["clustered"], len(saved))
+        return {**stats, "inserted": len(saved)}
 
 
 def _daily_input_hash(news: list[NewsItem]) -> str:

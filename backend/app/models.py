@@ -166,16 +166,20 @@ class Investigation(Base):
 class NewsItem(Base):
     __tablename__ = "news_items"
     __table_args__ = (
+        UniqueConstraint("scope", "fingerprint", name="uq_news_items_scope_fingerprint"),
+        Index("ix_news_items_scope_published", "scope", "published_at"),
+        Index("ix_news_items_ticker_published", "ticker", "published_at"),
+        Index("ix_news_items_cluster_key", "cluster_key"),
         Index(
             "uq_news_items_marketaux_external_id",
-            "external_id",
+            "scope", "external_id",
             unique=True,
             postgresql_where=text("provider = 'marketaux'"),
             sqlite_where=text("provider = 'marketaux'"),
         ),
         Index(
             "uq_news_items_marketaux_normalized_url",
-            "normalized_url",
+            "scope", "normalized_url",
             unique=True,
             postgresql_where=text("provider = 'marketaux'"),
             sqlite_where=text("provider = 'marketaux'"),
@@ -186,7 +190,13 @@ class NewsItem(Base):
     ticker: Mapped[str] = mapped_column(String(16), index=True)
     provider: Mapped[str] = mapped_column(String(32), index=True)
     external_id: Mapped[str | None] = mapped_column(String(256))
-    fingerprint: Mapped[str] = mapped_column(String(64), unique=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    # Market rows use an internal ticker sentinel and are isolated by scope.
+    scope: Mapped[str] = mapped_column(String(16), default="company", server_default="company", index=True)
+    topic: Mapped[str | None] = mapped_column(String(64), index=True)
+    importance_score: Mapped[float | None] = mapped_column(Float, index=True)
+    quality_score: Mapped[float | None] = mapped_column(Float)
+    cluster_key: Mapped[str | None] = mapped_column(String(64))
     title: Mapped[str] = mapped_column(String(512))
     translated_title: Mapped[str | None] = mapped_column(String(512))
     title_translation_model: Mapped[str | None] = mapped_column(String(128))

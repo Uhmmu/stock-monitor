@@ -250,6 +250,16 @@ def test_marketaux_url_deduplication_applies_across_providers(db, monkeypatch):
     assert len(db.scalars(select(NewsItem)).all()) == 1
 
 
+def test_market_and_company_scope_can_keep_same_article(db, monkeypatch):
+    monkeypatch.setattr("app.services.news_store.archive.append_raw_news", lambda *args: None)
+    shared = "https://example.com/shared-market-event"
+    company = NewsDTO(provider="finnhub", ticker="AAPL", external_id="same", title="Apple event", url=shared)
+    market = NewsDTO(provider="finnhub", ticker="__MARKET__", external_id="same", title="Apple event", url=shared, scope="market")
+    assert len(persist_news(db, "AAPL", date(2026, 7, 22), [company])) == 1
+    assert len(persist_news(db, "__MARKET__", date(2026, 7, 22), [market])) == 1
+    assert {row.scope for row in db.scalars(select(NewsItem)).all()} == {"company", "market"}
+
+
 @pytest.mark.parametrize(
     "config",
     [
