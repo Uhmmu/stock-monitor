@@ -643,7 +643,7 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
   const archive = useQuery({queryKey:['news-archive',current],queryFn:()=>api<NewsArchive|null>(`/news/archive?ticker=${current}`),enabled:scope==='company'&&!!current})
   const weekly = useQuery({queryKey:['news-weekly',current],queryFn:()=>api<WeeklyArchive[]>(`/news/weekly?ticker=${current}`),enabled:scope==='company'&&!!current&&weeklyOpen})
   const refresh = useMutation({mutationFn:()=>post(scope==='market'?'/news/market/refresh':`/news/refresh?ticker=${current}`,{})})
-  const summarize = useMutation({mutationFn:(id:number)=>post<NewsRow>(`/news/${id}/summarize`,{}),onSuccess:()=>client.invalidateQueries({queryKey:['news',current]})})
+  const summarize = useMutation({mutationFn:(id:number)=>post<NewsRow>(`/news/${id}/summarize`,{}),onSuccess:()=>client.invalidateQueries({queryKey:scope==='market'?['news','market']:['news',current]})})
   // 隐藏“采用与合并”和“剔除”过程段，只留关键事实归纳（兼容历史旧结构定档）
   const keyFactsOnly = (md:string) => md.replace(/###\s*(?:采用与合并|剔除)[\s\S]*?(?=\n###\s|$)/g,'').trim()
   const includedIds = archive.data?.included_news_ids || []
@@ -665,7 +665,7 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
         <a className="news-title" href={item.url} target="_blank" rel="noreferrer">{item.translated_title||item.title}</a>
         {item.translated_title&&item.translated_title!==item.title&&<p className="news-original-title">{item.title}</p>}
         {item.summary&&<p className="news-summary">{item.summary}</p>}
-        {scope==='company'&&<button className="ai-btn" onClick={()=>summarize.mutate(item.id)} disabled={summarize.isPending&&summarize.variables===item.id}>{summarize.isPending&&summarize.variables===item.id?'AI 总结中…':item.ai_summary?'重新总结':'AI 总结'}</button>}
+        <button className="ai-btn" onClick={()=>summarize.mutate(item.id)} disabled={summarize.isPending&&summarize.variables===item.id}>{summarize.isPending&&summarize.variables===item.id?'AI 总结中…':item.ai_summary?'重新总结':'AI 总结'}</button>
         {item.ai_summary&&<div className="ai-summary"><span className="ai-tag">Luna · {item.ai_summary_model}</span><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{item.ai_summary}</ReactMarkdown></div>}
       </div>
     </article>})}{!news?.length&&<div className="empty">暂无原始新闻，点击"刷新新闻"触发采集。</div>}</div>
