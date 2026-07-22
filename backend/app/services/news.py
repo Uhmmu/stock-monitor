@@ -6,11 +6,27 @@ from urllib.parse import urlsplit, urlunsplit
 
 _TRACKING_PREFIXES = ("utm_", "fbclid", "gclid", "mc_", "ref", "spm")
 
-# 垃圾/低质来源黑名单（小写匹配）
+# 垃圾/低质来源黑名单统一保存规范域名；显示名由兼容别名映射。
 SOURCE_BLACKLIST = {
-    "zacks", "investorplace", "motley fool", "the motley fool", "insider monkey",
-    "simply wall st", "gurufocus", "tipranks", "stocktwits", "247wallst.com",
-    "247 wall st.", "benzinga", "seeking alpha",
+    "zacks.com", "investorplace.com", "fool.com", "insidermonkey.com",
+    "simplywall.st", "gurufocus.com", "tipranks.com", "stocktwits.com",
+    "247wallst.com", "benzinga.com", "seekingalpha.com",
+}
+_SOURCE_DISPLAY_NAME_ALIASES = {
+    "zacks": "zacks.com",
+    "investorplace": "investorplace.com",
+    "motley fool": "fool.com",
+    "the motley fool": "fool.com",
+    "insider monkey": "insidermonkey.com",
+    "simply wall st": "simplywall.st",
+    "simply wall st.": "simplywall.st",
+    "gurufocus": "gurufocus.com",
+    "tipranks": "tipranks.com",
+    "stocktwits": "stocktwits.com",
+    "247 wall st": "247wallst.com",
+    "247 wall st.": "247wallst.com",
+    "benzinga": "benzinga.com",
+    "seeking alpha": "seekingalpha.com",
 }
 # 标题垃圾关键词（小写子串匹配）——只保留无争议的垃圾类型
 TITLE_BLACKLIST = (
@@ -21,12 +37,44 @@ TITLE_BLACKLIST = (
 _MAX_AGE = timedelta(hours=48)
 
 
+def normalize_news_source(source: str | None) -> str:
+    """Normalize a provider display name or URL-like source to a domain key."""
+    value = (source or "").strip().lower().rstrip("/")
+    if not value:
+        return ""
+    display_name = re.sub(r"\s+", " ", value)
+    if display_name in _SOURCE_DISPLAY_NAME_ALIASES:
+        return _SOURCE_DISPLAY_NAME_ALIASES[display_name]
+
+    # Prefixing // lets urlsplit parse bare domains and subdomains as hosts.
+    parsed = urlsplit(value if "://" in value else f"//{value}")
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    normalized = hostname or display_name
+    return _SOURCE_DISPLAY_NAME_ALIASES.get(normalized, normalized)
+
+
+def is_blacklisted_news_source(source: str | None) -> bool:
+    normalized = normalize_news_source(source)
+    if not normalized:
+        return False
+    return any(
+        normalized == blocked_domain or normalized.endswith(f".{blocked_domain}")
+        for blocked_domain in SOURCE_BLACKLIST
+    )
+
+
 def filter_news(dto: "NewsDTO", now: datetime | None = None) -> bool:
     """规则层：通过返回 True，丢弃返回 False。在 AI 打分前先跑，省 token。"""
+    # Marketaux is quota-limited and batch-fetched, so it bypasses only this
+    # source/title/age quality gate. Deduplication and relevance ranking remain.
+    if dto.provider == "marketaux":
+        return True
     now = now or datetime.now(UTC)
     if dto.published_at and now - dto.published_at > _MAX_AGE:
         return False
-    if dto.source and dto.source.strip().lower() in SOURCE_BLACKLIST:
+    if is_blacklisted_news_source(dto.source):
         return False
     title_lower = (dto.title or "").lower()
     if any(keyword in title_lower for keyword in TITLE_BLACKLIST):

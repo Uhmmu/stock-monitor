@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     archive_dir: str = "/data/archive"
     news_poll_minutes: int = 15
     news_relevance_threshold: float = 0.15
+    marketaux_api_key: str = ""
+    marketaux_enabled: bool = True
+    marketaux_max_requests_per_day: int = 100
+    marketaux_batch_size: int = 5
     sec_user_agent: str = "stockMonitor/1.0 self-hosted@example.com"
     edgar_local_data_dir: str = "/data/edgar"
     sec_insider_heavy_sell_value: float = 1_000_000.0

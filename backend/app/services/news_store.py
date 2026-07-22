@@ -1,10 +1,10 @@
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.models import NewsItem
 from app.services import archive
-from app.services.news import NewsDTO
+from app.services.news import NewsDTO, normalize_url
 
 
 def persist_news(
@@ -18,7 +18,20 @@ def persist_news(
     raw_records: list[dict] = []
     for position, dto in enumerate(dtos):
         fingerprint = dto.fingerprint
-        exists = db.scalar(select(NewsItem.id).where(NewsItem.fingerprint == fingerprint))
+        normalized_url = normalize_url(dto.url)
+        duplicate_conditions = [NewsItem.fingerprint == fingerprint]
+        if dto.provider == "marketaux":
+            # URL deduplication is cross-provider so the same publisher article
+            # is not reinserted after Yahoo or Finnhub found it first.
+            duplicate_conditions.extend([
+                NewsItem.normalized_url == normalized_url,
+                NewsItem.url == dto.url,
+            ])
+            if dto.external_id:
+                duplicate_conditions.append(
+                    (NewsItem.provider == "marketaux") & (NewsItem.external_id == dto.external_id)
+                )
+        exists = db.scalar(select(NewsItem.id).where(or_(*duplicate_conditions)))
         if exists:
             continue
         relevance, sentiment = scores[position] if scores else (None, None)
@@ -29,6 +42,7 @@ def persist_news(
             fingerprint=fingerprint,
             title=dto.title[:512],
             url=dto.url,
+            normalized_url=normalized_url,
             source=dto.source,
             summary=dto.summary,
             raw_content=dto.raw_content,

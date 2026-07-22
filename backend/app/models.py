@@ -1,7 +1,7 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -165,6 +165,22 @@ class Investigation(Base):
 
 class NewsItem(Base):
     __tablename__ = "news_items"
+    __table_args__ = (
+        Index(
+            "uq_news_items_marketaux_external_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text("provider = 'marketaux'"),
+            sqlite_where=text("provider = 'marketaux'"),
+        ),
+        Index(
+            "uq_news_items_marketaux_normalized_url",
+            "normalized_url",
+            unique=True,
+            postgresql_where=text("provider = 'marketaux'"),
+            sqlite_where=text("provider = 'marketaux'"),
+        ),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     investigation_id: Mapped[int | None] = mapped_column(ForeignKey("investigations.id"), index=True)
     ticker: Mapped[str] = mapped_column(String(16), index=True)
@@ -181,6 +197,7 @@ class NewsItem(Base):
     title_translation_last_error: Mapped[str | None] = mapped_column(Text)
     title_translation_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     url: Mapped[str] = mapped_column(Text)
+    normalized_url: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str | None] = mapped_column(String(128))
     summary: Mapped[str | None] = mapped_column(Text)
     raw_content: Mapped[str | None] = mapped_column(Text)
@@ -194,6 +211,25 @@ class NewsItem(Base):
     ai_summary_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     found_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class NewsProviderState(Base):
+    """Persistent scheduler state for quota-limited batch news providers."""
+
+    __tablename__ = "news_provider_states"
+    __table_args__ = (
+        CheckConstraint("request_count >= 0", name="ck_news_provider_states_request_count"),
+        CheckConstraint("next_batch_index >= 0", name="ck_news_provider_states_next_batch_index"),
+    )
+    provider: Mapped[str] = mapped_column(String(32), primary_key=True)
+    quota_utc_date: Mapped[date] = mapped_column(Date)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_batch_index: Mapped[int] = mapped_column(Integer, default=0)
+    last_execution_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_successful_fetch: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class DailyNewsArchive(Base):

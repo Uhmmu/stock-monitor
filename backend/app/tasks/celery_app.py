@@ -42,7 +42,8 @@ from app.services.llm import curate_daily_news, curate_weekly_news, generate_ana
 from app.services.llm import explain_cross_model
 from app.services.market_calendar import market_status
 from app.services.market_data import fetch_earnings_events, fetch_quotes, fetch_yf_financial_statements, fetch_yf_quarterly
-from app.services.news import collect_ticker_news, filter_news
+from app.services.marketaux import fetch_marketaux_news
+from app.services.news import collect_ticker_news, deduplicate, filter_news
 from app.services.news_store import news_for_day, persist_news
 from app.services.relevance import score_news
 from app.services.search import search_ticker_news
@@ -387,8 +388,22 @@ def poll_news(ticker: str | None = None):
             items = [item for item in items if item.ticker == ticker] or [type("SnapshotTicker", (), {"ticker": ticker.upper()})()]
         total = 0
         now = datetime.now(UTC)
+        marketaux_items: dict[str, list] = {}
+        # Manual single-ticker refreshes retain their old behavior and do not
+        # consume a batch request. Scheduled full polls fetch exactly one batch.
+        if ticker is None:
+            try:
+                marketaux_items = fetch_marketaux_news(
+                    db,
+                    [item.ticker for item in items],
+                    now=now,
+                ).items_by_ticker
+            except Exception as exc:
+                db.rollback()
+                logger.error("Marketaux scheduler integration failed: %s", type(exc).__name__)
         for item in items:
             dtos = collect_ticker_news(item.ticker, finnhub_symbol=provider_symbol(db, item.ticker, "finnhub"))
+            dtos = deduplicate(dtos + marketaux_items.get(item.ticker.upper(), []))
             kept = [dto for dto in dtos if filter_news(dto, now)]
             if not kept:
                 continue

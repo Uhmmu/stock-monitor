@@ -297,6 +297,7 @@ textarea{resize:vertical;min-height:140px}
 .prov.finnhub{background:rgba(52,199,89,.16);color:#0a7d43}
 .prov.tavily{background:rgba(0,113,227,.14);color:var(--accent-ink)}
 .prov.yfinance{background:rgba(175,82,222,.14);color:#8944ab}
+.prov.marketaux{background:rgba(214,118,33,.15);color:#934b12}
 .news-title{display:block;color:var(--ink);font-weight:600;font-size:16px;line-height:1.42;
   text-decoration:none;letter-spacing:-.01em;transition:color .2s}
 .news-title:hover{color:var(--accent-ink)}
