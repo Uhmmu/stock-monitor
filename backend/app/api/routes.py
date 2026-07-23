@@ -63,12 +63,11 @@ from app.schemas import (
 )
 from app.auth import get_admin_user, get_current_user
 from app.services.fmp_market import budget_status
-from app.services.article_fetch import fetch_article_text
 from app.services.finnhub_mcp import fetch_basic_metrics, fetch_recommendations
 from app.services.market_data import fetch_index_quotes, fetch_yf_info_metrics, fetch_yf_recommendations
 from app.services.stock_management import normalize_ticker, stock_management_payload, upsert_profile
 from app.services.securities import SecuritySearchUnavailable, provider_symbol, resolve_security, search_securities
-from app.services.llm import summarize_news, summarize_trade_log
+from app.services.llm import summarize_trade_log
 from app.services.market_calendar import market_status
 from app.services.volume_stats import volume_context
 
@@ -687,6 +686,8 @@ def _news_out(item: NewsItem) -> dict:
         "sentiment_score": item.sentiment_score,
         "ai_summary": item.ai_summary,
         "ai_summary_model": item.ai_summary_model,
+        "ai_summary_status": item.ai_summary_status,
+        "ai_summary_requested_at": item.ai_summary_requested_at,
     }
 
 
@@ -730,26 +731,29 @@ def refresh_market_news():
 
 
 @router.post("/news/{news_id}/summarize")
-def summarize(news_id: int, db: Session = Depends(get_db)):
+def summarize(news_id: int, force: bool = False, db: Session = Depends(get_db)):
     item = db.get(NewsItem, news_id)
     if not item:
         raise HTTPException(404, "未找到新闻")
-    full_text = fetch_article_text(item.url)
-    if full_text:
-        item.raw_content = full_text
-        content = full_text
-    else:
-        content = item.raw_content or item.summary or item.title
-    input_hash = hashlib.sha256(f"{item.title}\n{content}".encode("utf-8")).hexdigest()[:64]
-    if item.ai_summary and item.ai_summary_input_hash == input_hash:
+    if item.ai_summary_status in {"queued", "processing"}:
         return _news_out(item)
-    summary, model = summarize_news(item.title, content)
-    item.ai_summary = summary
-    item.ai_summary_model = model
-    item.ai_summary_input_hash = input_hash
-    item.ai_summary_created_at = datetime.now(UTC)
+    from uuid import uuid4
+    from app.tasks.celery_app import summarize_news_item
+
+    request_id = str(uuid4())
+    item.ai_summary_status = "queued"
+    item.ai_summary_request_id = request_id
+    item.ai_summary_requested_at = datetime.now(UTC)
+    item.ai_summary_last_error = None
     db.commit()
     db.refresh(item)
+    try:
+        summarize_news_item.apply_async(args=[news_id, request_id, force], priority=9)
+    except Exception as exc:
+        item.ai_summary_status = "failed"
+        item.ai_summary_last_error = f"{type(exc).__name__}: {exc}"[:1000]
+        db.commit()
+        raise HTTPException(503, "AI 总结任务暂时无法排队，请稍后重试") from exc
     return _news_out(item)
 
 

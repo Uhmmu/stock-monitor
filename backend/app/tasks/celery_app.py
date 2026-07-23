@@ -41,7 +41,7 @@ from app.services.alerting import evaluate_quote
 from app.services.financials import quarters_from_yf
 from app.services.sec_edgar import fetch_filings
 from app.services.market_context import build_market_context
-from app.services.llm import curate_daily_news, curate_weekly_news, generate_analysis
+from app.services.llm import curate_daily_news, curate_weekly_news, generate_analysis, summarize_news
 from app.services.llm import explain_cross_model
 from app.services.market_calendar import market_status
 from app.services.market_data import fetch_earnings_events, fetch_quotes, fetch_yf_financial_statements, fetch_yf_quarterly
@@ -53,6 +53,7 @@ from app.services.technical_analysis_engine import generate_for_symbol, sync_fal
 from app.services.company_profile_translation import translate_description
 from app.services.news import MARKET_TICKER, collect_ticker_news, prepare_news
 from app.services.news_store import news_for_day, persist_news
+from app.services.article_fetch import fetch_article_text
 from app.services.search import search_ticker_news
 from app.services.title_translation import title_input_hash, translate_title
 from app.services.cross_model import build_cross_model, fetch_cross_model_inputs, opinion_evidence
@@ -102,6 +103,63 @@ if settings.fmp_sync_enabled and settings.fmp_api_key.strip():
     celery_app.conf.beat_schedule["translate-fmp-profiles"] = {
         "task": "app.tasks.celery_app.translate_fmp_profiles", "schedule": 300,
     }
+
+
+@celery_app.task(
+    name="app.tasks.celery_app.summarize_news_item",
+    soft_time_limit=210,
+    time_limit=240,
+)
+def summarize_news_item(news_id: int, request_id: str, force: bool = False):
+    """抓取正文并生成单篇新闻总结；request_id 防止旧任务覆盖较新的请求。"""
+    with SessionLocal() as db:
+        item = db.get(NewsItem, news_id)
+        if not item:
+            return {"status": "missing", "news_id": news_id}
+        if item.ai_summary_request_id != request_id:
+            return {"status": "superseded", "news_id": news_id}
+        item.ai_summary_status = "processing"
+        item.ai_summary_last_error = None
+        title = item.title
+        url = item.url
+        stored_content = item.raw_content or item.summary or item.title
+        existing_hash = item.ai_summary_input_hash
+        has_summary = bool(item.ai_summary)
+        db.commit()
+
+    try:
+        full_text = fetch_article_text(url)
+        content = full_text or stored_content
+        input_hash = hashlib.sha256(f"{title}\n{content}".encode("utf-8")).hexdigest()[:64]
+        if has_summary and existing_hash == input_hash and not force:
+            summary = model = None
+        else:
+            summary, model = summarize_news(title, content)
+
+        with SessionLocal() as db:
+            item = db.get(NewsItem, news_id)
+            if not item or item.ai_summary_request_id != request_id:
+                return {"status": "superseded", "news_id": news_id}
+            if full_text:
+                item.raw_content = full_text
+            if summary is not None:
+                item.ai_summary = summary
+                item.ai_summary_model = model
+                item.ai_summary_input_hash = input_hash
+                item.ai_summary_created_at = datetime.now(UTC)
+            item.ai_summary_status = "completed"
+            item.ai_summary_last_error = None
+            db.commit()
+        return {"status": "completed", "news_id": news_id}
+    except Exception as exc:
+        logger.exception("Interactive news summary failed news_id=%s", news_id)
+        with SessionLocal() as db:
+            item = db.get(NewsItem, news_id)
+            if item and item.ai_summary_request_id == request_id:
+                item.ai_summary_status = "failed"
+                item.ai_summary_last_error = f"{type(exc).__name__}: {exc}"[:1000]
+                db.commit()
+        return {"status": "failed", "news_id": news_id}
 
 
 def _save_report(db, key: str, ticker: str | None, report_type: ReportType, title: str, evidence: str, tier: str, sources: list[dict], start=None, end=None):

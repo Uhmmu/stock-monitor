@@ -312,6 +312,7 @@ textarea{resize:vertical;min-height:140px}
 .ai-summary{margin-top:12px;padding:14px 18px;border-left:3px solid var(--accent);
   background:rgba(0,113,227,.055);border-radius:0 12px 12px 0;color:var(--ink-2);line-height:1.65}
 .ai-tag{display:inline-block;font-size:10px;color:var(--accent-ink);font-weight:700;margin-bottom:6px}
+.summary-error{display:block;margin-top:7px;color:var(--down)}
 .metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
 .metric-card{padding:18px 20px;border:1px solid var(--line);background:var(--solid);
   border-radius:var(--r-s);display:flex;flex-direction:column;gap:6px;box-shadow:var(--shadow-s);

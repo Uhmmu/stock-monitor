@@ -273,13 +273,16 @@ def curate_weekly_news(ticker: str, week_label: str, evidence: str) -> tuple[str
 
 
 def summarize_news(title: str, content: str) -> tuple[str, str]:
-    client, model = _client_and_model("medium")
+    # 单篇新闻只需要客观归纳，复用低延迟的 Haiku 栈；深度报告仍走
+    # OpenAI medium/important 档。失败由持久任务状态呈现并允许用户重试。
+    client, model = _translation_client_and_model()
     response = client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": NEWS_SUMMARY_SYSTEM_PROMPT},
             {"role": "user", "content": f"标题：{title}\n\n原文：\n{content}"},
         ],
+        temperature=0,
     )
     return response.choices[0].message.content or "", model
 
