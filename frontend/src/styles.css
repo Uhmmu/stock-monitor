@@ -1114,14 +1114,13 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
   .position-card-grid{gap:12px 14px}
   .position-detail-btn:active{transform:scale(.98)}
 
-  .portfolio-mobile-sheet{padding:2px 0 calc(8px + env(safe-area-inset-bottom))}
-  .portfolio-mobile-sheet .portfolio-technical{display:block}
-  .portfolio-mobile-sheet .portfolio-technical-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-bottom:16px}
-  .portfolio-mobile-sheet .portfolio-technical-list button{min-width:0;padding:11px;border-radius:13px}
-  .portfolio-mobile-sheet .portfolio-technical-list button b,.portfolio-mobile-sheet .portfolio-technical-list button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .portfolio-mobile-sheet .portfolio-technical-detail{min-height:12rem}
+  .portfolio-technical{display:block}
+  .portfolio-technical-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-bottom:16px}
+  .portfolio-technical-list button{min-width:0;padding:11px;border-radius:13px}
+  .portfolio-technical-list button b,.portfolio-technical-list button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .portfolio-technical-detail{min-height:12rem}
   .position-technical-panel{padding:2px}
-  .position-technical-header{position:sticky;top:-7px;z-index:2;padding:10px 2px 11px;background:linear-gradient(rgba(248,250,253,.96) 72%,rgba(248,250,253,0));backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .position-technical-header{position:static;padding:10px 2px 11px;background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none}
   .technical-metrics{grid-template-columns:1fr 1fr;gap:8px}
   .technical-metrics>div{min-height:76px;padding:12px;border-radius:14px}
   .technical-metrics b{font-size:16px}

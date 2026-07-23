@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, post } from './api'
 import { Sheet } from './Sheet'
@@ -135,18 +135,6 @@ const trendLabel:Record<string,string> = {uptrend:'上升趋势',downtrend:'下�
 const volLabel:Record<string,string> = {expanding:'波动扩大',contracting:'波动收窄',normal:'波动正常',unknown:'数据不足'}
 type PortfolioTab = 'overview'|'positions'|'technical'|'health'|'transactions'
 
-function useMobilePortfolio() {
-  const [mobile,setMobile] = useState(false)
-  useEffect(()=>{
-    const query=window.matchMedia('(max-width: 700px)')
-    const update=()=>setMobile(query.matches)
-    update()
-    query.addEventListener('change',update)
-    return ()=>query.removeEventListener('change',update)
-  },[])
-  return mobile
-}
-
 function emptyManualForm(today:string) {
   return {symbol:'',price:'',quantity:'',trade_date:today,fees:'0',currency:'USD',account:'',note:''}
 }
@@ -155,15 +143,13 @@ export function PortfolioModule() {
   const client = useQueryClient()
   const today = new Date().toISOString().slice(0,10)
   const [subtab,setSubtab] = useState<PortfolioTab>('overview')
-  const [mobileSheet,setMobileSheet] = useState<'technical'|'health'|null>(null)
   const [entryOpen,setEntryOpen] = useState(false)
   const [entrySecurity,setEntrySecurity] = useState<SecuritySearchResult|null>(null)
   const [entryForm,setEntryForm] = useState(emptyManualForm(today))
   const [detailSymbol,setDetailSymbol] = useState<string|null>(null)
-  const isMobile = useMobilePortfolio()
 
   const summary = useQuery({queryKey:['portfolio-summary'],queryFn:()=>api<PortfolioSummary>('/portfolio/summary'),staleTime:30_000})
-  const health = useQuery({queryKey:['portfolio-health'],queryFn:()=>api<PortfolioHealth>('/portfolio/health'),enabled:subtab==='health'||mobileSheet==='health',staleTime:60_000})
+  const health = useQuery({queryKey:['portfolio-health'],queryFn:()=>api<PortfolioHealth>('/portfolio/health'),enabled:subtab==='health',staleTime:60_000})
   const transactions = useQuery({queryKey:['portfolio-transactions'],queryFn:()=>api<TransactionRow[]>('/portfolio/transactions'),enabled:subtab==='transactions'})
   const detail = useQuery({queryKey:['portfolio-technical',detailSymbol],queryFn:()=>api<PositionTechnical>(`/portfolio/positions/${detailSymbol}/technical`),enabled:!!detailSymbol})
 
@@ -199,18 +185,12 @@ export function PortfolioModule() {
   const s = summary.data
   const subtabs:[PortfolioTab,string][] = [['overview','总览'],['positions','持仓明细'],['technical','技术位置'],['health','组合健康'],['transactions','交易记录']]
   const openTab = (key:PortfolioTab) => {
-    if(isMobile&&(key==='technical'||key==='health')){
-      if(key==='technical'&&!detailSymbol&&s?.positions[0]) setDetailSymbol(s.positions[0].symbol)
-      setMobileSheet(key)
-      return
-    }
-    setMobileSheet(null)
+    if(key==='technical'&&!detailSymbol&&s?.positions[0]) setDetailSymbol(s.positions[0].symbol)
     setSubtab(key)
   }
   const openTechnical = (symbol:string) => {
     setDetailSymbol(symbol)
-    if(isMobile) setMobileSheet('technical')
-    else setSubtab('technical')
+    setSubtab('technical')
   }
   const technicalContent = <div className="portfolio-technical">
     <div className="portfolio-technical-list">{s?.positions.map(p=><button key={p.symbol} className={detailSymbol===p.symbol?'active':''} onClick={()=>setDetailSymbol(p.symbol)}>
@@ -229,7 +209,7 @@ export function PortfolioModule() {
       <div><p>HOLDINGS</p><h2>持仓</h2></div>
       <div className="section-actions"><button onClick={()=>setEntryOpen(true)}>＋ 手动添加持仓</button></div>
     </div>
-    <div className="portfolio-subtabs">{subtabs.map(([key,label])=><button key={key} className={subtab===key||mobileSheet===key?'active':''} onClick={()=>openTab(key)}>{label}</button>)}</div>
+    <div className="portfolio-subtabs">{subtabs.map(([key,label])=><button key={key} className={subtab===key?'active':''} onClick={()=>openTab(key)}>{label}</button>)}</div>
 
     {subtab==='overview'&&<div className="portfolio-overview">
       {summary.isLoading&&<div className="empty">正在读取持仓数据…</div>}
@@ -271,9 +251,9 @@ export function PortfolioModule() {
       {!s?.positions.length&&<div className="empty">还没有持仓明细。</div>}
     </div>}
 
-    {subtab==='technical'&&!isMobile&&technicalContent}
+    {subtab==='technical'&&technicalContent}
 
-    {subtab==='health'&&!isMobile&&healthContent}
+    {subtab==='health'&&healthContent}
 
     {subtab==='transactions'&&<div className="portfolio-transactions">
       <div className="table portfolio-txn-table">
@@ -307,12 +287,6 @@ export function PortfolioModule() {
         {createEntry.error&&<p className="error">{createEntry.error.message}</p>}
         <div className="portfolio-entry-actions"><button disabled={createEntry.isPending||!entryForm.symbol}>{createEntry.isPending?'保存中…':'保存持仓'}</button></div>
       </form>
-    </Sheet>
-    <Sheet open={mobileSheet==='technical'} onClose={()=>setMobileSheet(null)} title={detailSymbol?`技术位置 · ${detailSymbol}`:'技术位置'}>
-      <div className="portfolio-mobile-sheet portfolio-technical-sheet">{technicalContent}</div>
-    </Sheet>
-    <Sheet open={mobileSheet==='health'} onClose={()=>setMobileSheet(null)} title="组合健康">
-      <div className="portfolio-mobile-sheet portfolio-health-sheet">{healthContent}</div>
     </Sheet>
   </div>
 }
