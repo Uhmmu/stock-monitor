@@ -19,6 +19,9 @@ class ManualPositionIn(BaseModel):
 
     symbol: str = Field(min_length=1, max_length=16)
     security_id: int | None = Field(default=None, gt=0)
+    source: str | None = Field(default=None, pattern="^(yahoo|finnhub|local)$")
+    yahoo_symbol: str | None = Field(default=None, max_length=32)
+    finnhub_symbol: str | None = Field(default=None, max_length=32)
     price: float = Field(gt=0)
     quantity: float = Field(gt=0)
     trade_date: date

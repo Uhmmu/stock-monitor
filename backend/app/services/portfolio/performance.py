@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Portfolio, PortfolioPosition
 
+from .fx import FxQuote, fx_rate_map
 from .pricing import PriceInfo, price_map
 
 
@@ -24,7 +25,6 @@ def _position_view(pos: PortfolioPosition, price: PriceInfo | None) -> dict:
         "total_quantity": qty,
         "average_cost": pos.average_cost,
         "total_cost": cost_basis,
-        "realized_pnl": pos.realized_pnl,
         "currency": pos.currency,
         "last_transaction_at": pos.last_transaction_at.isoformat() if pos.last_transaction_at else None,
         "price_available": price is not None,
@@ -33,6 +33,12 @@ def _position_view(pos: PortfolioPosition, price: PriceInfo | None) -> dict:
         "market_value": None,
         "unrealized_pnl": None,
         "unrealized_pnl_percent": None,
+        "fx_rate": None,
+        "fx_rate_source": None,
+        "base_currency_market_value": None,
+        "base_currency_total_cost": None,
+        "base_currency_unrealized_pnl": None,
+        "valuation_available": False,
         "portfolio_weight": None,
     }
     if price is not None:
@@ -44,6 +50,19 @@ def _position_view(pos: PortfolioPosition, price: PriceInfo | None) -> dict:
             round(unrealized / cost_basis * 100, 4) if cost_basis > 0 else None
         )
     return view
+
+
+def _apply_fx(view: dict, quote: FxQuote | None) -> None:
+    if quote is None:
+        return
+    view["fx_rate"] = round(quote.rate, 10)
+    view["fx_rate_source"] = quote.source
+    view["base_currency_total_cost"] = round(view["total_cost"] * quote.rate, 4)
+    if not view["price_available"]:
+        return
+    view["base_currency_market_value"] = round(view["market_value"] * quote.rate, 4)
+    view["base_currency_unrealized_pnl"] = round(view["unrealized_pnl"] * quote.rate, 4)
+    view["valuation_available"] = True
 
 
 def build_summary(db: Session, portfolio: Portfolio) -> dict:
@@ -59,30 +78,38 @@ def build_summary(db: Session, portfolio: Portfolio) -> dict:
     )
     prices = price_map(db, [p.symbol for p in positions])
     views = [_position_view(p, prices.get(p.symbol)) for p in positions]
-
-    priced = [v for v in views if v["price_available"]]
-    total_market_value = round(sum(v["market_value"] for v in priced), 4)
-    total_cost = round(sum(v["total_cost"] for v in views), 4)
-    total_unrealized = round(sum(v["unrealized_pnl"] for v in priced), 4)
-    total_realized = round(sum((v["realized_pnl"] or 0.0) for v in views), 4)
-
+    rates = fx_rate_map(portfolio.base_currency, {v["currency"] for v in views})
     for view in views:
-        if view["price_available"] and total_market_value > 0:
-            view["portfolio_weight"] = round(view["market_value"] / total_market_value * 100, 4)
+        _apply_fx(view, rates.get(view["currency"]))
+
+    valued = [v for v in views if v["valuation_available"]]
+    converted_costs = [v for v in views if v["base_currency_total_cost"] is not None]
+    total_market_value = round(sum(v["base_currency_market_value"] for v in valued), 4)
+    total_cost = round(sum(v["base_currency_total_cost"] for v in converted_costs), 4)
+    total_unrealized = round(sum(v["base_currency_unrealized_pnl"] for v in valued), 4)
+    valued_cost = round(sum(v["base_currency_total_cost"] for v in valued), 4)
+    for view in views:
+        if view["valuation_available"] and total_market_value > 0:
+            view["portfolio_weight"] = round(
+                view["base_currency_market_value"] / total_market_value * 100, 4
+            )
 
     return {
         "portfolio_id": portfolio.id,
         "base_currency": portfolio.base_currency,
         "position_count": len(views),
-        "priced_count": len(priced),
+        "priced_count": len(valued),
         "total_market_value": total_market_value,
         "total_cost": total_cost,
         "total_unrealized_pnl": total_unrealized,
         "total_unrealized_pnl_percent": (
-            round(total_unrealized / total_cost * 100, 4) if total_cost > 0 else None
+            round(total_unrealized / valued_cost * 100, 4) if valued_cost > 0 else None
         ),
-        "total_realized_pnl": total_realized,
-        "has_unpriced_positions": len(priced) < len(views),
+        "has_unpriced_positions": any(not v["price_available"] for v in views),
+        "has_unconverted_positions": any(v["fx_rate"] is None for v in views),
+        "fx_conversion_used": any(
+            v["currency"] != portfolio.base_currency and v["fx_rate"] is not None for v in views
+        ),
         "positions": views,
     }
 
@@ -98,4 +125,7 @@ def build_position_detail(db: Session, portfolio: Portfolio, symbol: str) -> dic
         return None
     from .pricing import latest_price
 
-    return _position_view(pos, latest_price(db, pos.symbol))
+    view = _position_view(pos, latest_price(db, pos.symbol))
+    quote = fx_rate_map(portfolio.base_currency, {view["currency"]}).get(view["currency"])
+    _apply_fx(view, quote)
+    return view

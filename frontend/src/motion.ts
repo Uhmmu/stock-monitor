@@ -7,6 +7,7 @@ export type SpringConfig = { damping: number; response: number }
 export const SPRINGS = {
   move: { damping: 1.0, response: 0.4 },     // 位移/重定位(如 PiP)
   rotate: { damping: 0.8, response: 0.4 },   // 旋转
+  sheet: { damping: 1.0, response: 0.34 },   // 程序化打开/关闭:克制、无过冲
   drawer: { damping: 0.8, response: 0.3 },   // 抽屉/弹窗
   snappy: { damping: 0.9, response: 0.28 },  // 快速吸附
 } as const

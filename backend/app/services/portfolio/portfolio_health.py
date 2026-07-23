@@ -52,9 +52,9 @@ def _sector_exposure(db: Session, priced_positions: list[dict], total_market_val
     for pos in priced_positions:
         sector = profiles.get(pos["symbol"]) or None
         if sector is None:
-            unknown_value += pos["market_value"]
+            unknown_value += pos["base_currency_market_value"]
             continue
-        buckets[sector] = buckets.get(sector, 0.0) + pos["market_value"]
+        buckets[sector] = buckets.get(sector, 0.0) + pos["base_currency_market_value"]
     out = [
         {"sector": sector, "market_value": round(value, 4),
          "weight": round(value / total_market_value * 100, 4)}
@@ -70,12 +70,15 @@ def _sector_exposure(db: Session, priced_positions: list[dict], total_market_val
 
 def build_health(db: Session, portfolio: Portfolio) -> dict:
     summary = build_summary(db, portfolio)
-    priced = [p for p in summary["positions"] if p["price_available"]]
+    priced = [p for p in summary["positions"] if p["valuation_available"]]
     total_mv = summary["total_market_value"]
-    weights = [p["market_value"] / total_mv for p in priced] if total_mv > 0 else []
+    weights = [
+        p["base_currency_market_value"] / total_mv for p in priced
+    ] if total_mv > 0 else []
 
     return {
         "portfolio_id": portfolio.id,
+        "base_currency": portfolio.base_currency,
         "total_market_value": total_mv,
         "priced_count": len(priced),
         "position_count": summary["position_count"],

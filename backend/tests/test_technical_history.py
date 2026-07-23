@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.database import Base
 from app.models import HistoricalPrice, TechnicalAnalysis
-from app.services import market_data, technical_analysis
+from app.services import market_data
+from app.services import technical_analysis_engine as technical_analysis
 
 
 @pytest.fixture

@@ -49,7 +49,7 @@ from app.services.marketaux import fetch_marketaux_market_news, fetch_marketaux_
 # Legacy FMP news records remain readable, but FMP is no longer scheduled as a
 # news source: the provider is reserved for profile and EOD history endpoints.
 from app.services.fmp_market import FmpAuthenticationError, FmpError, FmpInvalidSymbol, FmpPremiumRequired, FmpQuotaExhausted, checkpoint, sync_history as sync_fmp_history_service, sync_profile as sync_fmp_profile_service
-from app.services.technical_analysis import generate_for_symbol, sync_fallback_history
+from app.services.technical_analysis_engine import generate_for_symbol, sync_fallback_history
 from app.services.company_profile_translation import translate_description
 from app.services.news import MARKET_TICKER, collect_ticker_news, prepare_news
 from app.services.news_store import news_for_day, persist_news

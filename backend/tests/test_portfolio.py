@@ -83,7 +83,6 @@ def test_rebuild_symbol_single_buy():
     assert result.total_quantity == 10
     assert result.average_cost == 100.0
     assert result.total_cost == 1000.0
-    assert result.realized_pnl == 0.0
     assert len(result.lots) == 1
 
 
@@ -99,7 +98,7 @@ def test_rebuild_symbol_multiple_buys_average_cost():
     assert len(result.lots) == 2
 
 
-def test_rebuild_symbol_sell_realizes_pnl_against_average_cost():
+def test_rebuild_symbol_sell_reduces_open_position():
     txns = [
         _txn(1, "AAPL", "buy", 10, 100.0, trade_date=date(2026, 1, 1), txn_id=1),
         _txn(1, "AAPL", "sell", 5, 150.0, trade_date=date(2026, 1, 2), txn_id=2),
@@ -107,7 +106,6 @@ def test_rebuild_symbol_sell_realizes_pnl_against_average_cost():
     result = rebuild_symbol(txns)
     assert result.total_quantity == 5
     assert result.average_cost == 100.0
-    assert result.realized_pnl == pytest.approx(250.0)
     assert len(result.lots) == 1
     assert result.lots[0].remaining_quantity == 5
     assert result.lots[0].status == "partial"
@@ -122,7 +120,6 @@ def test_rebuild_symbol_dividend_and_fee_do_not_touch_quantity():
     result = rebuild_symbol(txns)
     assert result.total_quantity == 10
     assert result.average_cost == 100.0
-    assert result.realized_pnl == pytest.approx(3.0)  # +5 dividend - 2 fee
 
 
 def test_rebuild_symbol_flat_position_has_no_lots():
@@ -134,7 +131,6 @@ def test_rebuild_symbol_flat_position_has_no_lots():
     assert result.total_quantity == 0
     assert result.average_cost == 0.0
     assert result.lots == []
-    assert result.realized_pnl == pytest.approx(200.0)
 
 
 # ── position_builder.rebuild_symbol_position ──────────────────────────────
@@ -150,9 +146,7 @@ def test_rebuild_symbol_position_persists_position_and_lots(db, portfolio):
     assert len(lots) == 1
 
 
-def test_rebuild_symbol_position_keeps_flat_position_with_realized_history(db, portfolio):
-    # Buy then fully sell at a gain: quantity goes flat, but realized PnL is
-    # non-zero, so the position row is kept (qty=0) as a record rather than dropped.
+def test_rebuild_symbol_position_drops_fully_closed_position(db, portfolio):
     db.add(_txn(portfolio.id, "AAPL", "buy", 10, 100.0, trade_date=date(2026, 1, 1), txn_id=1))
     db.commit()
     rebuild_symbol_position(db, portfolio.id, "AAPL")
@@ -161,15 +155,14 @@ def test_rebuild_symbol_position_keeps_flat_position_with_realized_history(db, p
     db.commit()
     pos = rebuild_symbol_position(db, portfolio.id, "AAPL")
     db.commit()
-    assert pos is not None
-    assert pos.total_quantity == 0
-    assert pos.realized_pnl == pytest.approx(200.0)
+    assert pos is None
+    assert db.query(PortfolioPosition).filter_by(portfolio_id=portfolio.id, symbol="AAPL").first() is None
     assert db.query(PortfolioPositionLot).filter_by(portfolio_id=portfolio.id, symbol="AAPL").count() == 0
 
 
 def test_rebuild_symbol_position_drops_row_when_no_history_remains(db, portfolio):
     # Buy then delete the transaction entirely: no transactions -> no quantity,
-    # no realized history -> the derived position row is dropped, not kept at zero.
+    # no remaining quantity -> the derived position row is dropped.
     txn = _txn(portfolio.id, "AAPL", "buy", 10, 100.0, trade_date=date(2026, 1, 1), txn_id=1)
     db.add(txn)
     db.commit()
@@ -238,6 +231,89 @@ def test_build_summary_only_weights_priced_positions(db, portfolio):
     assert msft["market_value"] is None
     assert msft["portfolio_weight"] is None
     assert summary["total_market_value"] == pytest.approx(1500.0)
+    assert "realized_pnl" not in aapl
+    assert "total_realized_pnl" not in summary
+
+
+def test_build_summary_converts_foreign_positions_to_base_currency(db, portfolio, monkeypatch):
+    from app.services.portfolio.fx import FxQuote
+
+    create_manual_position(
+        db,
+        portfolio,
+        ManualPositionIn(
+            symbol="1578.T",
+            price=4000.0,
+            quantity=10,
+            trade_date=date(2026, 1, 1),
+            currency="JPY",
+        ),
+    )
+    db.add(
+        PriceSnapshot(
+            ticker="1578.T",
+            quote_time=datetime.now(UTC),
+            price=5000.0,
+            previous_close=4900.0,
+            volume=1,
+            source="test",
+        )
+    )
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.portfolio.performance.fx_rate_map",
+        lambda base, currencies: {
+            "JPY": FxQuote(rate=0.00625, source="test:JPYUSD", fetched_at=datetime.now(UTC))
+        },
+    )
+
+    summary = build_summary(db, portfolio)
+    position = summary["positions"][0]
+    assert position["market_value"] == pytest.approx(50_000)
+    assert position["base_currency_market_value"] == pytest.approx(312.5)
+    assert position["base_currency_unrealized_pnl"] == pytest.approx(62.5)
+    assert position["fx_rate"] == pytest.approx(0.00625)
+    assert position["valuation_available"] is True
+    assert summary["total_market_value"] == pytest.approx(312.5)
+    assert summary["total_cost"] == pytest.approx(250)
+    assert summary["total_unrealized_pnl"] == pytest.approx(62.5)
+    assert summary["fx_conversion_used"] is True
+
+
+def test_build_summary_excludes_foreign_position_when_fx_is_unavailable(db, portfolio, monkeypatch):
+    create_manual_position(
+        db,
+        portfolio,
+        ManualPositionIn(
+            symbol="1578.T",
+            price=4000.0,
+            quantity=10,
+            trade_date=date(2026, 1, 1),
+            currency="JPY",
+        ),
+    )
+    db.add(
+        PriceSnapshot(
+            ticker="1578.T",
+            quote_time=datetime.now(UTC),
+            price=5000.0,
+            previous_close=4900.0,
+            volume=1,
+            source="test",
+        )
+    )
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.portfolio.performance.fx_rate_map",
+        lambda base, currencies: {},
+    )
+
+    summary = build_summary(db, portfolio)
+    assert summary["total_market_value"] == 0
+    assert summary["priced_count"] == 0
+    assert summary["has_unconverted_positions"] is True
+    assert summary["positions"][0]["price_available"] is True
+    assert summary["positions"][0]["valuation_available"] is False
 
 
 def test_build_summary_empty_portfolio(db, portfolio):
@@ -279,6 +355,49 @@ def test_build_health_unavailable_with_reason_when_no_priced_positions(db, portf
     assert health["concentration"]["reason"]
     assert health["sector_exposure"]["available"] is False
     assert health["sector_exposure"]["reason"]
+
+
+def test_build_health_uses_base_currency_values_for_weights(db, portfolio, monkeypatch):
+    from app.services.portfolio.fx import FxQuote
+
+    create_manual_position(
+        db,
+        portfolio,
+        ManualPositionIn(
+            symbol="1578.T",
+            price=4000.0,
+            quantity=10,
+            trade_date=date(2026, 1, 1),
+            currency="JPY",
+        ),
+    )
+    create_manual_position(
+        db,
+        portfolio,
+        ManualPositionIn(
+            symbol="AAPL",
+            price=100.0,
+            quantity=5,
+            trade_date=date(2026, 1, 1),
+        ),
+    )
+    db.add_all([
+        PriceSnapshot(ticker="1578.T", quote_time=datetime.now(UTC), price=5000.0, previous_close=4900.0, volume=1, source="test"),
+        PriceSnapshot(ticker="AAPL", quote_time=datetime.now(UTC), price=100.0, previous_close=99.0, volume=1, source="test"),
+    ])
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.portfolio.performance.fx_rate_map",
+        lambda base, currencies: {
+            "JPY": FxQuote(rate=0.00625, source="test:JPYUSD", fetched_at=datetime.now(UTC)),
+            "USD": FxQuote(rate=1.0, source="identity", fetched_at=datetime.now(UTC)),
+        },
+    )
+
+    health = build_health(db, portfolio)
+    # JPY 50,000 -> USD 312.50; AAPL -> USD 500, so weights are 38.46% / 61.54%.
+    assert health["concentration"]["hhi"] == pytest.approx(0.526627, abs=1e-6)
+    assert health["concentration"]["top_five_weight"] == pytest.approx(100.0)
 
 
 # ── position_technical.build_position_technical ───────────────────────────

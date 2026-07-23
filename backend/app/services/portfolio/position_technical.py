@@ -55,6 +55,7 @@ def build_position_technical(db: Session, position: PortfolioPosition) -> dict:
     result = get_latest(db, position.symbol)
     base = result.to_dict()
     base["symbol"] = position.symbol
+    base["currency"] = position.currency
 
     if not result.available or result.current_price is None:
         base["arrival_estimates"] = []

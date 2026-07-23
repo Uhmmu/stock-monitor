@@ -745,10 +745,10 @@ class PortfolioPosition(Base):
 class PortfolioPositionLot(Base):
     """持仓批次。首版用平均成本法记账，但保留 FIFO/LIFO/指定批次/部分平仓的扩展边界。"""
     __tablename__ = "portfolio_position_lots"
-    __table_args__ = (Index("ix_portfolio_position_lots_symbol", "portfolio_id", "symbol"),)
+    __table_args__ = (Index("ix_portfolio_position_lots_symbol", "symbol", "portfolio_id"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     portfolio_id: Mapped[int] = mapped_column(ForeignKey("portfolios.id", ondelete="CASCADE"), index=True)
-    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    symbol: Mapped[str] = mapped_column(String(16))
     source_transaction_id: Mapped[int | None] = mapped_column(ForeignKey("trade_transactions.id", ondelete="SET NULL"), index=True)
     original_quantity: Mapped[float] = mapped_column(Float, default=0.0)
     remaining_quantity: Mapped[float] = mapped_column(Float, default=0.0)

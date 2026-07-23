@@ -31,6 +31,7 @@ from app.services.portfolio import (
     rebuild_all_positions,
     update_transaction,
 )
+from app.services.securities import resolve_security
 
 router = APIRouter(prefix="/api/portfolio", dependencies=[Depends(get_current_user)])
 
@@ -92,7 +93,29 @@ def manual_position(
     db: Session = Depends(get_db),
 ):
     """Holdings-page manual entry → creates a transaction, then rebuilds the position."""
-    return create_manual_position(db, _portfolio(db, user), payload)
+    try:
+        security = resolve_security(
+            db,
+            security_id=payload.security_id,
+            source=payload.source,
+            yahoo_symbol=payload.yahoo_symbol or (payload.symbol if payload.source != "finnhub" else None),
+            finnhub_symbol=payload.finnhub_symbol,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    symbol = security.yahoo_symbol or security.finnhub_symbol
+    if not symbol:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "该证券暂无可用行情数据源")
+    txn = create_manual_position(
+        db,
+        _portfolio(db, user),
+        payload.model_copy(update={"security_id": security.id, "symbol": symbol}),
+    )
+    from app.tasks.celery_app import sync_technical_analysis
+
+    sync_technical_analysis.delay(symbol)
+    return txn
 
 
 @router.post("/transactions", response_model=TransactionOut, status_code=status.HTTP_201_CREATED)

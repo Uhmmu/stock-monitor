@@ -50,7 +50,7 @@ export function Sheet({ open, onClose, title, children }: {
       onDone?.()
       return
     }
-    s.setConfig(SPRINGS.drawer)
+    s.setConfig(Math.abs(initialV) > 0.01 ? SPRINGS.drawer : SPRINGS.sheet)
     s.target = target
     s.velocity = initialV                 // 速度接管:手势速度直接注入弹簧
     stopAnim.current = animateSpring(s, apply, onDone)
@@ -110,6 +110,28 @@ export function Sheet({ open, onClose, title, children }: {
   }
 
   useEffect(() => () => stopAnim.current?.(), [])
+  useEffect(() => {
+    if (!mounted || !panelRef.current || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      const next = panelRef.current?.offsetHeight
+      if (next) height.current = next
+    })
+    observer.observe(panelRef.current)
+    return () => observer.disconnect()
+  }, [mounted])
+  useEffect(() => {
+    if (!mounted) return
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') runTo(height.current, 0, onClose)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previous
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [mounted, onClose, runTo])
   if (!mounted) return null
 
   // 挂到 body 下,避免被祖先的 transform/filter/will-change 困住

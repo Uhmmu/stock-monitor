@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from app.services.technical_analysis import (
+from app.services.technical_analysis_engine import (
     aggregate_weekly,
     bollinger,
     build_analysis,

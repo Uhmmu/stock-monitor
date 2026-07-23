@@ -54,8 +54,9 @@ def rebuild_symbol_position(db: Session, portfolio_id: int, symbol: str) -> Port
 
     security_id = next((t.security_id for t in txns if t.security_id), None)
 
-    # A flat position with no realized history carries no information — drop it.
-    if result.total_quantity <= 0 and abs(result.realized_pnl) < 1e-9:
+    # Closed positions remain represented by their transactions, not by an empty
+    # derived holding row.
+    if result.total_quantity <= 0:
         if existing is not None:
             db.delete(existing)
         return None
@@ -68,7 +69,6 @@ def rebuild_symbol_position(db: Session, portfolio_id: int, symbol: str) -> Port
     existing.total_quantity = result.total_quantity
     existing.average_cost = result.average_cost
     existing.total_cost = result.total_cost
-    existing.realized_pnl = result.realized_pnl
     existing.currency = result.currency
     existing.last_transaction_at = result.last_transaction_at
 

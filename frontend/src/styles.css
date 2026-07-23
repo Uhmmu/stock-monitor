@@ -1023,7 +1023,7 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
 .portfolio-subtabs button:hover{transform:translateY(-1px)}
 .portfolio-subtabs button.active{background:var(--accent);color:#fff;border-color:transparent;box-shadow:0 4px 12px rgba(0,113,227,.28)}
 .metric-card-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:22px}
-.portfolio-gap-hint{color:var(--ink-4);font-size:10px}
+.portfolio-gap-hint{display:block;color:var(--down);font-size:10px}
 
 .portfolio-row{grid-template-columns:.9fr .9fr 1fr 1fr 1.1fr 1.3fr .7fr!important}
 .table.portfolio-table .table-row.portfolio-row{width:100%;background:none;border:0;border-top:1px solid var(--line-2);cursor:pointer;color:var(--ink);text-align:left}
@@ -1034,9 +1034,9 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
 .portfolio-positions{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
 .position-card{padding:20px 22px;border:1px solid var(--line);border-radius:var(--r-m);background:var(--solid);box-shadow:var(--shadow-s);transition:transform .25s var(--spring),box-shadow .25s}
 .position-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
-.position-card header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
-.position-card header b{font-size:18px;letter-spacing:-.02em}
-.position-card header span{color:var(--ink-4);font-size:12px;font-weight:600}
+.position-card-header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
+.position-card-header b{font-size:18px;letter-spacing:-.02em}
+.position-card-header span{color:var(--ink-4);font-size:12px;font-weight:600}
 .position-card-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 16px;margin-bottom:14px}
 .position-card-grid span{display:block;color:var(--ink-4);font-size:11px;font-weight:500}
 .position-card-grid b{font-size:14px;font-variant-numeric:tabular-nums}
@@ -1048,9 +1048,9 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
 .portfolio-technical-list button{display:flex;justify-content:space-between;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--solid);color:var(--ink);cursor:pointer;font-size:13px;font-weight:600}
 .portfolio-technical-list button.active{border-color:rgba(0,113,227,.3);box-shadow:0 0 0 3px rgba(0,113,227,.12)}
 .portfolio-technical-list button span{color:var(--ink-4);font-weight:500}
-.position-technical-panel header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:16px}
-.position-technical-panel header h3{margin:0;font-size:18px;letter-spacing:-.02em}
-.position-technical-panel header strong{font-size:20px;letter-spacing:-.02em}
+.position-technical-header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:16px}
+.position-technical-header h3{margin:0;font-size:18px;letter-spacing:-.02em}
+.position-technical-header strong{font-size:20px;letter-spacing:-.02em}
 .arrival-estimate{padding:10px 0;border-top:1px solid rgba(42,62,87,.07)}
 .arrival-estimate:first-of-type{border-top:0;padding-top:0}
 .arrival-estimate b{display:block;font-size:13px;margin-bottom:4px}
@@ -1058,7 +1058,19 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
 .arrival-estimate small{color:var(--ink-4);font-size:11px}
 .portfolio-analyzer-errors{color:var(--down);font-size:11px;margin:10px 0}
 
-.portfolio-sector-row{grid-template-columns:1fr .8fr .6fr!important}
+.portfolio-health-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:8px 0 12px}
+.portfolio-health-heading small{display:block;color:var(--accent-ink);font-size:9px;font-weight:750;letter-spacing:.16em}
+.portfolio-health-heading h3{margin:3px 0 0;font-size:19px;letter-spacing:-.025em}
+.portfolio-health-heading>span{color:var(--ink-4);font-size:11px;font-weight:600}
+.portfolio-sector-list{display:flex;flex-direction:column;gap:10px;padding:16px 18px;border:1px solid var(--line);border-radius:18px;background:var(--solid);box-shadow:var(--shadow-s)}
+.portfolio-sector-item{display:flex;flex-direction:column;gap:7px}
+.portfolio-sector-item>div{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:baseline;gap:10px}
+.portfolio-sector-item b{overflow:hidden;text-overflow:ellipsis;color:var(--ink);font-size:13px;white-space:nowrap}
+.portfolio-sector-item span{color:var(--ink-4);font-size:11px;font-variant-numeric:tabular-nums}
+.portfolio-sector-item strong{min-width:48px;color:var(--ink-2);font-size:12px;text-align:right;font-variant-numeric:tabular-nums}
+.portfolio-sector-item>i{height:7px;overflow:hidden;border-radius:999px;background:rgba(103,125,153,.1)}
+.portfolio-sector-item>i span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#5b9df5,#77c4e8);box-shadow:0 0 12px rgba(51,132,231,.24)}
+.portfolio-sector-item.muted>i span{background:#aeb7c4;box-shadow:none}
 .portfolio-txn-row{grid-template-columns:.8fr .7fr .8fr .7fr .8fr .8fr .8fr 70px!important}
 
 .portfolio-entry-form{display:flex;flex-direction:column;gap:16px}
@@ -1068,4 +1080,88 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
 .portfolio-entry-actions button:disabled{opacity:.5;cursor:default}
 
 @media(max-width:900px){.portfolio-technical{grid-template-columns:1fr}}
-@media(max-width:640px){.portfolio-row,.portfolio-txn-row{grid-template-columns:1fr 1fr!important}.portfolio-entry-grid{grid-template-columns:1fr}}
+@media(max-width:700px){
+  .portfolio-module>.section-title{align-items:flex-end;margin-bottom:14px}
+  .portfolio-module>.section-title h2{font-size:25px;letter-spacing:-.045em}
+  .portfolio-module>.section-title .section-actions button{padding:9px 11px;font-size:11px}
+  .portfolio-subtabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-bottom:14px;padding:5px;border:1px solid rgba(255,255,255,.78);border-radius:16px;background:rgba(238,243,249,.66);box-shadow:inset 0 1px 0 rgba(255,255,255,.9)}
+  .portfolio-subtabs button{min-width:0;padding:9px 4px;border:0;border-radius:11px;background:transparent;font-size:11px;white-space:nowrap;box-shadow:none}
+  .portfolio-subtabs button:hover{transform:none}
+  .portfolio-subtabs button:active{transform:scale(.97);transition:transform .1s ease-out}
+  .portfolio-subtabs button.active{background:rgba(255,255,255,.92);color:var(--accent-ink);box-shadow:0 3px 10px rgba(38,61,91,.1),inset 0 0 0 1px rgba(36,104,190,.08)}
+
+  .portfolio-overview{padding:12px;border:1px solid rgba(255,255,255,.85);border-radius:22px;background:linear-gradient(155deg,rgba(255,255,255,.7),rgba(232,240,250,.54));box-shadow:0 12px 32px rgba(48,70,101,.08),inset 0 1px 0 #fff}
+  .portfolio-metrics{grid-template-columns:1fr 1fr;gap:9px;margin-bottom:12px}
+  .portfolio-metrics .metric-card{min-width:0;min-height:104px;padding:15px;border-radius:17px;border-color:rgba(255,255,255,.84);background:rgba(255,255,255,.6);box-shadow:0 7px 20px rgba(48,70,101,.06)}
+  .portfolio-metrics .metric-card>span{font-size:10px;font-weight:650;letter-spacing:.025em}
+  .portfolio-metrics .metric-card>strong{margin-top:auto;font-size:21px;line-height:1.1;letter-spacing:-.035em}
+  .portfolio-metrics .metric-card>small{margin-top:6px;font-size:9px;line-height:1.35}
+  .portfolio-metrics .portfolio-value-card{grid-column:1/-1;min-height:144px;padding:20px;background:radial-gradient(circle at 88% 12%,rgba(110,180,255,.2),transparent 38%),linear-gradient(145deg,rgba(255,255,255,.9),rgba(226,239,255,.76))}
+  .portfolio-value-card>strong{font-size:34px!important;letter-spacing:-.055em!important}
+  .portfolio-value-card .portfolio-gap-hint{color:var(--down)}
+
+  .table.portfolio-table{overflow:visible;border:0;background:transparent;box-shadow:none}
+  .portfolio-table .table-head{display:none}
+  .table.portfolio-table .table-row.portfolio-row{display:grid;min-width:0;width:100%;box-sizing:border-box;grid-template-columns:1fr 1fr!important;gap:12px 10px;margin-top:9px;padding:15px;border:1px solid rgba(255,255,255,.88);border-radius:17px;background:rgba(255,255,255,.73);box-shadow:0 7px 18px rgba(48,70,101,.055)}
+  .portfolio-table .portfolio-row .toggle{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;padding-bottom:9px;border-bottom:1px solid rgba(50,72,99,.07);font-size:17px;letter-spacing:-.02em}
+  .portfolio-table .portfolio-row .toggle:after{content:'技术位置 ›';color:var(--accent-ink);font-size:10px;font-weight:650;letter-spacing:0}
+  .portfolio-table .portfolio-row span:not(.toggle){display:flex;min-width:0;flex-direction:column;gap:3px;overflow-wrap:anywhere;font-size:12px;line-height:1.35}
+  .portfolio-table .portfolio-row span:not(.toggle):before{content:attr(data-label);color:var(--ink-4);font-size:9px;font-weight:600}
+
+  .portfolio-positions{grid-template-columns:1fr;gap:10px}
+  .position-card{padding:17px 18px;border-radius:19px;box-shadow:0 8px 22px rgba(48,70,101,.065)}
+  .position-card:hover{transform:none}
+  .position-card-grid{gap:12px 14px}
+  .position-detail-btn:active{transform:scale(.98)}
+
+  .portfolio-mobile-sheet{padding:2px 0 calc(8px + env(safe-area-inset-bottom))}
+  .portfolio-mobile-sheet .portfolio-technical{display:block}
+  .portfolio-mobile-sheet .portfolio-technical-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-bottom:16px}
+  .portfolio-mobile-sheet .portfolio-technical-list button{min-width:0;padding:11px;border-radius:13px}
+  .portfolio-mobile-sheet .portfolio-technical-list button b,.portfolio-mobile-sheet .portfolio-technical-list button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .portfolio-mobile-sheet .portfolio-technical-detail{min-height:12rem}
+  .position-technical-panel{padding:2px}
+  .position-technical-header{position:sticky;top:-7px;z-index:2;padding:10px 2px 11px;background:linear-gradient(rgba(248,250,253,.96) 72%,rgba(248,250,253,0));backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .technical-metrics{grid-template-columns:1fr 1fr;gap:8px}
+  .technical-metrics>div{min-height:76px;padding:12px;border-radius:14px}
+  .technical-metrics b{font-size:16px}
+  .technical-columns{grid-template-columns:1fr}
+  .technical-columns>section{padding:14px;border-radius:15px}
+  .zone-table>div{grid-template-columns:.55fr 1.45fr .75fr}
+  .zone-table>div>span:nth-child(4){display:none}
+
+  .portfolio-health-metrics{grid-template-columns:1fr 1fr;gap:9px;margin-bottom:18px}
+  .portfolio-health-metrics .metric-card{min-width:0;min-height:102px;padding:14px;border-radius:16px}
+  .portfolio-health-metrics .portfolio-health-primary{grid-column:1/-1;min-height:126px;background:linear-gradient(145deg,rgba(255,255,255,.86),rgba(230,241,255,.72))}
+  .portfolio-health-metrics .portfolio-health-primary strong{font-size:30px}
+  .portfolio-health-heading{margin-top:4px}
+  .portfolio-health-heading h3{font-size:18px}
+  .portfolio-sector-list{gap:14px;padding:16px;border-radius:18px;box-shadow:none}
+  .portfolio-sector-item>div{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px}
+  .portfolio-sector-item b{font-size:13px}
+  .portfolio-sector-item span{grid-column:1;font-size:10px}
+  .portfolio-sector-item strong{grid-column:2;grid-row:1/3;align-self:center;font-size:13px}
+  .portfolio-sector-item>i{height:8px}
+
+  .table.portfolio-txn-table{overflow:visible;border:0;background:transparent;box-shadow:none}
+  .portfolio-txn-table .table-head{display:none}
+  .portfolio-txn-table .table-row.portfolio-txn-row{display:grid;min-width:0;width:100%;box-sizing:border-box;grid-template-columns:1fr 1fr!important;gap:12px 14px;margin-bottom:10px;padding:16px;border:1px solid rgba(255,255,255,.88);border-radius:18px;background:rgba(255,255,255,.72);box-shadow:0 8px 22px rgba(48,70,101,.06)}
+  .portfolio-txn-table .table-head.portfolio-txn-row{display:none}
+  .portfolio-txn-row span{display:flex;min-width:0;flex-direction:column;gap:3px;overflow-wrap:anywhere;font-size:12px}
+  .portfolio-txn-row span:before{content:attr(data-label);color:var(--ink-4);font-size:9px;font-weight:600}
+  .portfolio-txn-row .txn-symbol{font-size:17px;font-weight:720;letter-spacing:-.02em}
+  .portfolio-txn-row .txn-type{align-items:flex-end;color:var(--accent-ink);font-weight:650;text-align:right}
+  .portfolio-txn-row .txn-date{grid-column:1/-1;padding-bottom:9px;border-bottom:1px solid rgba(50,72,99,.07)}
+  .portfolio-txn-row button{grid-column:1/-1;min-height:40px;border-radius:12px}
+
+  .portfolio-entry-grid{grid-template-columns:1fr}
+  .sheet-scroll{padding:6px 16px calc(22px + env(safe-area-inset-bottom))}
+  .sheet-panel{max-height:94dvh;border-radius:24px 24px 0 0}
+}
+@media(prefers-reduced-transparency:reduce) and (max-width:700px){
+  .portfolio-subtabs,.portfolio-overview,.portfolio-metrics .metric-card,.portfolio-table .table-row.portfolio-row,.portfolio-txn-table .portfolio-txn-row{background:#f8fafc;backdrop-filter:none;-webkit-backdrop-filter:none}
+  .position-technical-header{background:#f8fafc;backdrop-filter:none;-webkit-backdrop-filter:none}
+}
+@media(prefers-contrast:more) and (max-width:700px){
+  .portfolio-overview,.portfolio-subtabs,.portfolio-metrics .metric-card,.portfolio-table .table-row.portfolio-row,.portfolio-txn-table .portfolio-txn-row,.portfolio-sector-list{border-color:#64748b}
+}
