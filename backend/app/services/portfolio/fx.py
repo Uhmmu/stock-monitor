@@ -85,6 +85,23 @@ def fx_rate_map(base_currency: str, currencies: set[str]) -> dict[str, FxQuote]:
     return result
 
 
+def cached_fx_rate_map(base_currency: str, currencies: set[str]) -> dict[str, FxQuote]:
+    """Read identity/in-process rates without initiating an external request."""
+    base = base_currency.strip().upper()
+    now = time.monotonic()
+    result: dict[str, FxQuote] = {}
+    with _cache_lock:
+        for currency in currencies:
+            source = currency.strip().upper()
+            if source == base:
+                result[currency] = FxQuote(rate=1.0, source="identity", fetched_at=datetime.now(UTC))
+                continue
+            cached = _cache.get((source, base))
+            if cached and cached[0] > now:
+                result[currency] = cached[1]
+    return result
+
+
 def clear_fx_cache() -> None:
     """Test/operations hook; does not touch any external cache."""
     with _cache_lock:

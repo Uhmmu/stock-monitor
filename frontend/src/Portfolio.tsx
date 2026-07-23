@@ -90,22 +90,82 @@ type PositionTechnical = {
   cost_basis_reference:{average_cost:number;vs_current_price:number|null}
 }
 type HealthSectorBucket = {sector:string;market_value:number;weight:number}
+type HealthCoverage = {
+  covered_weight:number
+  uncovered_weight:number
+  covered_market_value:number
+  uncovered_market_value:number
+  covered_symbols:string[]
+  uncovered_symbols:string[]
+  excluded_symbols:string[]
+  freshness:'fresh'|'mixed'|'stale'|'unavailable'
+  confidence:number
+  status:'sufficient'|'partial'|'insufficient'
+  basis:string
+}
+type HealthContributor = {symbol:string;score:number;weight:number;contribution:number}
+type HealthSubscore = {score:number|null;coverage_weight:number}
+type HealthFinding = {
+  id:string
+  category:string
+  severity:'positive'|'info'|'warning'|'high'
+  title:string
+  message:string
+  evidence:Record<string,unknown>
+  affected_symbols:string[]
+  affected_weight:number
+  priority:number
+}
 type PortfolioHealth = {
   portfolio_id:number
+  as_of:string
   base_currency:string
   total_market_value:number
+  invested_market_value:number
+  cash_value:number
+  cash_weight:number
+  cash_tracked:boolean
   priced_count:number
   position_count:number
   has_unpriced_positions:boolean
+  health:{score:number|null;grade:string;confidence:number;included_components:string[];excluded_components:string[]}
+  fundamental_quality:{
+    score:number|null;grade:string;coverage_weight:number;covered_market_value:number;uncovered_market_value:number
+    subscores:Record<string,HealthSubscore>
+    top_positive_contributors:HealthContributor[]
+    top_negative_contributors:HealthContributor[]
+  }
+  valuation_risk:{
+    score:number|null;raw_weighted_valuation_risk:number|null;confidence_adjusted_valuation_risk:number|null
+    grade:string;coverage_weight:number;average_confidence:number;undervalued_weight:number;fairly_valued_weight:number
+    overvalued_weight:number;high_risk_weight:number;low_confidence_valuation_weight:number
+  }
+  sec_risk:{
+    score:number|null;grade:string;coverage_weight:number
+    flag_exposures:{flag:string;label:string;severity:string;weight:number;affected_symbols:string[]}[]
+    affected_positions:{symbol:string;weight:number;risk_score:number;flags:string[]}[]
+  }
   concentration:{
     available:boolean
     reason?:string
+    risk_score:number|null
+    grade?:string
+    largest_position_weight:number|null
+    top_two_weight:number|null
+    top_three_weight:number|null
     hhi:number|null
     hhi_scaled?:number|null
     top_five_weight:number|null
     effective_holdings:number|null
+    effective_position_count:number|null
     holdings_count?:number
+    sector_weights:HealthSectorBucket[]
+    industry_weights:{industry:string;market_value:number;weight:number}[]
+    country_weights:{country:string;market_value:number;weight:number}[]
+    currency_weights:{currency:string;market_value:number;weight:number}[]
   }
+  coverage:{price:HealthCoverage;fundamental:HealthCoverage;valuation:HealthCoverage;sec:HealthCoverage}
+  findings:HealthFinding[]
   sector_exposure:{
     available:boolean
     reason?:string
@@ -130,6 +190,7 @@ type TransactionRow = {
 export const fmtMoney = (value:number|null, currency='USD') => value==null?'数据不足':`${currency==='USD'?'$':currency+' '}${value.toLocaleString('zh-CN',{maximumFractionDigits:2,minimumFractionDigits:2})}`
 export const fmtPercent = (value:number|null) => value==null?'—':`${value>=0?'+':''}${value.toFixed(2)}%`
 export const fmtNum = (value:number, digits=4) => value.toLocaleString('zh-CN',{maximumFractionDigits:digits})
+export const fmtHealthScore = (value:number|null) => value==null?'数据不足':Math.round(value).toString()
 const typeLabel:Record<string,string> = {buy:'买入',sell:'卖出',dividend:'股息',fee:'费用',deposit:'转入现金',withdrawal:'转出现金',split:'拆股',transfer_in:'转入',transfer_out:'转出'}
 const trendLabel:Record<string,string> = {uptrend:'上升趋势',downtrend:'下降趋势',range:'区间震荡',unknown:'趋势不明'}
 const volLabel:Record<string,string> = {expanding:'波动扩大',contracting:'波动收窄',normal:'波动正常',unknown:'数据不足'}
@@ -294,23 +355,91 @@ export function PortfolioModule() {
 function PortfolioHealthView({health,loading,currency}:{health:PortfolioHealth|undefined;loading:boolean;currency:string}) {
   if(loading) return <div className="empty">正在计算组合健康…</div>
   if(!health) return <div className="empty">组合健康数据暂不可用。</div>
+  const scoreClass = (value:number|null,risk=false) => value==null?'muted':risk?(value>60?'risk-high':value>40?'risk-mid':'risk-low'):(value>=80?'score-high':value>=60?'score-mid':'score-low')
+  const subscoreLabels:Record<string,string> = {profitability:'盈利能力',growth:'成长质量',cashflow_quality:'现金流质量',balance_sheet_health:'资产负债',capital_efficiency:'资本效率'}
+  const coverageLabels:[keyof PortfolioHealth['coverage'],string][] = [['price','价格'],['fundamental','基本面'],['valuation','估值'],['sec','SEC']]
+  const freshnessLabel:Record<HealthCoverage['freshness'],string> = {fresh:'数据新鲜',mixed:'部分过期',stale:'数据已过期',unavailable:'暂无数据'}
+  const findings = health.findings.slice(0,6)
   return <div className="portfolio-health">
-    <div className="metric-card-row portfolio-health-metrics">
-      <div className="metric-card portfolio-health-primary"><span>集中度 HHI</span><strong>{health.concentration.available?health.concentration.hhi_scaled?.toFixed(0):'数据不足'}</strong><small>{health.concentration.available?'0–10000，越低越分散':health.concentration.reason}</small></div>
-      <div className="metric-card"><span>前五大占比</span><strong>{health.concentration.available?`${health.concentration.top_five_weight?.toFixed(1)}%`:'数据不足'}</strong></div>
-      <div className="metric-card"><span>有效持仓数</span><strong>{health.concentration.available?health.concentration.effective_holdings:'数据不足'}</strong><small>按折算后市值衡量</small></div>
+    <div className="portfolio-health-summary">
+      <div className="health-score-main">
+        <span>组合健康评分</span><strong>{fmtHealthScore(health.health.score)}</strong>
+        <b>{health.health.grade}</b><small>综合可信度 {(health.health.confidence*100).toFixed(0)}%</small>
+      </div>
+      <div className="health-score-item"><span>基本面质量</span><strong className={scoreClass(health.fundamental_quality.score)}>{fmtHealthScore(health.fundamental_quality.score)}</strong><small>{health.fundamental_quality.grade}</small></div>
+      <div className="health-score-item"><span>估值风险</span><strong className={scoreClass(health.valuation_risk.score,true)}>{fmtHealthScore(health.valuation_risk.score)}</strong><small>{health.valuation_risk.grade}</small></div>
+      <div className="health-score-item"><span>集中度风险</span><strong className={scoreClass(health.concentration.risk_score,true)}>{fmtHealthScore(health.concentration.risk_score)}</strong><small>{health.concentration.grade||'数据不足'}</small></div>
+      <div className="health-score-item"><span>SEC 风险</span><strong className={scoreClass(health.sec_risk.score,true)}>{fmtHealthScore(health.sec_risk.score)}</strong><small>{health.sec_risk.grade}</small></div>
     </div>
-    <div className="portfolio-health-heading"><div><small>SECTOR</small><h3>行业暴露</h3></div><span>已折算为 {currency}</span></div>
-    {health.sector_exposure.available?<div className="portfolio-sector-list">
-      {health.sector_exposure.buckets.map(b=><div className="portfolio-sector-item" key={b.sector}>
-        <div><b>{b.sector}</b><span>{fmtMoney(b.market_value,currency)}</span><strong>{b.weight.toFixed(1)}%</strong></div>
-        <i aria-hidden="true"><span style={{width:`${Math.min(100,b.weight)}%`}}/></i>
-      </div>)}
-      {!!health.sector_exposure.unclassified_weight&&<div className="portfolio-sector-item muted">
-        <div><b>未分类</b><span>行业资料不足</span><strong>{health.sector_exposure.unclassified_weight.toFixed(1)}%</strong></div>
-        <i aria-hidden="true"><span style={{width:`${Math.min(100,health.sector_exposure.unclassified_weight)}%`}}/></i>
+
+    <section className="health-section">
+      <div className="portfolio-health-heading"><div><small>质量分析</small><h3>基本面质量加权</h3></div><span>覆盖 {health.fundamental_quality.coverage_weight.toFixed(0)}%</span></div>
+      <div className="health-dimension-list">
+        {Object.entries(health.fundamental_quality.subscores).map(([key,item])=><div className="health-dimension" key={key}>
+          <div><b>{subscoreLabels[key]||key}</b><span>覆盖 {item.coverage_weight.toFixed(0)}%</span><strong>{fmtHealthScore(item.score)}</strong></div>
+          <i aria-hidden="true"><span style={{width:`${Math.min(100,item.score||0)}%`}}/></i>
+        </div>)}
+      </div>
+      {(health.fundamental_quality.top_positive_contributors.length>0||health.fundamental_quality.top_negative_contributors.length>0)&&<div className="health-contributors">
+        <div><span>主要正向贡献</span>{health.fundamental_quality.top_positive_contributors.map(row=><p key={row.symbol}><b>{row.symbol}</b><small>权重 {row.weight.toFixed(1)}%</small><strong>+{row.contribution.toFixed(1)}</strong></p>)}</div>
+        <div><span>主要负向贡献</span>{health.fundamental_quality.top_negative_contributors.map(row=><p key={row.symbol}><b>{row.symbol}</b><small>权重 {row.weight.toFixed(1)}%</small><strong>{row.contribution.toFixed(1)}</strong></p>)}</div>
       </div>}
-    </div>:<div className="empty">{health.sector_exposure.reason}</div>}
+    </section>
+
+    <section className="health-section">
+      <div className="portfolio-health-heading"><div><small>估值分析</small><h3>估值风险加权</h3></div><span>可信度 {(health.valuation_risk.average_confidence*100).toFixed(0)}%</span></div>
+      <div className="health-stat-line">
+        <div><span>组合估值风险</span><strong className={scoreClass(health.valuation_risk.score,true)}>{fmtHealthScore(health.valuation_risk.score)}</strong></div>
+        <div><span>估值覆盖率</span><strong>{health.valuation_risk.coverage_weight.toFixed(0)}%</strong></div>
+        <div><span>置信度调整后</span><strong>{fmtHealthScore(health.valuation_risk.confidence_adjusted_valuation_risk)}</strong></div>
+      </div>
+      <div className="health-exposure-grid">
+        <div><span>低估仓位</span><strong>{health.valuation_risk.undervalued_weight.toFixed(1)}%</strong></div>
+        <div><span>合理估值</span><strong>{health.valuation_risk.fairly_valued_weight.toFixed(1)}%</strong></div>
+        <div><span>高估仓位</span><strong>{health.valuation_risk.overvalued_weight.toFixed(1)}%</strong></div>
+        <div><span>高风险仓位</span><strong>{health.valuation_risk.high_risk_weight.toFixed(1)}%</strong></div>
+        <div><span>低可信仓位</span><strong>{health.valuation_risk.low_confidence_valuation_weight.toFixed(1)}%</strong></div>
+      </div>
+    </section>
+
+    <section className="health-section">
+      <div className="portfolio-health-heading"><div><small>监管披露</small><h3>SEC 风险暴露</h3></div><span>覆盖 {health.sec_risk.coverage_weight.toFixed(0)}%</span></div>
+      {health.sec_risk.flag_exposures.length?<div className="health-sec-list">{health.sec_risk.flag_exposures.map(row=><div key={row.flag} className={`sec-${row.severity}`}>
+        <div><b>{row.label}</b><span>{row.affected_symbols.join('、')}</span></div><strong>{row.weight.toFixed(1)}%</strong>
+      </div>)}</div>:<p className="health-quiet">当前已覆盖持仓中未发现近两年的结构化 SEC 风险事件。</p>}
+    </section>
+
+    <section className="health-section">
+      <div className="portfolio-health-heading"><div><small>配置结构</small><h3>集中度与配置</h3></div><span>已折算为 {currency}</span></div>
+      {health.concentration.available?<>
+        <div className="health-stat-line health-concentration-stats">
+          <div><span>最大单一持仓</span><strong>{health.concentration.largest_position_weight?.toFixed(1)}%</strong></div>
+          <div><span>前三大持仓</span><strong>{health.concentration.top_three_weight?.toFixed(1)}%</strong></div>
+          <div><span>前五大持仓</span><strong>{health.concentration.top_five_weight?.toFixed(1)}%</strong></div>
+          <div><span>有效持仓数</span><strong>{health.concentration.effective_position_count?.toFixed(1)}</strong></div>
+          <div><span>HHI</span><strong>{health.concentration.hhi_scaled?.toFixed(0)}</strong></div>
+        </div>
+        <div className="portfolio-sector-list">
+          {health.concentration.sector_weights.map(b=><div className={`portfolio-sector-item ${b.sector==='未分类'?'muted':''}`} key={b.sector}>
+            <div><b>{b.sector}</b><span>{fmtMoney(b.market_value,currency)}</span><strong>{b.weight.toFixed(1)}%</strong></div>
+            <i aria-hidden="true"><span style={{width:`${Math.min(100,b.weight)}%`}}/></i>
+          </div>)}
+        </div>
+      </>:<div className="empty">{health.concentration.reason}</div>}
+    </section>
+
+    <section className="health-section">
+      <div className="portfolio-health-heading"><div><small>规则结论</small><h3>规则化总结</h3></div><span>基于当前持仓</span></div>
+      {findings.length?<div className="health-findings">{findings.map(row=><article key={row.id} className={`finding-${row.severity}`}>
+        <span>{row.severity==='high'?'高关注':row.severity==='warning'?'需留意':row.severity==='positive'?'积极':'提示'}</span>
+        <div><h4>{row.title}</h4><p>{row.message}</p>{row.affected_symbols.length>0&&<small>{row.affected_symbols.join('、')}</small>}</div>
+      </article>)}</div>:<p className="health-quiet">当前没有需要突出显示的规则化结论。</p>}
+    </section>
+
+    <div className="health-coverage" aria-label="数据覆盖率">
+      {coverageLabels.map(([key,label])=>{const item=health.coverage[key];return <div key={key} className={`coverage-${item.status}`}><span>{label}</span><strong>{item.covered_weight.toFixed(0)}%</strong><small>{freshnessLabel[item.freshness]}</small></div>})}
+    </div>
+    <p className="health-disclaimer">仅审视当前持仓结构与已有分析数据，不评价历史交易表现，也不构成投资建议。</p>
   </div>
 }
 

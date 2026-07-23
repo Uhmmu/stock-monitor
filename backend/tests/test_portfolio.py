@@ -1,4 +1,4 @@
-from datetime import date, datetime, UTC
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -7,16 +7,19 @@ from sqlalchemy.orm import Session
 from app.config import ANALYZER_VERSION, APP_VERSION
 from app.database import Base
 from app.models import (
+    FinancialStatementSnapshot,
     HistoricalPrice,
     Portfolio,
     PortfolioPosition,
     PortfolioPositionLot,
     PriceSnapshot,
     Security,
+    SecFiling,
     StockProfile,
     TechnicalAnalysis,
     TradeTransaction,
     User,
+    ValuationSnapshot,
 )
 from app.services.portfolio.lot_matcher import rebuild_symbol
 from app.services.portfolio.performance import build_summary
@@ -24,6 +27,7 @@ from app.services.portfolio.portfolio_health import build_health
 from app.services.portfolio.position_builder import rebuild_symbol_position
 from app.services.portfolio.position_technical import build_position_technical
 from app.services.portfolio.schemas import ManualPositionIn
+from app.services.portfolio.schemas import PortfolioHealthResponse
 from app.services.portfolio.transaction_service import (
     create_manual_position,
     get_or_create_default_portfolio,
@@ -37,6 +41,9 @@ TABLES = [
     PortfolioPositionLot.__table__,
     Security.__table__,
     StockProfile.__table__,
+    FinancialStatementSnapshot.__table__,
+    ValuationSnapshot.__table__,
+    SecFiling.__table__,
     PriceSnapshot.__table__,
     HistoricalPrice.__table__,
     TechnicalAnalysis.__table__,
@@ -266,7 +273,6 @@ def test_build_summary_converts_foreign_positions_to_base_currency(db, portfolio
             "JPY": FxQuote(rate=0.00625, source="test:JPYUSD", fetched_at=datetime.now(UTC))
         },
     )
-
     summary = build_summary(db, portfolio)
     position = summary["positions"][0]
     assert position["market_value"] == pytest.approx(50_000)
@@ -393,11 +399,238 @@ def test_build_health_uses_base_currency_values_for_weights(db, portfolio, monke
             "USD": FxQuote(rate=1.0, source="identity", fetched_at=datetime.now(UTC)),
         },
     )
+    monkeypatch.setattr(
+        "app.services.portfolio.performance.cached_fx_rate_map",
+        lambda base, currencies: {
+            "JPY": FxQuote(rate=0.00625, source="test:JPYUSD", fetched_at=datetime.now(UTC)),
+            "USD": FxQuote(rate=1.0, source="identity", fetched_at=datetime.now(UTC)),
+        },
+    )
 
     health = build_health(db, portfolio)
     # JPY 50,000 -> USD 312.50; AAPL -> USD 500, so weights are 38.46% / 61.54%.
     assert health["concentration"]["hhi"] == pytest.approx(0.526627, abs=1e-6)
     assert health["concentration"]["top_five_weight"] == pytest.approx(100.0)
+
+
+def test_health_never_fetches_a_missing_fx_rate(db, portfolio, monkeypatch):
+    from app.services.portfolio.fx import clear_fx_cache
+
+    clear_fx_cache()
+    create_manual_position(
+        db, portfolio,
+        ManualPositionIn(symbol="1578.T", price=4000, quantity=10, trade_date=date(2026, 1, 1), currency="JPY"),
+    )
+    db.add(PriceSnapshot(
+        ticker="1578.T", quote_time=datetime.now(UTC), price=5000,
+        previous_close=4900, volume=1, source="test",
+    ))
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.portfolio.fx._fetch_yahoo_rate",
+        lambda *args: (_ for _ in ()).throw(AssertionError("health must not fetch FX")),
+    )
+
+    health = build_health(db, portfolio)
+
+    assert health["priced_count"] == 0
+    assert health["coverage"]["price"]["covered_weight"] == 0
+
+
+def _health_payload(*, roe=None, roic=None, stars=None):
+    health = []
+    for key, value in (("roe", roe), ("roic", roic)):
+        if value is not None:
+            health.append({"key": key, "value": value, "status": "available"})
+    signals = [] if stars is None else [{"key": "dcf", "stars": stars, "verdict": "合理"}]
+    return {
+        "company": "Test Company",
+        "classification": {"sector": "Technology", "industry": "Software"},
+        "health": health,
+        "growth": [],
+        "model_signals": signals,
+        "weights": {"dcf": 1.0},
+    }
+
+
+def _add_health_position(db, portfolio, symbol, market_value, *, payload=None, security_id=None, snapshot_date=None):
+    create_manual_position(
+        db, portfolio,
+        ManualPositionIn(
+            symbol=symbol, price=market_value, quantity=1, trade_date=date(2026, 1, 1),
+            security_id=security_id,
+        ),
+    )
+    db.add(PriceSnapshot(
+        ticker=symbol, quote_time=datetime.now(UTC), price=market_value,
+        previous_close=market_value, volume=1, source="test",
+    ))
+    if payload is not None:
+        db.add(ValuationSnapshot(
+            ticker=symbol, snapshot_date=snapshot_date or date.today(), payload=payload,
+        ))
+
+
+def test_health_weights_fundamental_score_by_current_market_value(db, portfolio):
+    _add_health_position(db, portfolio, "HIGH", 300, payload=_health_payload(roe=25, roic=20))
+    _add_health_position(db, portfolio, "LOW", 100, payload=_health_payload(roe=0, roic=0))
+    db.commit()
+
+    health = build_health(db, portfolio)
+
+    assert health["fundamental_quality"]["score"] == pytest.approx(75)
+    assert health["fundamental_quality"]["coverage_weight"] == pytest.approx(100)
+
+
+def test_health_weights_multi_model_valuation_risk(db, portfolio):
+    _add_health_position(db, portfolio, "CHEAP", 300, payload=_health_payload(stars=5))
+    _add_health_position(db, portfolio, "RICH", 100, payload=_health_payload(stars=1))
+    db.commit()
+
+    health = build_health(db, portfolio)
+
+    assert health["valuation_risk"]["score"] == pytest.approx(25)
+    assert health["valuation_risk"]["coverage_weight"] == pytest.approx(100)
+
+
+def test_health_missing_scores_are_renormalized_and_partial_coverage_is_visible(db, portfolio):
+    _add_health_position(db, portfolio, "COVERED", 75, payload=_health_payload(stars=5))
+    _add_health_position(db, portfolio, "MISSING", 25)
+    db.commit()
+
+    health = build_health(db, portfolio)
+
+    assert health["valuation_risk"]["score"] == 0
+    assert health["valuation_risk"]["coverage_weight"] == pytest.approx(75)
+    assert health["coverage"]["valuation"]["status"] == "partial"
+
+
+def test_health_zero_analysis_coverage_never_becomes_zero_score(db, portfolio):
+    _add_health_position(db, portfolio, "EMPTY", 100)
+    db.commit()
+
+    health = build_health(db, portfolio)
+
+    assert health["fundamental_quality"]["score"] is None
+    assert health["valuation_risk"]["score"] is None
+    assert health["fundamental_quality"]["coverage_weight"] == 0
+    assert health["health"]["score"] is None
+
+
+def test_health_sec_flag_exposure_uses_position_weight(db, portfolio):
+    _add_health_position(db, portfolio, "DILUTE", 75, payload=_health_payload(roe=20))
+    _add_health_position(db, portfolio, "CLEAN", 25, payload=_health_payload(roe=20))
+    db.add_all([
+        SecFiling(
+            ticker="DILUTE", cik="1", accession_number="a", form="8-K", form_label="重大事件公告",
+            items="3.02", event_labels=["定向增发（股权稀释）"], priority="important",
+            filing_date=date.today(), filing_url="https://example.test/a",
+        ),
+        SecFiling(
+            ticker="CLEAN", cik="2", accession_number="b", form="10-K", form_label="年报",
+            items=None, event_labels=[], priority="normal", filing_date=date.today(),
+            filing_url="https://example.test/b",
+        ),
+    ])
+    db.commit()
+
+    health = build_health(db, portfolio)
+    exposure = next(row for row in health["sec_risk"]["flag_exposures"] if row["flag"] == "share_dilution")
+
+    assert exposure["weight"] == pytest.approx(75)
+    assert exposure["affected_symbols"] == ["DILUTE"]
+
+
+def test_health_reports_largest_top_three_hhi_and_effective_count(db, portfolio):
+    for symbol, value in (("ONE", 40), ("TWO", 25), ("THREE", 20), ("FOUR", 15)):
+        _add_health_position(db, portfolio, symbol, value)
+    db.commit()
+
+    concentration = build_health(db, portfolio)["concentration"]
+
+    assert concentration["largest_position_weight"] == pytest.approx(40)
+    assert concentration["top_three_weight"] == pytest.approx(85)
+    assert concentration["hhi"] == pytest.approx(.285)
+    assert concentration["effective_position_count"] == pytest.approx(1 / .285, abs=.01)
+
+
+def test_health_findings_are_sorted_by_severity_then_weight(db, portfolio):
+    for symbol, value in (("ONE", 80), ("TWO", 10), ("THREE", 10)):
+        _add_health_position(db, portfolio, symbol, value)
+    db.commit()
+
+    findings = build_health(db, portfolio)["findings"]
+    rank = {"high": 4, "warning": 3, "positive": 2, "info": 1}
+    order = [(rank[row["severity"]], row["affected_weight"], row["priority"]) for row in findings]
+
+    assert order == sorted(order, reverse=True)
+
+
+def test_health_does_not_include_fully_closed_historical_symbol(db, portfolio):
+    _add_health_position(db, portfolio, "OPEN", 100, payload=_health_payload(stars=3))
+    db.add(_txn(portfolio.id, "CLOSED", "buy", 1, 100, txn_id=100))
+    db.add(_txn(portfolio.id, "CLOSED", "sell", 1, 100, trade_date=date(2026, 1, 2), txn_id=101))
+    db.commit()
+    rebuild_symbol_position(db, portfolio.id, "CLOSED")
+    db.add(ValuationSnapshot(ticker="CLOSED", snapshot_date=date.today(), payload=_health_payload(stars=1)))
+    db.commit()
+
+    health = build_health(db, portfolio)
+
+    assert health["position_count"] == 1
+    assert "CLOSED" not in health["coverage"]["valuation"]["covered_symbols"]
+
+
+def test_health_excludes_etf_from_company_scores_but_keeps_concentration(db, portfolio):
+    etf = Security(display_symbol="ETF", yahoo_symbol="ETF", instrument_type="ETF")
+    equity = Security(display_symbol="EQUITY", yahoo_symbol="EQUITY", instrument_type="EQUITY", country_code="US")
+    db.add_all([etf, equity])
+    db.flush()
+    _add_health_position(db, portfolio, "ETF", 50, payload=_health_payload(roe=0), security_id=etf.id)
+    _add_health_position(db, portfolio, "EQUITY", 50, payload=_health_payload(roe=25), security_id=equity.id)
+    db.commit()
+
+    health = build_health(db, portfolio)
+
+    assert health["concentration"]["holdings_count"] == 2
+    assert health["fundamental_quality"]["score"] == 100
+    assert health["fundamental_quality"]["coverage_weight"] == pytest.approx(50)
+    assert health["coverage"]["fundamental"]["excluded_symbols"] == ["ETF"]
+
+
+def test_health_warns_when_valuation_snapshot_is_stale(db, portfolio):
+    _add_health_position(
+        db, portfolio, "STALE", 100, payload=_health_payload(stars=3),
+        snapshot_date=date.today() - timedelta(days=100),
+    )
+    db.commit()
+
+    health = build_health(db, portfolio)
+
+    assert health["coverage"]["valuation"]["freshness"] == "stale"
+    assert any(row["id"] == "stale_analysis" and "STALE" in row["affected_symbols"] for row in health["findings"])
+
+
+def test_health_one_malformed_stock_does_not_break_valid_results(db, portfolio):
+    _add_health_position(db, portfolio, "GOOD", 50, payload=_health_payload(roe=25, roic=20, stars=5))
+    _add_health_position(db, portfolio, "BAD", 50, payload={"company": "Bad", "health": "broken", "model_signals": {"oops": 1}})
+    db.commit()
+
+    health = build_health(db, portfolio)
+
+    assert health["fundamental_quality"]["score"] == 100
+    assert health["valuation_risk"]["score"] == 0
+    assert health["coverage"]["fundamental"]["uncovered_symbols"] == ["BAD"]
+
+
+def test_health_response_matches_typed_api_contract(db, portfolio):
+    _add_health_position(db, portfolio, "AAPL", 100, payload=_health_payload(roe=20, roic=15, stars=3))
+    db.commit()
+
+    response = PortfolioHealthResponse.model_validate(build_health(db, portfolio))
+
+    assert response.portfolio_id == portfolio.id
+    assert response.coverage["price"].covered_weight == 100
 
 
 # ── position_technical.build_position_technical ───────────────────────────

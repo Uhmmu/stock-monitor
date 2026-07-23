@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fmtMoney, fmtNum, fmtPercent } from './Portfolio'
+import { fmtHealthScore, fmtMoney, fmtNum, fmtPercent } from './Portfolio'
 
 describe('fmtMoney', () => {
   it('renders an explicit gap instead of fabricating a value', () => {
@@ -36,5 +36,15 @@ describe('fmtNum', () => {
 
   it('respects a custom digit count', () => {
     expect(fmtNum(1.23456, 2)).toBe('1.23')
+  })
+})
+
+describe('fmtHealthScore', () => {
+  it('keeps missing analysis explicit', () => {
+    expect(fmtHealthScore(null)).toBe('数据不足')
+  })
+
+  it('rounds a score for compact display', () => {
+    expect(fmtHealthScore(74.6)).toBe('75')
   })
 })

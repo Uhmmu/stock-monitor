@@ -16,6 +16,7 @@ from app.database import get_db
 from app.models import PortfolioPosition, User
 from app.services.portfolio import (
     ManualPositionIn,
+    PortfolioHealthResponse,
     TransactionIn,
     TransactionOut,
     build_health,
@@ -72,7 +73,7 @@ def position_technical(symbol: str, user: User = Depends(get_current_user), db: 
     return build_position_technical(db, pos)
 
 
-@router.get("/health")
+@router.get("/health", response_model=PortfolioHealthResponse)
 def portfolio_health(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return build_health(db, _portfolio(db, user))
 

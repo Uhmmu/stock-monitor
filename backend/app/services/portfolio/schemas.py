@@ -1,7 +1,7 @@
 """Pydantic schemas for the portfolio/holdings API."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -109,3 +109,59 @@ class TransactionOut(BaseModel):
     note: str | None
     source: str
     model_config = ConfigDict(from_attributes=True)
+
+
+class PortfolioCoverageDimension(BaseModel):
+    covered_weight: float
+    uncovered_weight: float
+    covered_market_value: float
+    uncovered_market_value: float
+    covered_symbols: list[str]
+    uncovered_symbols: list[str]
+    excluded_symbols: list[str]
+    freshness: str
+    confidence: float
+    status: str
+    basis: str
+
+
+class PortfolioHealthOverall(BaseModel):
+    score: float | None
+    grade: str
+    confidence: float
+    included_components: list[str]
+    excluded_components: list[str]
+
+
+class PortfolioHealthFinding(BaseModel):
+    id: str
+    category: str
+    severity: str
+    title: str
+    message: str
+    evidence: dict
+    affected_symbols: list[str]
+    affected_weight: float
+    priority: int
+
+
+class PortfolioHealthResponse(BaseModel):
+    portfolio_id: int
+    as_of: datetime
+    base_currency: str
+    total_market_value: float
+    invested_market_value: float
+    cash_value: float
+    cash_weight: float
+    cash_tracked: bool
+    priced_count: int
+    position_count: int
+    has_unpriced_positions: bool
+    health: PortfolioHealthOverall
+    fundamental_quality: dict
+    valuation_risk: dict
+    sec_risk: dict
+    concentration: dict
+    coverage: dict[str, PortfolioCoverageDimension]
+    findings: list[PortfolioHealthFinding]
+    sector_exposure: dict

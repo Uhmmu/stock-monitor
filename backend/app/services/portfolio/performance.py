@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Portfolio, PortfolioPosition
 
-from .fx import FxQuote, fx_rate_map
+from .fx import FxQuote, cached_fx_rate_map, fx_rate_map
 from .pricing import PriceInfo, price_map
 
 
@@ -30,6 +30,7 @@ def _position_view(pos: PortfolioPosition, price: PriceInfo | None) -> dict:
         "price_available": price is not None,
         "current_price": price.price if price else None,
         "price_source": price.source if price else None,
+        "price_as_of": price.as_of.isoformat() if price and price.as_of else None,
         "market_value": None,
         "unrealized_pnl": None,
         "unrealized_pnl_percent": None,
@@ -65,7 +66,7 @@ def _apply_fx(view: dict, quote: FxQuote | None) -> None:
     view["valuation_available"] = True
 
 
-def build_summary(db: Session, portfolio: Portfolio) -> dict:
+def build_summary(db: Session, portfolio: Portfolio, *, cached_fx_only: bool = False) -> dict:
     positions = list(
         db.scalars(
             select(PortfolioPosition)
@@ -78,7 +79,8 @@ def build_summary(db: Session, portfolio: Portfolio) -> dict:
     )
     prices = price_map(db, [p.symbol for p in positions])
     views = [_position_view(p, prices.get(p.symbol)) for p in positions]
-    rates = fx_rate_map(portfolio.base_currency, {v["currency"] for v in views})
+    rate_resolver = cached_fx_rate_map if cached_fx_only else fx_rate_map
+    rates = rate_resolver(portfolio.base_currency, {v["currency"] for v in views})
     for view in views:
         _apply_fx(view, rates.get(view["currency"]))
 

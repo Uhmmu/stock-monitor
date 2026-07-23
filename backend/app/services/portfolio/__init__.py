@@ -16,6 +16,7 @@ from app.services.portfolio.position_builder import (
 from app.services.portfolio.position_technical import build_position_technical
 from app.services.portfolio.schemas import (
     ManualPositionIn,
+    PortfolioHealthResponse,
     TransactionIn,
     TransactionOut,
 )
@@ -31,6 +32,7 @@ from app.services.portfolio.transaction_service import (
 
 __all__ = [
     "ManualPositionIn",
+    "PortfolioHealthResponse",
     "TransactionIn",
     "TransactionOut",
     "build_health",
