@@ -814,7 +814,7 @@ function AuthGate({setToken,setAuthUser,onPreview}:{setToken:(t:string)=>void;se
 
   return <div className="auth-gate">
     <div className="auth-aurora auth-aurora-one"/><div className="auth-aurora auth-aurora-two"/>
-    <div className="auth-intro"><span className="auth-kicker">MARKET INTELLIGENCE</span><h1>小日向美香<br/>是钟家乐小女友。</h1><p>骗你的，其实羊宫妃那，<br/>是大女友。</p><div className="auth-signal"><span><i/> AAPL</span><b>214.37</b><em>+1.51%</em></div></div>
+    <div className="auth-intro"><span className="auth-kicker">MARKET INTELLIGENCE</span><h1>Stock<br/>Monitor。</h1><p><br/></p><div className="auth-signal"><span><i/> AAPL</span><b>214.37</b><em>+1.51%</em></div></div>
     <div className="auth-card">
       <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div><strong>小日向美香</strong><small>欢迎回来</small></div></div>
       <div className="auth-tabs">
