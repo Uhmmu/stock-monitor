@@ -73,6 +73,21 @@ class Settings(BaseSettings):
     sec_13f_cusip_overrides: str = ""
     # 13F 数据集下载页（运行时解析真实 zip 链接，避免猜文件命名）
     sec_13f_index_url: str = "https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets"
+    # Low-frequency Perplexity Agent API discovery. User-editable, non-secret
+    # defaults live in StockDiscoverySettings; the key and endpoint stay server-only.
+    perplexity_api_key: str = ""
+    perplexity_agent_url: str = "https://api.perplexity.ai/v1/agent"
+    perplexity_agent_model: str = "openai/gpt-5.4"
+    perplexity_max_steps: int = 5
+    perplexity_max_output_tokens: int = 12000
+    perplexity_enable_web_search: bool = True
+    perplexity_discovery_interval_days: int = 3
+    perplexity_max_monthly_budget_usd: float = 10.0
+    perplexity_max_run_cost_usd: float = 1.0
+    perplexity_request_timeout_seconds: int = 240
+    perplexity_manual_refresh_cooldown_seconds: int = 60
+    perplexity_evaluation_budget_usd: float = 2.0
+    perplexity_live_evaluation_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

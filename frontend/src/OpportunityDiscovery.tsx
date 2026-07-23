@@ -1,0 +1,182 @@
+import { useEffect, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, patch, post } from './api'
+import { Sheet } from './Sheet'
+
+export type DiscoveryUsage = {input_tokens:number;output_tokens:number;total_tokens:number;finance_search_calls:number;web_search_calls:number;tool_cost_usd:number;model_cost_usd:number;total_cost_usd:number}
+export type DiscoveryRunMeta = {id:number;status:string;stage:string;trigger:string;requested_at:string;started_at:string|null;completed_at:string|null;analysis_date:string|null;next_scheduled_at:string|null;model_requested:string;model_used:string|null;prompt_version:string;schema_version:string;filter_version:string;warnings:string[];failure_code:string|null;failure_reason:string|null;previous_successful_run_id:number|null;usage?:DiscoveryUsage|null}
+export type CandidateGroupRef = {id:string;name:string;type:string;reason:string}
+export type CandidateMetric = Record<string,number|string>
+export type DiscoveryCandidate = {
+  id:number;raw_ticker:string;normalized_ticker:string|null;company_name:string;exchange:string|null;country:string|null;raw_rank:number|null;final_rank:number|null;priority:string
+  symbol_match_status:string;symbol_match_reason:string|null;filter_status:string;display_status:string;filter_reasons:string[];filter_details:Record<string,unknown>
+  verification_status:string;dismissed:boolean;researched:boolean;groups:CandidateGroupRef[];discovery_reason:string|null;portfolio_fit:string|null
+  diversification_effect:string|null;overlap_with_existing_holdings:string[];business_quality_summary:string|null;investment_thesis:string[]
+  capital_flow_context:string|null;valuation_context:string|null;why_now:string|null;quality_level:string;valuation_level:string;momentum_state:string;confidence:number|null
+  financial_snapshot:CandidateMetric;source_badges:string[];source_count:number;data_discrepancies:{metric:string;values:{source:string;value:number|string;period:string|null}[]}[]
+  major_risks:string[];thesis_breakers:string[];reconsideration_condition?:string|null
+}
+export type DiscoveryCandidateDetail = DiscoveryCandidate & {raw_analysis:Record<string,unknown>;local_verification:Record<string,unknown>;sources:{title:string;url:string;source_type:string;origin:string}[];facts_to_verify_locally:string[];verified_at:string|null}
+export type DiscoveryResult = DiscoveryRunMeta & {
+  market_context:Record<string,unknown>
+  portfolio_diagnosis:Record<'overweight'|'missing'|'strength'|'vulnerability',{name:string;exposure_type:string|null;level:string;reasoning:string;suggested_action:string}[]>
+  capital_flows:{strong:CapitalFlow[];early:CapitalFlow[]}
+  groups:{id:string;name:string;type:string;summary:string;candidates:DiscoveryCandidate[]}[]
+  raw_candidates:DiscoveryCandidate[];filtered_candidates:DiscoveryCandidate[]
+  counts:{raw:number;accepted:number;watch_only:number;rejected:number}
+  portfolio_actions:{action:string;priority:string;reason:string}[];limitations:string[]
+}
+type CapitalFlow = {direction:string;strength?:string;current_attention?:string;evidence?:string;sustainability?:string;catalyst?:string;long_term_case?:string;what_could_trigger_repricing?:string[];risks:string[];related_tickers:string[]}
+type LatestDiscovery = {current_run:DiscoveryRunMeta|null;result:DiscoveryResult|null;using_previous_result:boolean;is_fresh:boolean;api_key_configured:boolean;monthly_spend_usd:number;monthly_budget_usd:number}
+export type DiscoverySettings = {auto_update_enabled:boolean;interval_days:number;model:string;enable_web_search:boolean;max_steps:number;max_output_tokens:number;monthly_budget_usd:number;max_run_cost_usd:number;min_market_cap:number;exclude_current_holdings:boolean;exclude_watchlist:boolean;require_positive_fcf:boolean;max_trailing_pe:number;max_forward_pe:number;max_price_to_sales:number;filter_extreme_momentum:boolean;missing_data_policy:'warn'|'watch_only'|'reject';api_key_configured:boolean;prompt_version:string;schema_version:string;filter_version:string}
+
+const statusLabel:Record<string,string> = {pending:'等待生成',running:'正在生成',completed:'已完成',completed_with_warnings:'部分完成',failed:'运行失败',blocked_by_budget:'预算已阻止'}
+const stageLabel:Record<string,string> = {preparing_portfolio:'正在整理持仓',budget_check:'正在检查预算',analyzing_portfolio:'正在分析组合暴露',searching_finance:'正在搜索金融数据',normalizing_candidates:'正在生成候选',local_verification:'正在进行本地验证',applying_filters:'正在应用过滤规则',retrying:'请求受限，准备重试',completed:'已完成',failed:'运行失败'}
+const filterLabel:Record<string,string> = {accepted:'已保留',accepted_with_warning:'保留但有警告',watch_only:'仅观察',rejected:'已过滤',insufficient_data:'数据不足',duplicate:'重复候选',already_held:'已持有',already_watched:'已在自选',unsupported_symbol:'无法识别'}
+const levelLabel:Record<string,string> = {high:'高',medium:'中',low:'低',uncertain:'不确定',cheap:'便宜',reasonable:'合理',elevated:'偏高',extreme:'极高',cold:'冷',neutral:'中性',improving:'改善',strong:'强',euphoric:'过热',verified:'已验证',partial:'部分验证',pending:'待验证',failed:'待验证',positive:'增加分散',negative:'重复敞口'}
+const metricLabels:Record<string,string> = {market_cap:'市值',pe_trailing:'PE',pe_forward:'预期 PE',price_to_sales:'市销率',revenue_growth:'营收增长',earnings_growth:'盈利增长',free_cash_flow:'自由现金流',free_cash_flow_margin:'FCF 利润率',return_on_invested_capital:'ROIC',operating_margin:'经营利润率',gross_margin:'毛利率',price:'价格',average_volume:'平均成交量'}
+const percentMetrics = new Set(['revenue_growth','earnings_growth','free_cash_flow_margin','return_on_invested_capital','operating_margin','gross_margin'])
+
+export function visibleCandidateMetrics(snapshot:CandidateMetric, limit=6) {
+  const order=['market_cap','pe_trailing','pe_forward','revenue_growth','free_cash_flow_margin','free_cash_flow','return_on_invested_capital','operating_margin','price_to_sales']
+  return order.filter(key=>snapshot[key]!=null).slice(0,limit).map(key=>({key,value:snapshot[key]}))
+}
+export const discoveryStatusText=(status:string)=>statusLabel[status]||status
+export const shouldPollDiscovery=(data:LatestDiscovery|undefined)=>Boolean(data?.current_run&&['pending','running'].includes(data.current_run.status))
+export function chooseCandidateGroup(groups:DiscoveryResult['groups'], activeId:string) {
+  return groups.find(group=>group.id===activeId)||groups[0]
+}
+const formatMetric=(key:string,value:number|string)=>{
+  if(typeof value!=='number')return value
+  if(key==='market_cap'||key==='free_cash_flow') return new Intl.NumberFormat('zh-CN',{notation:'compact',maximumFractionDigits:1}).format(value)
+  if(percentMetrics.has(key)) return `${(Math.abs(value)<=2?value*100:value).toFixed(1)}%`
+  return value.toLocaleString('zh-CN',{maximumFractionDigits:2})
+}
+const formatTime=(value:string|null|undefined)=>value?new Date(value).toLocaleString('zh-CN'):'—'
+const money=(value:number|null|undefined)=>value==null?'—':`$${value.toFixed(4)}`
+
+export function CandidateStatusBadge({status}:{status:string}) {
+  return <span className={`discovery-status status-${status}`}>{filterLabel[status]||status}</span>
+}
+
+function CandidateMetricRow({snapshot}:{snapshot:CandidateMetric}) {
+  const metrics=visibleCandidateMetrics(snapshot)
+  if(!metrics.length)return <p className="candidate-data-gap">关键指标待本地验证</p>
+  return <dl className="candidate-metrics">{metrics.map(({key,value})=><div key={key}><dt>{metricLabels[key]||key}</dt><dd>{formatMetric(key,value)}</dd></div>)}</dl>
+}
+
+function CandidateCard({candidate,onDetail,onAction}:{candidate:DiscoveryCandidate;onDetail:(id:number)=>void;onAction:(kind:'watchlist'|'researched'|'dismiss',id:number)=>void}) {
+  const ticker=candidate.normalized_ticker||candidate.raw_ticker
+  return <article className="candidate-card" id={`candidate-${ticker}`}>
+    <div className="candidate-card-top"><div><b>{ticker}</b><span>{candidate.company_name}</span></div><div><span className={`candidate-priority priority-${candidate.priority}`}>{levelLabel[candidate.priority]||candidate.priority}优先级</span><CandidateStatusBadge status={candidate.display_status}/></div></div>
+    <p className="candidate-reason"><b>推荐原因</b>{candidate.discovery_reason||'原始说明待补充'}</p>
+    <p className="candidate-fit"><b>组合作用</b>{candidate.portfolio_fit||'待结合本地持仓验证'}</p>
+    <CandidateMetricRow snapshot={candidate.financial_snapshot}/>
+    <div className="candidate-tags"><span>质量：{levelLabel[candidate.quality_level]||'不确定'}</span><span>估值：{levelLabel[candidate.valuation_level]||'不确定'}</span><span>动量：{levelLabel[candidate.momentum_state]||'不确定'}</span><span>验证：{levelLabel[candidate.verification_status]||'待验证'}</span></div>
+    {!!candidate.filter_reasons.length&&<p className="candidate-warning">{candidate.filter_reasons.join('；')}</p>}
+    <div className="candidate-sources">{candidate.source_badges.slice(0,4).map(source=><span key={source}>{source.replace('perplexity_finance','Perplexity Finance').replace('perplexity_web','Perplexity Web').replace('yfinance','Yahoo').replace('local_calculation','本地计算')}</span>)}</div>
+    <div className="candidate-actions"><button onClick={()=>onDetail(candidate.id)}>查看详情</button><details><summary aria-label={`${ticker} 更多操作`}>•••</summary><div><button onClick={()=>onAction('watchlist',candidate.id)}>加入自选</button><button onClick={()=>onAction('researched',candidate.id)}>标记已研究</button><button onClick={()=>onAction('dismiss',candidate.id)}>忽略</button></div></details></div>
+  </article>
+}
+
+function PortfolioExposureCard({title,items}:{title:string;items:DiscoveryResult['portfolio_diagnosis']['overweight']}) {
+  return <article className="exposure-card"><h3>{title}</h3>{items.slice(0,4).map((item,index)=><div key={`${item.name}-${index}`}><span className={`exposure-level level-${item.level}`}>{levelLabel[item.level]||'中'}</span><div><b>{item.name}</b><p>{item.reasoning}</p>{item.suggested_action&&<small>研究方向：{item.suggested_action}</small>}</div></div>)}{!items.length&&<p className="candidate-data-gap">本次没有形成明确结论</p>}</article>
+}
+
+function CapitalFlowColumn({title,items,onTicker}:{title:string;items:CapitalFlow[];onTicker:(ticker:string)=>void}) {
+  return <section className="flow-column"><h3>{title}</h3>{items.map((item,index)=><article key={`${item.direction}-${index}`}><div><b>{item.direction}</b><span>{levelLabel[item.strength||item.current_attention||'uncertain']||'不确定'}</span></div><p>{item.evidence||item.long_term_case}</p>{item.sustainability&&<small>持续性：{levelLabel[item.sustainability]||item.sustainability}</small>}{item.catalyst&&<small>可能催化：{item.catalyst}</small>}{!!item.what_could_trigger_repricing?.length&&<small>重估条件：{item.what_could_trigger_repricing.join('；')}</small>}{!!item.risks?.length&&<small>主要风险：{item.risks.join('；')}</small>}<div className="flow-tickers">{item.related_tickers?.map(ticker=><button key={ticker} onClick={()=>onTicker(ticker)}>{ticker}</button>)}</div></article>)}</section>
+}
+
+export function RawCandidatePanel({items,onDetail}:{items:DiscoveryCandidate[];onDetail:(id:number)=>void}) {
+  return <details className="raw-candidate-panel"><summary><span><b>原始候选</b><small>Perplexity 本地过滤前返回的股票</small></span><em>{items.length} 只</em></summary><div>{items.map(item=><button key={item.id} onClick={()=>onDetail(item.id)}><b>{item.raw_ticker}</b><span>{item.groups[0]?.name||'原始候选'}</span><small>{levelLabel[item.priority]||'中'}优先级</small><CandidateStatusBadge status={item.display_status}/></button>)}</div></details>
+}
+
+function FilteredCandidateList({items,onDetail}:{items:DiscoveryCandidate[];onDetail:(id:number)=>void}) {
+  return <details className="filtered-candidates"><summary><span><b>已过滤与过热候选</b><small>保留过滤原因与重新评估条件</small></span><em>{items.length} 只</em></summary><div>{items.map(item=><button key={item.id} onClick={()=>onDetail(item.id)}><span><b>{item.normalized_ticker||item.raw_ticker}</b><small>{item.company_name}</small></span><span>{item.groups[0]?.name||'原始候选'}</span><span>{item.filter_reasons.join('；')||'已从主要候选隐藏'}</span><CandidateStatusBadge status={item.display_status}/></button>)}</div></details>
+}
+
+export function DiscoveryRunMetadata({result}:{result:DiscoveryResult}) {
+  const usage=result.usage
+  return <details className="discovery-run-metadata"><summary><span><b>本次运行</b><small>模型、工具调用与成本明细</small></span></summary><dl><div><dt>请求模型</dt><dd>{result.model_requested}</dd></div><div><dt>实际模型</dt><dd>{result.model_used||'—'}</dd></div><div><dt>开始时间</dt><dd>{formatTime(result.started_at)}</dd></div><div><dt>完成时间</dt><dd>{formatTime(result.completed_at)}</dd></div><div><dt>金融搜索次数</dt><dd>{usage?.finance_search_calls??'—'}</dd></div><div><dt>网页搜索次数</dt><dd>{usage?.web_search_calls??'—'}</dd></div><div><dt>输入 / 输出 token</dt><dd>{usage?`${usage.input_tokens} / ${usage.output_tokens}`:'—'}</dd></div><div><dt>工具成本</dt><dd>{money(usage?.tool_cost_usd)}</dd></div><div><dt>模型成本</dt><dd>{money(usage?.model_cost_usd)}</dd></div><div><dt>总成本</dt><dd>{money(usage?.total_cost_usd)}</dd></div><div><dt>Prompt 版本</dt><dd>{result.prompt_version}</dd></div><div><dt>Schema 版本</dt><dd>{result.schema_version}</dd></div></dl></details>
+}
+
+export function DataDiscrepancies({items}:{items:DiscoveryCandidate['data_discrepancies']}) {
+  if(!items.length)return null
+  return <div className="data-discrepancy"><b>发现数据差异</b>{items.map(row=><p key={row.metric}>{metricLabels[row.metric]||row.metric}：{row.values.map(value=>`${value.source} ${value.value}`).join('；')}</p>)}<small>不同数据源的统计口径或更新时间可能不同。</small></div>
+}
+
+function CandidateDetailDrawer({id,onClose,onChanged}:{id:number|null;onClose:()=>void;onChanged:()=>void}) {
+  const detail=useQuery({queryKey:['discovery-candidate',id],queryFn:()=>api<DiscoveryCandidateDetail>(`/discovery/candidates/${id}`),enabled:id!=null})
+  const item=detail.data
+  return <Sheet open={id!=null} onClose={onClose} title={item?.normalized_ticker||item?.raw_ticker||'候选详情'}>{detail.isLoading&&<div className="empty">正在读取已保存的候选资料…</div>}{item&&<article className="candidate-detail">
+    <div className="candidate-detail-heading"><div><p className="eyebrow">研究候选</p><h2>{item.normalized_ticker||item.raw_ticker} <small>{item.company_name}</small></h2></div><CandidateStatusBadge status={item.display_status}/></div>
+    <section><h3>Perplexity 原始分析</h3><p>{item.discovery_reason}</p>{!!item.investment_thesis.length&&<ul>{item.investment_thesis.map(text=><li key={text}>{text}</li>)}</ul>}<CandidateMetricRow snapshot={(item.raw_analysis.financial_snapshot||{}) as CandidateMetric}/></section>
+    <section><h3>本地数据验证</h3><CandidateMetricRow snapshot={item.financial_snapshot}/><p className="detail-note">验证状态：{levelLabel[item.verification_status]||'待验证'}　·　时间：{formatTime(item.verified_at)}</p><DataDiscrepancies items={item.data_discrepancies}/></section>
+    <section><h3>组合适配</h3><p>{item.portfolio_fit||'数据不足'}</p><p>分散作用：{levelLabel[item.diversification_effect||'']||'不确定'}</p>{!!item.overlap_with_existing_holdings.length&&<p>重叠持仓：{item.overlap_with_existing_holdings.join('、')}</p>}</section>
+    <section><h3>风险与失效条件</h3>{!!item.major_risks.length&&<><b>主要风险</b><ul>{item.major_risks.map(text=><li key={text}>{text}</li>)}</ul></>}{!!item.thesis_breakers.length&&<><b>失效条件</b><ul>{item.thesis_breakers.map(text=><li key={text}>{text}</li>)}</ul></>}{!!item.filter_reasons.length&&<p className="candidate-warning">本地过滤：{item.filter_reasons.join('；')}</p>}</section>
+    <section><h3>来源与数据差异</h3>{item.sources.map((source,index)=><a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">{source.title||source.url} <small>{source.origin}</small></a>)}{!item.sources.length&&<p>来源链接数据不足</p>}</section>
+    <div className="candidate-detail-actions"><button onClick={()=>post(`/discovery/candidates/${item.id}/watchlist`,{}).then(onChanged)}>加入自选</button><button onClick={()=>post(`/discovery/candidates/${item.id}/researched`,{}).then(onChanged)}>标记已研究</button></div>
+  </article>}</Sheet>
+}
+
+export function OpportunityDiscovery() {
+  const client=useQueryClient()
+  const [selectedId,setSelectedId]=useState<number|null>(null)
+  const latest=useQuery({queryKey:['discovery-latest'],queryFn:()=>api<LatestDiscovery>('/discovery/latest'),staleTime:30_000,
+    refetchInterval:query=>shouldPollDiscovery(query.state.data as LatestDiscovery|undefined)?8000:false})
+  const result=latest.data?.result
+  const [activeGroup,setActiveGroup]=useState('')
+  useEffect(()=>{if(result?.groups.length&&!result.groups.some(group=>group.id===activeGroup))setActiveGroup(result.groups[0].id)},[result?.id,activeGroup,result?.groups])
+  const refresh=useMutation({mutationFn:(force:boolean)=>post<{run_id:number}>('/discovery/refresh',{force}),onSuccess:()=>client.invalidateQueries({queryKey:['discovery-latest']})})
+  const action=useMutation({mutationFn:({kind,id}:{kind:'watchlist'|'researched'|'dismiss';id:number})=>post(`/discovery/candidates/${id}/${kind}`,{}),onSuccess:()=>{client.invalidateQueries({queryKey:['discovery-latest']});client.invalidateQueries({queryKey:['watchlist']})}})
+  const group=result?chooseCandidateGroup(result.groups,activeGroup):undefined
+  const onRefresh=()=>{if(latest.data?.is_fresh&&!window.confirm('当前结果仍在有效期内，重新运行将产生额外 API 费用。'))return;refresh.mutate(Boolean(latest.data?.is_fresh))}
+  const goTicker=(ticker:string)=>{const target=result?.groups.find(item=>item.candidates.some(candidate=>(candidate.normalized_ticker||candidate.raw_ticker)===ticker));if(target)setActiveGroup(target.id);requestAnimationFrame(()=>document.getElementById(`candidate-${ticker}`)?.scrollIntoView({behavior:'smooth',block:'center'}))}
+  const running=latest.data?.current_run&&['pending','running'].includes(latest.data.current_run.status)
+  if(latest.isLoading)return <div className="discovery-empty"><div className="discovery-skeleton"/><h2>正在读取最近一次机会发现结果…</h2></div>
+  if(latest.error)return <div className="error">机会发现数据暂时无法读取，请稍后重试。</div>
+  return <div className="opportunity-discovery">
+    {running&&<div className="discovery-banner active"><span><b>正在生成新的机会发现结果</b>{result?'当前仍显示上一批内容。':'完成前可离开此页面。'}</span><em>{stageLabel[latest.data?.current_run?.stage||'']||'正在处理'}</em></div>}
+    {latest.data?.using_previous_result&&!running&&<div className="discovery-banner warning"><span><b>正在使用上一批成功结果</b>{latest.data.current_run?.failure_reason||'新批次没有替换当前内容。'}</span></div>}
+    {!latest.data?.api_key_configured&&<div className="discovery-banner warning"><span><b>尚未配置 Perplexity API Key</b>请在服务器环境变量中配置后再开始发现。</span></div>}
+    {!result?<section className="discovery-empty"><span className="discovery-empty-icon" aria-hidden="true">⌁</span><h2>还没有机会发现结果</h2><p>系统会结合持仓结构、市场资金方向与公开金融数据生成一批研究候选。</p><button onClick={()=>onRefresh()} disabled={refresh.isPending||!latest.data?.api_key_configured}>{refresh.isPending?'正在提交…':'开始首次发现'}</button>{refresh.error&&<small>{refresh.error.message}</small>}</section>:<>
+      <section className="opportunity-header"><div><p className="eyebrow">研究工作台</p><h2>机会发现</h2><p>基于当前持仓、市场资金方向与公开金融数据生成的研究候选</p><small>仅用于发现研究对象，不构成买入或卖出建议。</small></div><button onClick={onRefresh} disabled={refresh.isPending||running||!latest.data?.api_key_configured}>{refresh.isPending||running?'正在发现…':'重新发现'}</button><dl><div><dt>分析时间</dt><dd>{formatTime(result.analysis_date)}</dd></div><div><dt>下次自动更新</dt><dd>{formatTime(result.next_scheduled_at)}</dd></div><div><dt>本次模型</dt><dd>{result.model_used||result.model_requested}</dd></div><div><dt>原始 / 保留</dt><dd>{result.counts.raw} / {result.counts.accepted}</dd></div><div><dt>本次成本</dt><dd>{money(result.usage?.total_cost_usd)}</dd></div><div><dt>当前状态</dt><dd>{statusLabel[result.status]||result.status}</dd></div></dl></section>
+      <section className="discovery-section"><div className="section-title"><div><p>组合诊断</p><h2>组合暴露诊断</h2></div></div><div className="exposure-grid"><PortfolioExposureCard title="持仓偏重" items={result.portfolio_diagnosis.overweight}/><PortfolioExposureCard title="持仓缺口" items={result.portfolio_diagnosis.missing}/><PortfolioExposureCard title="组合优势" items={result.portfolio_diagnosis.strength}/><PortfolioExposureCard title="主要脆弱点" items={result.portfolio_diagnosis.vulnerability}/></div></section>
+      <section className="discovery-section"><div className="section-title"><div><p>市场观察</p><h2>市场资金方向</h2></div></div><div className="capital-flow-grid"><CapitalFlowColumn title="资金正在加速的方向" items={result.capital_flows.strong} onTicker={goTicker}/><CapitalFlowColumn title="资金尚弱但可提前研究" items={result.capital_flows.early} onTicker={goTicker}/></div></section>
+      <section className="discovery-section candidate-groups"><div className="section-title"><div><p>本地验证后</p><h2>研究候选</h2></div><small>{result.counts.accepted} 只保留 · {result.counts.watch_only} 只观察</small></div><div className="candidate-group-tabs" role="tablist">{result.groups.map(item=><button role="tab" aria-selected={item.id===group?.id} className={item.id===group?.id?'active':''} key={item.id} onClick={()=>setActiveGroup(item.id)}>{item.name}<span>{item.candidates.length}</span></button>)}</div>{group&&<><p className="candidate-group-summary">{group.summary}</p><div className="candidate-grid">{group.candidates.map(candidate=><CandidateCard key={candidate.id} candidate={candidate} onDetail={setSelectedId} onAction={(kind,id)=>action.mutate({kind,id})}/>)}{!group.candidates.length&&<div className="empty">该分组没有通过本地过滤的候选。</div>}</div></>}</section>
+      <RawCandidatePanel items={result.raw_candidates} onDetail={setSelectedId}/>
+      <FilteredCandidateList items={result.filtered_candidates} onDetail={setSelectedId}/>
+      <DiscoveryRunMetadata result={result}/>
+    </>}
+    <CandidateDetailDrawer id={selectedId} onClose={()=>setSelectedId(null)} onChanged={()=>{client.invalidateQueries({queryKey:['discovery-latest']});client.invalidateQueries({queryKey:['discovery-candidate',selectedId]});client.invalidateQueries({queryKey:['watchlist']})}}/>
+  </div>
+}
+
+export function DiscoverySettingsPanel() {
+  const client=useQueryClient()
+  const query=useQuery({queryKey:['discovery-settings'],queryFn:()=>api<DiscoverySettings>('/discovery/settings')})
+  const [form,setForm]=useState<DiscoverySettings|null>(null)
+  useEffect(()=>{if(query.data)setForm(query.data)},[query.data])
+  const save=useMutation({mutationFn:()=>patch<DiscoverySettings>('/discovery/settings',form),onSuccess:data=>{client.setQueryData(['discovery-settings'],data);setForm(data)}})
+  if(!form)return <section className="settings-card"><h2>机会发现</h2><p>正在读取设置…</p></section>
+  const set=<K extends keyof DiscoverySettings>(key:K,value:DiscoverySettings[K])=>setForm({...form,[key]:value})
+  return <section className="settings-card discovery-settings"><h2>机会发现</h2><p>低频运行 Perplexity Agent API。API Key 仅通过服务器环境变量配置，不会发送到浏览器。</p><div className={`settings-key-state ${form.api_key_configured?'ready':''}`}>{form.api_key_configured?'Perplexity API Key 已配置':'尚未配置 Perplexity API Key'}</div><div className="settings-grid">
+    <label className="settings-toggle">自动更新<input type="checkbox" checked={form.auto_update_enabled} onChange={e=>set('auto_update_enabled',e.target.checked)}/></label>
+    <label>更新间隔（天）<input type="number" min="1" max="30" value={form.interval_days} onChange={e=>set('interval_days',Number(e.target.value))}/></label>
+    <label>Perplexity 模型<input value={form.model} onChange={e=>set('model',e.target.value)}/></label>
+    <label className="settings-toggle">允许网页搜索<input type="checkbox" checked={form.enable_web_search} onChange={e=>set('enable_web_search',e.target.checked)}/></label>
+    <label>单次最大步骤<input type="number" min="1" max="10" value={form.max_steps} onChange={e=>set('max_steps',Number(e.target.value))}/></label>
+    <label>单次最大输出长度<input type="number" min="2048" max="32000" value={form.max_output_tokens} onChange={e=>set('max_output_tokens',Number(e.target.value))}/></label>
+    <label>每月预算上限（美元）<input type="number" min="0" step="0.1" value={form.monthly_budget_usd} onChange={e=>set('monthly_budget_usd',Number(e.target.value))}/></label>
+    <label>单次成本预警线（美元）<input type="number" min="0.01" step="0.05" value={form.max_run_cost_usd} onChange={e=>set('max_run_cost_usd',Number(e.target.value))}/></label>
+    <label>最低市值<input type="number" min="0" value={form.min_market_cap} onChange={e=>set('min_market_cap',Number(e.target.value))}/></label>
+    <label className="settings-toggle">排除当前持仓<input type="checkbox" checked={form.exclude_current_holdings} onChange={e=>set('exclude_current_holdings',e.target.checked)}/></label>
+    <label className="settings-toggle">排除已有自选<input type="checkbox" checked={form.exclude_watchlist} onChange={e=>set('exclude_watchlist',e.target.checked)}/></label>
+    <label className="settings-toggle">要求正自由现金流<input type="checkbox" checked={form.require_positive_fcf} onChange={e=>set('require_positive_fcf',e.target.checked)}/></label>
+    <label>最大 PE<input type="number" value={form.max_trailing_pe} onChange={e=>set('max_trailing_pe',Number(e.target.value))}/></label>
+    <label>最大预期 PE<input type="number" value={form.max_forward_pe} onChange={e=>set('max_forward_pe',Number(e.target.value))}/></label>
+    <label>最大市销率<input type="number" value={form.max_price_to_sales} onChange={e=>set('max_price_to_sales',Number(e.target.value))}/></label>
+    <label className="settings-toggle">过滤极端动量<input type="checkbox" checked={form.filter_extreme_momentum} onChange={e=>set('filter_extreme_momentum',e.target.checked)}/></label>
+    <label>数据不足处理<select value={form.missing_data_policy} onChange={e=>set('missing_data_policy',e.target.value as DiscoverySettings['missing_data_policy'])}><option value="warn">保留并警告</option><option value="watch_only">仅观察</option><option value="reject">过滤</option></select></label>
+  </div><button onClick={()=>save.mutate()} disabled={save.isPending}>{save.isPending?'保存中…':'保存机会发现设置'}</button>{save.isSuccess&&<span className="saved">已保存</span>}{save.error&&<span className="error">{save.error.message}</span>}</section>
+}

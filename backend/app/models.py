@@ -721,6 +721,220 @@ class PortfolioStrategyProfile(Base):
     )
 
 
+class StockDiscoverySettings(Base):
+    """Per-user discovery policy. Secrets deliberately never enter this table."""
+    __tablename__ = "stock_discovery_settings"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_stock_discovery_settings_user_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    auto_update_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    interval_days: Mapped[int] = mapped_column(Integer, default=3)
+    model: Mapped[str] = mapped_column(String(128), default="openai/gpt-5.4")
+    enable_web_search: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_steps: Mapped[int] = mapped_column(Integer, default=5)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, default=12000)
+    monthly_budget_usd: Mapped[float] = mapped_column(Float, default=10.0)
+    max_run_cost_usd: Mapped[float] = mapped_column(Float, default=1.0)
+    min_market_cap: Mapped[float] = mapped_column(Float, default=2_000_000_000.0)
+    exclude_current_holdings: Mapped[bool] = mapped_column(Boolean, default=True)
+    exclude_watchlist: Mapped[bool] = mapped_column(Boolean, default=False)
+    require_positive_fcf: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_trailing_pe: Mapped[float] = mapped_column(Float, default=80.0)
+    max_forward_pe: Mapped[float] = mapped_column(Float, default=60.0)
+    max_price_to_sales: Mapped[float] = mapped_column(Float, default=25.0)
+    filter_extreme_momentum: Mapped[bool] = mapped_column(Boolean, default=True)
+    missing_data_policy: Mapped[str] = mapped_column(String(24), default="warn")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class StockDiscoveryRun(Base):
+    __tablename__ = "stock_discovery_runs"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_stock_discovery_runs_idempotency_key"),
+        Index("ix_stock_discovery_runs_user_requested", "user_id", "requested_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    portfolio_id: Mapped[int] = mapped_column(ForeignKey("portfolios.id", ondelete="CASCADE"), index=True)
+    previous_successful_run_id: Mapped[int | None] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="SET NULL"))
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    trigger: Mapped[str] = mapped_column(String(16), default="manual")
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    stage: Mapped[str] = mapped_column(String(48), default="preparing_portfolio")
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    analysis_date: Mapped[date | None] = mapped_column(Date)
+    next_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    model_requested: Mapped[str] = mapped_column(String(128))
+    model_used: Mapped[str | None] = mapped_column(String(128))
+    prompt_version: Mapped[str] = mapped_column(String(64), default="stock-discovery-prompt-v0.4")
+    schema_version: Mapped[str] = mapped_column(String(64), default="stock-discovery-schema-v0.4")
+    filter_version: Mapped[str] = mapped_column(String(64), default="stock-discovery-filter-v0.4")
+    portfolio_snapshot_hash: Mapped[str] = mapped_column(String(64))
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    failure_code: Mapped[str | None] = mapped_column(String(48))
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class StockDiscoveryPortfolioSnapshot(Base):
+    __tablename__ = "stock_discovery_portfolio_snapshots"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"), unique=True)
+    context_hash: Mapped[str] = mapped_column(String(64), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class StockDiscoveryMarketContext(Base):
+    __tablename__ = "stock_discovery_market_contexts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"), unique=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    risk_regime: Mapped[str] = mapped_column(String(24), default="unknown")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class StockDiscoveryExposure(Base):
+    __tablename__ = "stock_discovery_exposures"
+    __table_args__ = (Index("ix_stock_discovery_exposures_run_kind", "run_id", "diagnosis_kind"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"))
+    diagnosis_kind: Mapped[str] = mapped_column(String(32))
+    exposure_type: Mapped[str | None] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(200))
+    level: Mapped[str] = mapped_column(String(16), default="medium")
+    reasoning: Mapped[str] = mapped_column(Text, default="")
+    suggested_action: Mapped[str] = mapped_column(Text, default="")
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class StockDiscoveryFlowDirection(Base):
+    __tablename__ = "stock_discovery_flow_directions"
+    __table_args__ = (Index("ix_stock_discovery_flows_run_type", "run_id", "flow_type"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"))
+    flow_type: Mapped[str] = mapped_column(String(24))
+    direction: Mapped[str] = mapped_column(String(200))
+    strength: Mapped[str] = mapped_column(String(24), default="uncertain")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class StockDiscoveryCandidateGroup(Base):
+    __tablename__ = "stock_discovery_candidate_groups"
+    __table_args__ = (UniqueConstraint("run_id", "group_id", name="uq_stock_discovery_groups_run_group"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"))
+    group_id: Mapped[str] = mapped_column(String(80))
+    group_name: Mapped[str] = mapped_column(String(120))
+    group_type: Mapped[str] = mapped_column(String(32))
+    summary: Mapped[str] = mapped_column(Text, default="")
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class StockDiscoveryCandidate(Base):
+    __tablename__ = "stock_discovery_candidates"
+    __table_args__ = (
+        UniqueConstraint("run_id", "canonical_key", name="uq_stock_discovery_candidates_run_key"),
+        Index("ix_stock_discovery_candidates_run_status", "run_id", "display_status"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"))
+    raw_ticker: Mapped[str] = mapped_column(String(48))
+    normalized_ticker: Mapped[str | None] = mapped_column(String(32), index=True)
+    canonical_key: Mapped[str] = mapped_column(String(96))
+    company_name: Mapped[str] = mapped_column(String(256), default="")
+    exchange: Mapped[str | None] = mapped_column(String(64))
+    country: Mapped[str | None] = mapped_column(String(64))
+    raw_rank: Mapped[int | None] = mapped_column(Integer)
+    final_rank: Mapped[int | None] = mapped_column(Integer)
+    candidate_priority: Mapped[str] = mapped_column(String(16), default="medium")
+    symbol_match_status: Mapped[str] = mapped_column(String(32), default="pending")
+    symbol_match_reason: Mapped[str | None] = mapped_column(Text)
+    filter_status: Mapped[str] = mapped_column(String(32), default="insufficient_data")
+    display_status: Mapped[str] = mapped_column(String(32), default="insufficient_data")
+    verification_status: Mapped[str] = mapped_column(String(32), default="pending")
+    raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    normalized_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    local_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    dismissed: Mapped[bool] = mapped_column(Boolean, default=False)
+    researched: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class StockDiscoveryCandidateGroupMembership(Base):
+    __tablename__ = "stock_discovery_candidate_group_memberships"
+    __table_args__ = (UniqueConstraint("candidate_id", "group_id", name="uq_stock_discovery_membership"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_candidates.id", ondelete="CASCADE"))
+    group_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_candidate_groups.id", ondelete="CASCADE"))
+    original_reason: Mapped[str] = mapped_column(Text, default="")
+    raw_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class StockDiscoveryCandidateMetric(Base):
+    __tablename__ = "stock_discovery_candidate_metrics"
+    __table_args__ = (UniqueConstraint("candidate_id", "metric_key", "source", name="uq_stock_discovery_metric_source"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_candidates.id", ondelete="CASCADE"))
+    metric_key: Mapped[str] = mapped_column(String(64))
+    value: Mapped[float | None] = mapped_column(Float)
+    text_value: Mapped[str | None] = mapped_column(Text)
+    unit: Mapped[str | None] = mapped_column(String(32))
+    source: Mapped[str] = mapped_column(String(32), default="unknown")
+    data_period: Mapped[str | None] = mapped_column(String(64))
+    is_preferred: Mapped[bool] = mapped_column(Boolean, default=False)
+    has_discrepancy: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class StockDiscoverySource(Base):
+    __tablename__ = "stock_discovery_sources"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"), index=True)
+    candidate_id: Mapped[int | None] = mapped_column(ForeignKey("stock_discovery_candidates.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str] = mapped_column(Text)
+    source_type: Mapped[str] = mapped_column(String(32), default="other")
+    source_origin: Mapped[str] = mapped_column(String(32), default="perplexity_finance")
+
+
+class StockDiscoveryFilterResult(Base):
+    __tablename__ = "stock_discovery_filter_results"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_candidates.id", ondelete="CASCADE"), unique=True)
+    status: Mapped[str] = mapped_column(String(32))
+    reasons: Mapped[list] = mapped_column(JSON, default=list)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    filter_version: Mapped[str] = mapped_column(String(64), default="stock-discovery-filter-v0.4")
+
+
+class StockDiscoveryRawPayload(Base):
+    __tablename__ = "stock_discovery_raw_payloads"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"), unique=True)
+    response_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    output_text: Mapped[str] = mapped_column(Text, default="")
+    parsed_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    tool_results: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class StockDiscoveryUsage(Base):
+    __tablename__ = "stock_discovery_usage"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"), unique=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    finance_search_calls: Mapped[int] = mapped_column(Integer, default=0)
+    web_search_calls: Mapped[int] = mapped_column(Integer, default=0)
+    tool_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    model_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    raw_usage: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class TradeTransaction(Base):
     """权威的交易历史事实。持仓聚合与批次都是从这里推导出来的派生状态。
 

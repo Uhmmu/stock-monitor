@@ -15,6 +15,7 @@
 - **多用户登录**：支持注册申请、登录、JWT 会话、管理员审核/删除用户和管理员权限控制。
 - **交易日志区**：按用户记录交易计划、买卖方向、数量、价格、标签、图片和复盘内容，并可调用 AI 生成总结。
 - **多币种持仓**：记录本币成本与行情，组合总市值、盈亏、权重和行业暴露通过 Yahoo 外汇报价折算到组合基础币种；汇率缺失时明确排除并提示，不按 1:1 混算。
+- **机会发现**：每三天低频调用一次 Perplexity Agent API，通过 `finance_search` 发现组合盲点、资金方向和研究候选，再由本地证券映射、Yahoo/已存财务数据和可配置规则验证；原始候选、过滤原因、工具调用与精确成本均保留。
 - **SEC 官方数据**：支持 8-K、10-Q、10-K、内幕交易和 13F 持仓信息。
 - **数据缺口提示**：当外部数据覆盖不足时明确显示缺少的字段，方便排错和判断模型可信度。
 
@@ -77,6 +78,13 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 MODEL_SIMPLE=gpt-5.4-mini
 MODEL_MEDIUM=gpt-5.6-luna
 MODEL_IMPORTANT=gpt-5.6-sol
+
+# 可选：启用低频机会发现
+PERPLEXITY_API_KEY=your-perplexity-key
+PERPLEXITY_AGENT_MODEL=openai/gpt-5.4
+PERPLEXITY_DISCOVERY_INTERVAL_DAYS=3
+PERPLEXITY_MAX_MONTHLY_BUDGET_USD=10
+PERPLEXITY_MAX_RUN_COST_USD=1
 
 # 生产环境必须修改
 JWT_SECRET=generate-a-long-random-secret
