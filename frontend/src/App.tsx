@@ -261,6 +261,7 @@ export default function App() {
   const reports = useQuery({queryKey:['reports'],queryFn:()=>api<Report[]>('/reports'),enabled:live})
   const report = useQuery({queryKey:['report',selectedReport],queryFn:()=>api<ReportDetail>(`/reports/${selectedReport}`),enabled:live&&selectedReport!==null})
   const settings = useQuery({queryKey:['settings'],queryFn:()=>api<Settings>('/settings'),enabled:live})
+  useQuery({queryKey:['portfolio-strategy-profile'],queryFn:()=>api<unknown>('/portfolio/strategy-profile'),enabled:live,staleTime:60_000})
 
   useEffect(()=>{
     if(demoMode){setAuthLoading(false);return}

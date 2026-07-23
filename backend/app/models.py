@@ -699,6 +699,28 @@ class Portfolio(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class PortfolioStrategyProfile(Base):
+    """User-owned interpretation preferences layered over objective portfolio analysis."""
+    __tablename__ = "portfolio_strategy_profiles"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_portfolio_strategy_profiles_user_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    strategy_type: Mapped[str] = mapped_column(String(32), default="quality_growth")
+    investment_horizon: Mapped[str] = mapped_column(String(24), default="long_term")
+    risk_tolerance: Mapped[str] = mapped_column(String(24), default="balanced")
+    max_single_position: Mapped[float] = mapped_column(Float, default=25.0)
+    max_theme_exposure: Mapped[float] = mapped_column(Float, default=40.0)
+    valuation_preference: Mapped[str] = mapped_column(String(24), default="balanced")
+    minimum_quality_score: Mapped[float] = mapped_column(Float, default=70.0)
+    preferred_regions: Mapped[list] = mapped_column(JSON, default=lambda: ["north_america"])
+    preferred_market_caps: Mapped[list] = mapped_column(JSON, default=lambda: ["large", "mid"])
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class TradeTransaction(Base):
     """权威的交易历史事实。持仓聚合与批次都是从这里推导出来的派生状态。
 

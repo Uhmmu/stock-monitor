@@ -173,6 +173,33 @@ type PortfolioHealth = {
     unclassified_weight?:number
   }
 }
+type StrategyProfile = {
+  strategy_type:string
+  investment_horizon:string
+  risk_tolerance:string
+  max_single_position:number
+  max_theme_exposure:number
+  valuation_preference:string
+  minimum_quality_score:number
+  preferred_regions:string[]
+  preferred_market_caps:string[]
+  updated_at:string
+}
+type StrategyChoice = {value:string;label:string}
+type StrategyProfileResponse = {
+  profile:StrategyProfile
+  presets:Record<string,Omit<StrategyProfile,'updated_at'>>
+  choices:Record<string,StrategyChoice[]>
+}
+type PersonalizedInterpretation = {
+  strategy_type:string
+  strategy_label:string
+  evaluated_at:string
+  items:{id:string;dimension:string;status:'aligned'|'caution'|'unavailable';title:string;message:string;evidence:Record<string,unknown>}[]
+  overall_summary:string
+  recommendations:{id:string;title:string;reason:string;priority:number}[]
+  unavailable_dimensions:string[]
+}
 type TransactionRow = {
   id:number
   symbol:string
@@ -208,9 +235,12 @@ export function PortfolioModule() {
   const [entrySecurity,setEntrySecurity] = useState<SecuritySearchResult|null>(null)
   const [entryForm,setEntryForm] = useState(emptyManualForm(today))
   const [detailSymbol,setDetailSymbol] = useState<string|null>(null)
+  const [strategyOpen,setStrategyOpen] = useState(false)
 
   const summary = useQuery({queryKey:['portfolio-summary'],queryFn:()=>api<PortfolioSummary>('/portfolio/summary'),staleTime:30_000})
+  const strategy = useQuery({queryKey:['portfolio-strategy-profile'],queryFn:()=>api<StrategyProfileResponse>('/portfolio/strategy-profile'),staleTime:60_000})
   const health = useQuery({queryKey:['portfolio-health'],queryFn:()=>api<PortfolioHealth>('/portfolio/health'),enabled:subtab==='health',staleTime:60_000})
+  const interpretation = useQuery({queryKey:['portfolio-interpretation'],queryFn:()=>api<PersonalizedInterpretation>('/portfolio/interpretation'),enabled:subtab==='health',staleTime:60_000})
   const transactions = useQuery({queryKey:['portfolio-transactions'],queryFn:()=>api<TransactionRow[]>('/portfolio/transactions'),enabled:subtab==='transactions'})
   const detail = useQuery({queryKey:['portfolio-technical',detailSymbol],queryFn:()=>api<PositionTechnical>(`/portfolio/positions/${detailSymbol}/technical`),enabled:!!detailSymbol})
 
@@ -242,6 +272,32 @@ export function PortfolioModule() {
       client.invalidateQueries({queryKey:['portfolio-transactions']})
     },
   })
+  const saveStrategy = useMutation({
+    scope:{id:'portfolio-strategy-profile'},
+    mutationFn:(changes:Partial<StrategyProfile>)=>api<StrategyProfileResponse>('/portfolio/strategy-profile',{method:'PUT',body:JSON.stringify(changes)}),
+    onMutate:async changes=>{
+      await client.cancelQueries({queryKey:['portfolio-strategy-profile']})
+      const previous=client.getQueryData<StrategyProfileResponse>(['portfolio-strategy-profile'])
+      if(previous) client.setQueryData<StrategyProfileResponse>(['portfolio-strategy-profile'],{
+        ...previous,profile:{...previous.profile,...changes,updated_at:new Date().toISOString()},
+      })
+      return {previous}
+    },
+    onError:(_error,_changes,context)=>{
+      if(context?.previous) client.setQueryData(['portfolio-strategy-profile'],context.previous)
+    },
+    onSuccess:data=>{
+      client.setQueryData(['portfolio-strategy-profile'],data)
+      client.invalidateQueries({queryKey:['portfolio-interpretation']})
+    },
+  })
+  const resetStrategy = useMutation({
+    mutationFn:()=>post<StrategyProfileResponse>('/portfolio/strategy-profile/reset',{}),
+    onSuccess:data=>{
+      client.setQueryData(['portfolio-strategy-profile'],data)
+      client.invalidateQueries({queryKey:['portfolio-interpretation']})
+    },
+  })
 
   const s = summary.data
   const subtabs:[PortfolioTab,string][] = [['overview','总览'],['positions','持仓明细'],['technical','技术位置'],['health','组合健康'],['transactions','交易记录']]
@@ -263,13 +319,19 @@ export function PortfolioModule() {
       {detailSymbol&&detail.data&&<PositionTechnicalPanel data={detail.data}/>}
     </div>
   </div>
-  const healthContent = <PortfolioHealthView health={health.data} loading={health.isLoading} currency={s?.base_currency||'USD'}/>
+  const healthContent = <PortfolioHealthView health={health.data} loading={health.isLoading} currency={s?.base_currency||'USD'} interpretation={interpretation.data} interpretationLoading={interpretation.isLoading}/>
+  const strategyLabel = strategy.data?.choices.strategy_type?.find(row=>row.value===strategy.data?.profile.strategy_type)?.label||'质量成长'
 
   return <div className="portfolio-module">
     <div className="section-title">
       <div><p>HOLDINGS</p><h2>持仓</h2></div>
       <div className="section-actions"><button onClick={()=>setEntryOpen(true)}>＋ 手动添加持仓</button></div>
     </div>
+    <button className="portfolio-strategy-entry" onClick={()=>setStrategyOpen(true)}>
+      <span className="portfolio-strategy-icon" aria-hidden="true">◎</span>
+      <span><b>组合策略</b><small>设置投资风格与风险偏好</small></span>
+      <strong>{strategy.isLoading?'载入中':strategyLabel}</strong><i aria-hidden="true">›</i>
+    </button>
     <div className="portfolio-subtabs">{subtabs.map(([key,label])=><button key={key} className={subtab===key?'active':''} onClick={()=>openTab(key)}>{label}</button>)}</div>
 
     {subtab==='overview'&&<div className="portfolio-overview">
@@ -349,10 +411,99 @@ export function PortfolioModule() {
         <div className="portfolio-entry-actions"><button disabled={createEntry.isPending||!entryForm.symbol}>{createEntry.isPending?'保存中…':'保存持仓'}</button></div>
       </form>
     </Sheet>
+    <Sheet open={strategyOpen} onClose={()=>setStrategyOpen(false)} title="组合策略">
+      <StrategySettings
+        data={strategy.data}
+        loading={strategy.isLoading}
+        saving={saveStrategy.isPending||resetStrategy.isPending}
+        error={saveStrategy.error||resetStrategy.error}
+        onSave={changes=>saveStrategy.mutate(changes)}
+        onReset={()=>resetStrategy.mutate()}
+      />
+    </Sheet>
   </div>
 }
 
-function PortfolioHealthView({health,loading,currency}:{health:PortfolioHealth|undefined;loading:boolean;currency:string}) {
+type EditableStrategyField = 'strategy_type'|'investment_horizon'|'risk_tolerance'|'max_single_position'|'max_theme_exposure'|'valuation_preference'|'minimum_quality_score'|'preferred_regions'|'preferred_market_caps'
+
+function StrategySettings({data,loading,saving,error,onSave,onReset}:{
+  data:StrategyProfileResponse|undefined
+  loading:boolean
+  saving:boolean
+  error:Error|null
+  onSave:(changes:Partial<StrategyProfile>)=>void
+  onReset:()=>void
+}) {
+  const [activeField,setActiveField] = useState<EditableStrategyField|null>(null)
+  if(loading||!data) return <div className="empty">正在载入组合策略…</div>
+  const {profile,choices}=data
+  const labelFor = (field:string,value:string) => choices[field]?.find(row=>row.value===value)?.label||value
+  const rows:{field:EditableStrategyField;label:string;value:string}[] = [
+    {field:'strategy_type',label:'投资策略',value:labelFor('strategy_type',profile.strategy_type)},
+    {field:'risk_tolerance',label:'风险承受能力',value:labelFor('risk_tolerance',profile.risk_tolerance)},
+    {field:'investment_horizon',label:'投资期限',value:labelFor('investment_horizon',profile.investment_horizon)},
+    {field:'max_single_position',label:'单一持仓上限',value:`${profile.max_single_position.toFixed(0)}%`},
+    {field:'max_theme_exposure',label:'主题暴露上限',value:`${profile.max_theme_exposure.toFixed(0)}%`},
+    {field:'valuation_preference',label:'估值偏好',value:labelFor('valuation_preference',profile.valuation_preference)},
+    {field:'minimum_quality_score',label:'基本面质量门槛',value:`${profile.minimum_quality_score.toFixed(0)} 分`},
+    {field:'preferred_regions',label:'偏好区域',value:profile.preferred_regions.map(value=>labelFor('preferred_regions',value)).join('、')},
+    {field:'preferred_market_caps',label:'偏好市值规模',value:profile.preferred_market_caps.map(value=>labelFor('preferred_market_caps',value)).join('、')},
+  ]
+  const singleChoiceFields = new Set<EditableStrategyField>(['strategy_type','risk_tolerance','investment_horizon','valuation_preference'])
+  const multiChoiceFields = new Set<EditableStrategyField>(['preferred_regions','preferred_market_caps'])
+  const numberOptions = (field:EditableStrategyField) => {
+    const start = field==='minimum_quality_score'?0:field==='max_theme_exposure'?10:5
+    return Array.from({length:(100-start)/5+1},(_,index)=>start+index*5)
+  }
+  const chooseSingle = (field:EditableStrategyField,value:string) => {
+    if(field==='strategy_type') onSave(data.presets[value]||{strategy_type:value})
+    else onSave({[field]:value})
+    setActiveField(null)
+  }
+  const toggleMulti = (field:'preferred_regions'|'preferred_market_caps',value:string) => {
+    const current = profile[field]
+    if(field==='preferred_regions'&&value==='global') return onSave({[field]:['global']})
+    const withoutGlobal = current.filter(item=>item!=='global')
+    const next = withoutGlobal.includes(value)?withoutGlobal.filter(item=>item!==value):[...withoutGlobal,value]
+    if(next.length) onSave({[field]:next})
+  }
+  return <div className="strategy-settings">
+    <p className="strategy-settings-intro">策略只改变组合健康结果的解读方式，不会修改任何客观评分。</p>
+    <div className="strategy-settings-group">
+      {rows.map(row=><div className={`strategy-setting ${activeField===row.field?'expanded':''}`} key={row.field}>
+        <button type="button" aria-expanded={activeField===row.field} onClick={()=>setActiveField(current=>current===row.field?null:row.field)}>
+          <span>{row.label}</span><strong>{row.value}</strong><i aria-hidden="true">›</i>
+        </button>
+        {activeField===row.field&&<div className="strategy-selector">
+          {singleChoiceFields.has(row.field)&&choices[row.field]?.map(option=><button type="button" className={(profile[row.field] as string)===option.value?'selected':''} key={option.value} onClick={()=>chooseSingle(row.field,option.value)}><span>{option.label}</span><b aria-hidden="true">✓</b></button>)}
+          {multiChoiceFields.has(row.field)&&choices[row.field]?.map(option=>{const selected=(profile[row.field] as string[]).includes(option.value);return <button type="button" className={selected?'selected':''} key={option.value} onClick={()=>toggleMulti(row.field as 'preferred_regions'|'preferred_market_caps',option.value)}><span>{option.label}</span><b aria-hidden="true">✓</b></button>})}
+          {!singleChoiceFields.has(row.field)&&!multiChoiceFields.has(row.field)&&numberOptions(row.field).map(value=>{const selected=profile[row.field]===value;return <button type="button" className={selected?'selected':''} key={value} onClick={()=>{onSave({[row.field]:value});setActiveField(null)}}><span>{value}{row.field==='minimum_quality_score'?' 分':'%'}</span><b aria-hidden="true">✓</b></button>})}
+        </div>}
+      </div>)}
+    </div>
+    <button className="strategy-reset" type="button" disabled={saving} onClick={onReset}>恢复此策略的默认值</button>
+    <div className="strategy-save-status" role="status">{saving?'正在自动保存…':error?`保存失败：${error.message}`:`已自动保存 · ${new Date(profile.updated_at).toLocaleString('zh-CN')}`}</div>
+  </div>
+}
+
+function PersonalizedInterpretationSection({data,loading}:{data:PersonalizedInterpretation|undefined;loading:boolean}) {
+  return <section className="health-section personalized-interpretation">
+    <div className="portfolio-health-heading"><div><small>策略画像</small><h3>个性化解读</h3></div><span>{data?`基于${data.strategy_label}`:'载入中'}</span></div>
+    {loading&&<div className="empty">正在结合你的组合策略生成解读…</div>}
+    {!loading&&!data&&<p className="health-quiet">个性化解读暂不可用，客观健康评分不受影响。</p>}
+    {data&&<>
+      <div className="personalized-items">{data.items.map(item=><article className={`personalized-${item.status}`} key={item.id}>
+        <span aria-hidden="true">{item.status==='aligned'?'✓':item.status==='caution'?'!':'—'}</span>
+        <div><h4>{item.title}</h4><p>{item.message}</p></div>
+      </article>)}</div>
+      <div className="personalized-summary"><span>总体结论</span><p>{data.overall_summary}</p></div>
+      <div className="personalized-recommendations"><h4>组合方向建议</h4>{data.recommendations.map(row=><article key={row.id}><b>{row.title}</b><p>{row.reason}</p></article>)}</div>
+      {data.unavailable_dimensions.includes('market_cap')&&<small className="personalized-gap">市值规模暴露尚未进入客观健康分析，本次不据此形成结论。</small>}
+    </>}
+  </section>
+}
+
+function PortfolioHealthView({health,loading,currency,interpretation,interpretationLoading}:{health:PortfolioHealth|undefined;loading:boolean;currency:string;interpretation:PersonalizedInterpretation|undefined;interpretationLoading:boolean}) {
   if(loading) return <div className="empty">正在计算组合健康…</div>
   if(!health) return <div className="empty">组合健康数据暂不可用。</div>
   const scoreClass = (value:number|null,risk=false) => value==null?'muted':risk?(value>60?'risk-high':value>40?'risk-mid':'risk-low'):(value>=80?'score-high':value>=60?'score-mid':'score-low')
@@ -371,6 +522,8 @@ function PortfolioHealthView({health,loading,currency}:{health:PortfolioHealth|u
       <div className="health-score-item"><span>集中度风险</span><strong className={scoreClass(health.concentration.risk_score,true)}>{fmtHealthScore(health.concentration.risk_score)}</strong><small>{health.concentration.grade||'数据不足'}</small></div>
       <div className="health-score-item"><span>SEC 风险</span><strong className={scoreClass(health.sec_risk.score,true)}>{fmtHealthScore(health.sec_risk.score)}</strong><small>{health.sec_risk.grade}</small></div>
     </div>
+
+    <PersonalizedInterpretationSection data={interpretation} loading={interpretationLoading}/>
 
     <section className="health-section">
       <div className="portfolio-health-heading"><div><small>质量分析</small><h3>基本面质量加权</h3></div><span>覆盖 {health.fundamental_quality.coverage_weight.toFixed(0)}%</span></div>

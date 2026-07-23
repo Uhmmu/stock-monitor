@@ -12,6 +12,7 @@ from app.models import (
     Portfolio,
     PortfolioPosition,
     PortfolioPositionLot,
+    PortfolioStrategyProfile,
     PriceSnapshot,
     Security,
     SecFiling,
@@ -26,8 +27,20 @@ from app.services.portfolio.performance import build_summary
 from app.services.portfolio.portfolio_health import build_health
 from app.services.portfolio.position_builder import rebuild_symbol_position
 from app.services.portfolio.position_technical import build_position_technical
-from app.services.portfolio.schemas import ManualPositionIn
+from app.services.portfolio.personalized_interpretation import build_personalized_interpretation
+from app.services.portfolio.schemas import (
+    ManualPositionIn,
+    PortfolioInterpretationResponse,
+    PortfolioStrategyProfileResponse,
+    PortfolioStrategyProfileUpdate,
+)
 from app.services.portfolio.schemas import PortfolioHealthResponse
+from app.services.portfolio.strategy_profile import (
+    get_or_create_strategy_profile,
+    profile_catalog,
+    reset_strategy_profile,
+    update_strategy_profile,
+)
 from app.services.portfolio.transaction_service import (
     create_manual_position,
     get_or_create_default_portfolio,
@@ -35,6 +48,7 @@ from app.services.portfolio.transaction_service import (
 
 TABLES = [
     User.__table__,
+    PortfolioStrategyProfile.__table__,
     Portfolio.__table__,
     TradeTransaction.__table__,
     PortfolioPosition.__table__,
@@ -631,6 +645,68 @@ def test_health_response_matches_typed_api_contract(db, portfolio):
 
     assert response.portfolio_id == portfolio.id
     assert response.coverage["price"].covered_weight == 100
+
+
+# ── strategy profile + personalized interpretation ───────────────────────
+
+def test_strategy_profile_is_created_once_per_user(db, portfolio):
+    first = get_or_create_strategy_profile(db, portfolio.user_id)
+    second = get_or_create_strategy_profile(db, portfolio.user_id)
+
+    assert first.id == second.id
+    assert first.strategy_type == "quality_growth"
+    assert first.minimum_quality_score == 70
+    assert db.query(PortfolioStrategyProfile).count() == 1
+    response = PortfolioStrategyProfileResponse.model_validate({"profile": first, **profile_catalog()})
+    assert response.profile.preferred_market_caps == ["large", "mid"]
+
+
+def test_strategy_profile_fields_remain_editable_and_reset_to_selected_preset(db, portfolio):
+    profile = update_strategy_profile(
+        db,
+        portfolio.user_id,
+        PortfolioStrategyProfileUpdate(
+            strategy_type="value",
+            max_single_position=30,
+            preferred_regions=["europe", "north_america"],
+        ),
+    )
+    assert profile.strategy_type == "value"
+    assert profile.max_single_position == 30
+    assert profile.preferred_regions == ["europe", "north_america"]
+
+    reset = reset_strategy_profile(db, portfolio.user_id)
+    assert reset.strategy_type == "value"
+    assert reset.max_single_position == 20
+    assert reset.valuation_preference == "strict"
+
+
+def test_personalized_interpretation_does_not_mutate_objective_health(db, portfolio):
+    profile = get_or_create_strategy_profile(db, portfolio.user_id)
+    health = {
+        "concentration": {
+            "largest_position_weight": 35.0,
+            "sector_weights": [{"sector": "Technology", "weight": 50.0}],
+            "country_weights": [{"country": "United States", "weight": 100.0}],
+        },
+        "fundamental_quality": {"score": 78.0, "coverage_weight": 100.0},
+        "valuation_risk": {"score": 58.0, "coverage_weight": 100.0},
+        "sec_risk": {"score": 10.0, "coverage_weight": 100.0},
+    }
+    original = {key: value.copy() for key, value in health.items()}
+
+    result = build_personalized_interpretation(health, profile)
+    response = PortfolioInterpretationResponse.model_validate(result)
+
+    assert health == original
+    assert result["strategy_type"] == "quality_growth"
+    assert {item["id"] for item in result["items"]} >= {
+        "single_position", "theme_exposure", "fundamental_quality", "valuation"
+    }
+    assert any(item["id"] == "single_position" and item["status"] == "caution" for item in result["items"])
+    assert all("AAPL" not in recommendation["title"] for recommendation in result["recommendations"])
+    assert "market_cap" in result["unavailable_dimensions"]
+    assert response.strategy_label == "质量成长"
 
 
 # ── position_technical.build_position_technical ───────────────────────────

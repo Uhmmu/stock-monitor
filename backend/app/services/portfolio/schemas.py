@@ -165,3 +165,61 @@ class PortfolioHealthResponse(BaseModel):
     coverage: dict[str, PortfolioCoverageDimension]
     findings: list[PortfolioHealthFinding]
     sector_exposure: dict
+
+
+class PortfolioStrategyProfileUpdate(BaseModel):
+    strategy_type: str | None = None
+    investment_horizon: str | None = None
+    risk_tolerance: str | None = None
+    max_single_position: float | None = Field(default=None, ge=5, le=100)
+    max_theme_exposure: float | None = Field(default=None, ge=10, le=100)
+    valuation_preference: str | None = None
+    minimum_quality_score: float | None = Field(default=None, ge=0, le=100)
+    preferred_regions: list[str] | None = Field(default=None, max_length=12)
+    preferred_market_caps: list[str] | None = Field(default=None, max_length=6)
+
+
+class PortfolioStrategyProfileOut(BaseModel):
+    strategy_type: str
+    investment_horizon: str
+    risk_tolerance: str
+    max_single_position: float
+    max_theme_exposure: float
+    valuation_preference: str
+    minimum_quality_score: float
+    preferred_regions: list[str]
+    preferred_market_caps: list[str]
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PortfolioStrategyProfileResponse(BaseModel):
+    profile: PortfolioStrategyProfileOut
+    presets: dict[str, dict]
+    choices: dict[str, list[dict[str, str]]]
+
+
+class PersonalizedInterpretationItem(BaseModel):
+    id: str
+    dimension: str
+    status: str
+    title: str
+    message: str
+    evidence: dict
+
+
+class PersonalizedRecommendation(BaseModel):
+    id: str
+    title: str
+    reason: str
+    priority: int
+
+
+class PortfolioInterpretationResponse(BaseModel):
+    strategy_type: str
+    strategy_label: str
+    evaluated_at: datetime
+    items: list[PersonalizedInterpretationItem]
+    overall_summary: str
+    recommendations: list[PersonalizedRecommendation]
+    unavailable_dimensions: list[str]

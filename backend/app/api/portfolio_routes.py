@@ -17,9 +17,13 @@ from app.models import PortfolioPosition, User
 from app.services.portfolio import (
     ManualPositionIn,
     PortfolioHealthResponse,
+    PortfolioInterpretationResponse,
+    PortfolioStrategyProfileResponse,
+    PortfolioStrategyProfileUpdate,
     TransactionIn,
     TransactionOut,
     build_health,
+    build_personalized_interpretation,
     build_position_detail,
     build_position_technical,
     build_summary,
@@ -27,9 +31,13 @@ from app.services.portfolio import (
     create_transaction,
     delete_transaction,
     get_or_create_default_portfolio,
+    get_or_create_strategy_profile,
     get_transaction,
     list_transactions,
+    profile_catalog,
     rebuild_all_positions,
+    reset_strategy_profile,
+    update_strategy_profile,
     update_transaction,
 )
 from app.services.securities import resolve_security
@@ -76,6 +84,38 @@ def position_technical(symbol: str, user: User = Depends(get_current_user), db: 
 @router.get("/health", response_model=PortfolioHealthResponse)
 def portfolio_health(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return build_health(db, _portfolio(db, user))
+
+
+@router.get("/strategy-profile", response_model=PortfolioStrategyProfileResponse)
+def strategy_profile(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return {"profile": get_or_create_strategy_profile(db, user.id), **profile_catalog()}
+
+
+@router.put("/strategy-profile", response_model=PortfolioStrategyProfileResponse)
+def strategy_profile_update(
+    payload: PortfolioStrategyProfileUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        profile = update_strategy_profile(db, user.id, payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return {"profile": profile, **profile_catalog()}
+
+
+@router.post("/strategy-profile/reset", response_model=PortfolioStrategyProfileResponse)
+def strategy_profile_reset(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return {"profile": reset_strategy_profile(db, user.id), **profile_catalog()}
+
+
+@router.get("/interpretation", response_model=PortfolioInterpretationResponse)
+def portfolio_interpretation(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    portfolio = _portfolio(db, user)
+    health = build_health(db, portfolio)
+    profile = get_or_create_strategy_profile(db, user.id)
+    return build_personalized_interpretation(health, profile)
 
 
 @router.get("/transactions", response_model=list[TransactionOut])
