@@ -1,4 +1,5 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Spring, SPRINGS, animateSpring, VelocityTracker,
   projectMomentum, rubberband, prefersReducedMotion, haptic,
@@ -111,7 +112,9 @@ export function Sheet({ open, onClose, title, children }: {
   useEffect(() => () => stopAnim.current?.(), [])
   if (!mounted) return null
 
-  return (
+  // 挂到 body 下,避免被祖先的 transform/filter/will-change 困住
+  // (那会让 position:fixed 相对该祖先定位,弹窗贴到页面内容底部而非视口底部)。
+  return createPortal(
     <div className="sheet-root" role="dialog" aria-modal="true">
       <div className="sheet-scrim" ref={scrimRef} onClick={() => runTo(height.current, 0, onClose)} />
       <div className="sheet-panel" ref={panelRef}>
@@ -127,6 +130,7 @@ export function Sheet({ open, onClose, title, children }: {
         </div>
         <div className="sheet-scroll" ref={scrollRef}>{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
