@@ -1015,3 +1015,57 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
 @media(prefers-reduced-motion:reduce){.managed-stock-note,.cross-model .cross-metric,.stock-manager button,.cross-model button{transition:opacity .18s ease!important}.managed-stock-note:hover,.cross-model .cross-metric:hover{transform:none}}
 @media(prefers-reduced-transparency:reduce){.stock-manager-intro,.stock-manager .stock-section,.stock-manager .add-form,.stock-manager .group-form,.valuation-toolbar,.cross-model .cross-hero{background:#f8fafc;backdrop-filter:none;-webkit-backdrop-filter:none}}
 @media(prefers-contrast:more){.stock-manager-intro,.stock-manager .stock-section,.managed-stock-note,.valuation-toolbar,.cross-model .cross-hero,.cross-model .cross-metric,.valuation-glance>div{border-color:#4f5d70}}
+
+/* ── 持仓 (Holdings) ─────────────────────────────────────────── */
+.portfolio-module{max-width:1240px;margin:0 auto}
+.portfolio-subtabs{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 20px}
+.portfolio-subtabs button{padding:9px 16px;border:1px solid var(--line);border-radius:999px;background:var(--solid);color:var(--ink-3);font-size:13px;font-weight:600;cursor:pointer;transition:background .2s,color .2s,transform .15s var(--spring)}
+.portfolio-subtabs button:hover{transform:translateY(-1px)}
+.portfolio-subtabs button.active{background:var(--accent);color:#fff;border-color:transparent;box-shadow:0 4px 12px rgba(0,113,227,.28)}
+.metric-card-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:22px}
+.portfolio-gap-hint{color:var(--ink-4);font-size:10px}
+
+.portfolio-row{grid-template-columns:.9fr .9fr 1fr 1fr 1.1fr 1.3fr .7fr!important}
+.table.portfolio-table .table-row.portfolio-row{width:100%;background:none;border:0;border-top:1px solid var(--line-2);cursor:pointer;color:var(--ink);text-align:left}
+.table.portfolio-table .table-row.portfolio-row:hover{background:rgba(0,0,0,.02)}
+.portfolio-row span{font-size:13px;font-variant-numeric:tabular-nums}
+.portfolio-row .toggle{font-weight:700}
+
+.portfolio-positions{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.position-card{padding:20px 22px;border:1px solid var(--line);border-radius:var(--r-m);background:var(--solid);box-shadow:var(--shadow-s);transition:transform .25s var(--spring),box-shadow .25s}
+.position-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-m)}
+.position-card header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
+.position-card header b{font-size:18px;letter-spacing:-.02em}
+.position-card header span{color:var(--ink-4);font-size:12px;font-weight:600}
+.position-card-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 16px;margin-bottom:14px}
+.position-card-grid span{display:block;color:var(--ink-4);font-size:11px;font-weight:500}
+.position-card-grid b{font-size:14px;font-variant-numeric:tabular-nums}
+.position-detail-btn{width:100%;padding:10px;border:0;border-radius:10px;background:rgba(0,113,227,.08);color:var(--accent-ink);font-size:12px;font-weight:650;cursor:pointer}
+.position-detail-btn:hover{background:rgba(0,113,227,.14)}
+
+.portfolio-technical{display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start}
+.portfolio-technical-list{display:flex;flex-direction:column;gap:8px}
+.portfolio-technical-list button{display:flex;justify-content:space-between;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--solid);color:var(--ink);cursor:pointer;font-size:13px;font-weight:600}
+.portfolio-technical-list button.active{border-color:rgba(0,113,227,.3);box-shadow:0 0 0 3px rgba(0,113,227,.12)}
+.portfolio-technical-list button span{color:var(--ink-4);font-weight:500}
+.position-technical-panel header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:16px}
+.position-technical-panel header h3{margin:0;font-size:18px;letter-spacing:-.02em}
+.position-technical-panel header strong{font-size:20px;letter-spacing:-.02em}
+.arrival-estimate{padding:10px 0;border-top:1px solid rgba(42,62,87,.07)}
+.arrival-estimate:first-of-type{border-top:0;padding-top:0}
+.arrival-estimate b{display:block;font-size:13px;margin-bottom:4px}
+.arrival-estimate p{margin:0 0 4px;color:var(--ink-3);font-size:12px;line-height:1.6}
+.arrival-estimate small{color:var(--ink-4);font-size:11px}
+.portfolio-analyzer-errors{color:var(--down);font-size:11px;margin:10px 0}
+
+.portfolio-sector-row{grid-template-columns:1fr .8fr .6fr!important}
+.portfolio-txn-row{grid-template-columns:.8fr .7fr .8fr .7fr .8fr .8fr .8fr 70px!important}
+
+.portfolio-entry-form{display:flex;flex-direction:column;gap:16px}
+.portfolio-entry-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.portfolio-entry-note{grid-column:1/-1}
+.portfolio-entry-actions button{width:100%;border:0;border-radius:12px;background:var(--accent);color:#fff;padding:12px 22px;font-weight:600;cursor:pointer}
+.portfolio-entry-actions button:disabled{opacity:.5;cursor:default}
+
+@media(max-width:900px){.portfolio-technical{grid-template-columns:1fr}}
+@media(max-width:640px){.portfolio-row,.portfolio-txn-row{grid-template-columns:1fr 1fr!important}.portfolio-entry-grid{grid-template-columns:1fr}}

@@ -2,6 +2,14 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 全应用统一版本号。所有新的分析元数据（技术信号、价格区间、到达估计等）都引用它，
+# 而不是各处硬编码字符串。analyzer / parameter_set / analysis_engine 三个版本目前都等于
+# APP_VERSION，但在数据库里分开存储，方便将来单独演进。
+APP_VERSION = "v0.4"
+ANALYZER_VERSION = APP_VERSION
+PARAMETER_SET_VERSION = APP_VERSION
+ANALYSIS_ENGINE_VERSION = APP_VERSION
+
 
 class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://stock:stock@postgres:5432/stock_monitor"

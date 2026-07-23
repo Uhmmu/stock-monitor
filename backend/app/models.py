@@ -681,6 +681,86 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class Portfolio(Base):
+    """一个用户的持仓组合。当前每个用户自动拥有一个默认组合；模型保留多组合扩展空间。"""
+    __tablename__ = "portfolios"
+    __table_args__ = (UniqueConstraint("user_id", "slug", name="uq_portfolios_user_slug"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    slug: Mapped[str] = mapped_column(String(64), default="default")
+    name: Mapped[str] = mapped_column(String(120), default="我的持仓")
+    base_currency: Mapped[str] = mapped_column(String(8), default="USD")
+    cash_balance: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class TradeTransaction(Base):
+    """权威的交易历史事实。持仓聚合与批次都是从这里推导出来的派生状态。
+
+    transaction_type 覆盖 buy/sell/dividend/fee/deposit/withdrawal/split/transfer_in/transfer_out；
+    首版仅对 buy/sell/dividend/fee 做完整持仓推导，其余类型安全存储、可后续扩展。
+    """
+    __tablename__ = "trade_transactions"
+    __table_args__ = (
+        Index("ix_trade_transactions_portfolio_symbol", "portfolio_id", "symbol"),
+        CheckConstraint("quantity >= 0", name="ck_trade_transactions_quantity"),
+        CheckConstraint("price >= 0", name="ck_trade_transactions_price"),
+        CheckConstraint("fees >= 0", name="ck_trade_transactions_fees"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    portfolio_id: Mapped[int] = mapped_column(ForeignKey("portfolios.id", ondelete="CASCADE"), index=True)
+    security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id", ondelete="SET NULL"), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    transaction_type: Mapped[str] = mapped_column(String(16), default="buy", index=True)
+    quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    price: Mapped[float] = mapped_column(Float, default=0.0)
+    fees: Mapped[float] = mapped_column(Float, default=0.0)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    trade_date: Mapped[date] = mapped_column(Date, index=True)
+    account: Mapped[str | None] = mapped_column(String(80))
+    note: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(24), default="manual")  # manual / journal / import
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PortfolioPosition(Base):
+    """聚合持仓：一个派生缓存/查询层，永远可以从 TradeTransaction 重建，不是权威记录。"""
+    __tablename__ = "portfolio_positions"
+    __table_args__ = (UniqueConstraint("portfolio_id", "symbol", name="uq_portfolio_positions_symbol"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    portfolio_id: Mapped[int] = mapped_column(ForeignKey("portfolios.id", ondelete="CASCADE"), index=True)
+    security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id", ondelete="SET NULL"), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    total_quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    average_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    total_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    last_transaction_at: Mapped[date | None] = mapped_column(Date)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PortfolioPositionLot(Base):
+    """持仓批次。首版用平均成本法记账，但保留 FIFO/LIFO/指定批次/部分平仓的扩展边界。"""
+    __tablename__ = "portfolio_position_lots"
+    __table_args__ = (Index("ix_portfolio_position_lots_symbol", "portfolio_id", "symbol"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    portfolio_id: Mapped[int] = mapped_column(ForeignKey("portfolios.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    source_transaction_id: Mapped[int | None] = mapped_column(ForeignKey("trade_transactions.id", ondelete="SET NULL"), index=True)
+    original_quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    remaining_quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    purchase_price: Mapped[float] = mapped_column(Float, default=0.0)
+    purchase_date: Mapped[date | None] = mapped_column(Date)
+    allocated_fees: Mapped[float] = mapped_column(Float, default=0.0)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    status: Mapped[str] = mapped_column(String(16), default="open")  # open / partial / closed
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class TradeLog(Base):
     __tablename__ = 'trade_logs'
     id: Mapped[int] = mapped_column(primary_key=True)

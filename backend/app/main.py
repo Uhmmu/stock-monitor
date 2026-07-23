@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from sqlalchemy import select
 
 from app.api.auth_routes import router as auth_router
+from app.api.portfolio_routes import router as portfolio_router
 from app.api.routes import public_router, router
 from app.auth import hash_password
 from app.database import SessionLocal
@@ -29,3 +30,4 @@ app = FastAPI(title='股票监控 API', version='0.1.0', lifespan=lifespan)
 app.include_router(public_router)
 app.include_router(auth_router)
 app.include_router(router)
+app.include_router(portfolio_router)
