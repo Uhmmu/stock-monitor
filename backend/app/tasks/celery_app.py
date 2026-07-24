@@ -92,9 +92,6 @@ celery_app.conf.beat_schedule = {
     # 政客交易：按自选股拉相关交易（6h）；追踪名人全量交易+持仓叠加（12h）
     "sync-congress-trades": {"task": "app.tasks.celery_app.sync_congress_trades", "schedule": 21600},
     "sync-tracked-figures": {"task": "app.tasks.celery_app.sync_tracked_figures", "schedule": 43200},
-    # Hourly due-check; each user's actual cadence defaults to one completed run
-    # every three days and is enforced in the database, not by page visits.
-    "schedule-stock-discovery": {"task": "app.tasks.celery_app.schedule_stock_discovery", "schedule": 3600},
 }
 if settings.fmp_sync_enabled and settings.fmp_api_key.strip():
     celery_app.conf.beat_schedule["sync-fmp-history"] = {
@@ -1662,45 +1659,6 @@ def sync_tracked_figures():
                 db.commit()
             result[fig.slug] = added
         return result
-
-
-@celery_app.task(name="app.tasks.celery_app.schedule_stock_discovery")
-def schedule_stock_discovery():
-    """Hourly due-check; never runs from a frontend read."""
-    if not settings.perplexity_api_key.strip():
-        return {"skipped": "missing_api_key"}
-    from app.models import StockDiscoveryRun
-    from app.services.discovery.service import (
-        ACTIVE_STATUSES, SUCCESS_STATUSES, create_discovery_run, discovery_settings,
-    )
-    from app.services.portfolio.transaction_service import get_or_create_default_portfolio
-
-    queued: list[int] = []
-    now = datetime.now(UTC)
-    with SessionLocal() as db:
-        users = db.scalars(select(User).where(User.status == "active")).all()
-        for user in users:
-            config = discovery_settings(db, user.id)
-            if not config.auto_update_enabled:
-                continue
-            active = db.scalar(select(StockDiscoveryRun.id).where(
-                StockDiscoveryRun.user_id == user.id, StockDiscoveryRun.status.in_(ACTIVE_STATUSES)).limit(1))
-            if active:
-                continue
-            latest = db.scalar(select(StockDiscoveryRun).where(
-                StockDiscoveryRun.user_id == user.id, StockDiscoveryRun.status.in_(SUCCESS_STATUSES))
-                .order_by(StockDiscoveryRun.completed_at.desc()).limit(1))
-            if latest and latest.completed_at:
-                completed = latest.completed_at if latest.completed_at.tzinfo else latest.completed_at.replace(tzinfo=UTC)
-                if completed + timedelta(days=config.interval_days) > now:
-                    continue
-            portfolio = get_or_create_default_portfolio(db, user.id)
-            run, should_queue = create_discovery_run(db, portfolio, user.id, trigger="scheduled")
-            if should_queue:
-                queued.append(run.id)
-    for run_id in queued:
-        run_stock_discovery.delay(run_id)
-    return {"queued": queued}
 
 
 @celery_app.task(bind=True, name="app.tasks.celery_app.run_stock_discovery", max_retries=3)

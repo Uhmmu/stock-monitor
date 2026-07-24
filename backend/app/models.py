@@ -727,7 +727,9 @@ class StockDiscoverySettings(Base):
     __table_args__ = (UniqueConstraint("user_id", name="uq_stock_discovery_settings_user_id"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    auto_update_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Legacy cadence fields are retained for migration/rollback compatibility.
+    # Discovery is manual-only and application code must not read them.
+    auto_update_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     interval_days: Mapped[int] = mapped_column(Integer, default=3)
     model: Mapped[str] = mapped_column(String(128), default="openai/gpt-5.4")
     enable_web_search: Mapped[bool] = mapped_column(Boolean, default=True)

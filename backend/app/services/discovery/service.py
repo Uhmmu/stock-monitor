@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -70,8 +70,6 @@ def _now() -> datetime:
 def _settings_defaults() -> dict:
     env = get_settings()
     return {
-        "auto_update_enabled": True,
-        "interval_days": env.perplexity_discovery_interval_days,
         "model": env.perplexity_agent_model,
         "enable_web_search": env.perplexity_enable_web_search,
         "max_steps": env.perplexity_max_steps,
@@ -153,7 +151,7 @@ def _latest_run(db: Session, user_id: int) -> StockDiscoveryRun | None:
                      .order_by(StockDiscoveryRun.requested_at.desc(), StockDiscoveryRun.id.desc()).limit(1))
 
 
-def create_discovery_run(db: Session, portfolio: Portfolio, user_id: int, *, trigger: str = "manual", force: bool = False) -> tuple[StockDiscoveryRun, bool]:
+def create_discovery_run(db: Session, portfolio: Portfolio, user_id: int) -> tuple[StockDiscoveryRun, bool]:
     now = _now()
     config = discovery_settings(db, user_id)
     active = db.scalar(select(StockDiscoveryRun).where(
@@ -161,19 +159,18 @@ def create_discovery_run(db: Session, portfolio: Portfolio, user_id: int, *, tri
     ).order_by(StockDiscoveryRun.requested_at.desc()).limit(1))
     if active:
         return active, False
-    if trigger == "manual" and not force:
-        last = _latest_run(db, user_id)
-        cooldown = get_settings().perplexity_manual_refresh_cooldown_seconds
-        if last and last.requested_at:
-            requested = last.requested_at if last.requested_at.tzinfo else last.requested_at.replace(tzinfo=UTC)
-            remaining = cooldown - int((now - requested).total_seconds())
-            if remaining > 0:
-                raise DiscoveryCooldownError(remaining)
+    last = _latest_run(db, user_id)
+    cooldown = get_settings().perplexity_manual_refresh_cooldown_seconds
+    if last and last.requested_at:
+        requested = last.requested_at if last.requested_at.tzinfo else last.requested_at.replace(tzinfo=UTC)
+        remaining = cooldown - int((now - requested).total_seconds())
+        if remaining > 0:
+            raise DiscoveryCooldownError(remaining)
 
     context, context_hash = build_portfolio_context(db, portfolio, user_id)
     latest_success = _latest_success(db, user_id)
-    bucket = now.strftime("%Y%m%d%H%M") if trigger == "manual" else now.strftime("%Y%m%d")
-    idempotency_key = hashlib.sha256(f"{user_id}:{trigger}:{bucket}:{context_hash}".encode()).hexdigest()
+    bucket = now.strftime("%Y%m%d%H%M")
+    idempotency_key = hashlib.sha256(f"{user_id}:manual:{bucket}:{context_hash}".encode()).hexdigest()
     existing = db.scalar(select(StockDiscoveryRun).where(StockDiscoveryRun.idempotency_key == idempotency_key))
     if existing:
         return existing, False
@@ -188,14 +185,14 @@ def create_discovery_run(db: Session, portfolio: Portfolio, user_id: int, *, tri
     run = StockDiscoveryRun(
         user_id=user_id, portfolio_id=portfolio.id,
         previous_successful_run_id=latest_success.id if latest_success else None,
-        idempotency_key=idempotency_key, trigger=trigger, status=status,
+        idempotency_key=idempotency_key, trigger="manual", status=status,
         stage="budget_check" if budget_reason else "preparing_portfolio",
         requested_at=now, completed_at=now if budget_reason else None,
         model_requested=config.model, portfolio_snapshot_hash=context_hash,
         prompt_version=PROMPT_VERSION, schema_version=SCHEMA_VERSION, filter_version=FILTER_VERSION,
         failure_code="budget_exceeded" if budget_reason else None,
         failure_reason=budget_reason,
-        next_scheduled_at=now + timedelta(days=config.interval_days),
+        next_scheduled_at=None,
     )
     db.add(run)
     try:
@@ -478,7 +475,7 @@ def execute_discovery_run(db: Session, run_id: int) -> StockDiscoveryRun:
             warnings.append(f"实际成本 ${result.total_cost_usd:.4f} 超过配置的单次预警线 ${config.max_run_cost_usd:.4f}；后续运行仍受预算保护。")
         run.warnings = warnings
         run.status = "completed_with_warnings" if warnings else "completed"
-        run.stage = "completed"; run.completed_at = _now(); run.next_scheduled_at = run.completed_at + timedelta(days=config.interval_days)
+        run.stage = "completed"; run.completed_at = _now(); run.next_scheduled_at = None
         db.commit(); db.refresh(run); return run
     except PerplexityError as exc:
         db.rollback(); run = db.get(StockDiscoveryRun, run_id)
@@ -609,11 +606,10 @@ def latest_discovery_payload(db: Session, user_id: int) -> dict:
             StockDiscoveryCandidate.run_id == current.id)) or 0)
     display_run = success or (current if partial_count else None)
     display = discovery_run_payload(db, display_run) if display_run else None
-    fresh = bool(success and success.completed_at and (_now() - (success.completed_at if success.completed_at.tzinfo else success.completed_at.replace(tzinfo=UTC))) < timedelta(days=config.interval_days))
     return {
         "current_run": _run_payload(current), "result": display,
         "using_previous_result": bool(success and current and success.id != current.id and current.status in ACTIVE_STATUSES | {"failed", "blocked_by_budget"}),
-        "is_fresh": fresh, "api_key_configured": bool(get_settings().perplexity_api_key.strip()),
+        "api_key_configured": bool(get_settings().perplexity_api_key.strip()),
         "monthly_spend_usd": monthly_spend(db, user_id), "monthly_budget_usd": config.monthly_budget_usd,
     }
 

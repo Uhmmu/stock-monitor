@@ -161,8 +161,6 @@ class DiscoveryResult(StrictModel):
 
 
 class DiscoverySettingsUpdate(BaseModel):
-    auto_update_enabled: bool | None = None
-    interval_days: int | None = Field(default=None, ge=1, le=30)
     model: str | None = Field(default=None, min_length=3, max_length=128)
     enable_web_search: bool | None = None
     max_steps: int | None = Field(default=None, ge=1, le=10)

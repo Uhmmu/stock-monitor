@@ -30,6 +30,7 @@ from app.services.discovery.service import (
     _persist_tool_sources,
     create_discovery_run,
     latest_discovery_payload,
+    settings_payload,
 )
 
 
@@ -128,16 +129,43 @@ def test_filter_flags_holdings_and_extreme_valuation():
     assert "自由现金流为负" in extreme.reasons
 
 
-def test_budget_protection_and_scheduled_idempotency(db, owner, monkeypatch):
+def test_budget_protection_blocks_manual_run(db, owner, monkeypatch):
     user, portfolio = owner
     monkeypatch.setattr("app.services.discovery.service.build_portfolio_context", lambda *_: ({"holdings": []}, "a" * 64))
     config = StockDiscoverySettings(user_id=user.id, max_run_cost_usd=.00001, monthly_budget_usd=10,
         model="openai/gpt-5.4-mini", max_steps=5, max_output_tokens=12000)
     db.add(config); db.commit()
-    blocked, queued = create_discovery_run(db, portfolio, user.id, trigger="scheduled")
+    blocked, queued = create_discovery_run(db, portfolio, user.id)
     assert blocked.status == "blocked_by_budget" and queued is False
-    duplicate, queued_again = create_discovery_run(db, portfolio, user.id, trigger="scheduled")
-    assert duplicate.id == blocked.id and queued_again is False
+    assert blocked.trigger == "manual"
+    assert blocked.next_scheduled_at is None
+
+
+def test_discovery_runs_are_manual_only_and_have_no_beat_schedule(db, owner, monkeypatch):
+    from app.tasks.celery_app import celery_app
+
+    user, portfolio = owner
+    monkeypatch.setattr("app.services.discovery.service.build_portfolio_context", lambda *_: ({"holdings": []}, "m" * 64))
+    db.add(StockDiscoverySettings(user_id=user.id, max_run_cost_usd=1, monthly_budget_usd=10,
+        model="openai/gpt-5.4-mini", max_steps=5, max_output_tokens=12000))
+    db.commit()
+
+    run, queued = create_discovery_run(db, portfolio, user.id)
+    duplicate, queued_again = create_discovery_run(db, portfolio, user.id)
+
+    assert queued is True
+    assert duplicate.id == run.id and queued_again is False
+    assert run.trigger == "manual"
+    assert run.next_scheduled_at is None
+    assert "schedule-stock-discovery" not in celery_app.conf.beat_schedule
+    assert "app.tasks.celery_app.schedule_stock_discovery" not in celery_app.tasks
+
+
+def test_discovery_settings_no_longer_expose_automatic_cadence(db, owner):
+    user, _portfolio = owner
+    payload = settings_payload(db, user.id)
+    assert "auto_update_enabled" not in payload
+    assert "interval_days" not in payload
 
 
 def test_failed_run_keeps_previous_success_visible(db, owner):
@@ -155,7 +183,7 @@ def test_failed_run_keeps_previous_success_visible(db, owner):
     assert payload["result"]["id"] == success.id
     assert payload["current_run"]["id"] == failed.id
     assert payload["using_previous_result"] is True
-    assert payload["is_fresh"] is False
+    assert "is_fresh" not in payload
 
 
 def test_candidate_persistence_deduplicates_groups_and_applies_local_verification(db, owner, monkeypatch):

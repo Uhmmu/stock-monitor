@@ -35,6 +35,8 @@ router = APIRouter(prefix="/api/discovery", dependencies=[Depends(get_current_us
 
 
 class RefreshIn(BaseModel):
+    # Kept for compatibility with clients deployed before discovery became
+    # manual-only. Every accepted request is now an explicit paid rerun.
     force: bool = False
 
 
@@ -69,12 +71,9 @@ def discovery_run(run_id: int, user: User = Depends(get_current_user), db: Sessi
 def discovery_refresh(payload: RefreshIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not get_settings().perplexity_api_key.strip():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "无法运行：尚未配置 Perplexity API Key。")
-    latest = latest_discovery_payload(db, user.id)
-    if latest["is_fresh"] and not payload.force:
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前结果仍在有效期内，重新运行将产生额外 API 费用。")
     portfolio = get_or_create_default_portfolio(db, user.id)
     try:
-        run, should_queue = create_discovery_run(db, portfolio, user.id, trigger="manual")
+        run, should_queue = create_discovery_run(db, portfolio, user.id)
     except DiscoveryCooldownError as exc:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, str(exc)) from exc
     if should_queue:
