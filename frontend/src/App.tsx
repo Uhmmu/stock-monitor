@@ -16,7 +16,9 @@ type PeerList = {base_ticker:string;items:PeerItem[]}
 type Dashboard = { market:{is_open:boolean; checked_at:string}; stocks:{ticker:string;company_name?:string|null;logo_url?:string|null;price:number|null;previous_close:number|null;updated_at:string|null;volume:number|null;volume_ratio:number|null;volume_label:string|null}[] }
 type CompanyProfile = {symbol:string;status:string;company_name:string|null;logo_url?:string|null;website?:string|null;ceo?:string|null;exchange?:string|null;exchange_full_name?:string|null;ipo_date?:string|null;employee_count?:number|null;description_en?:string|null;description_zh?:string|null;translation_status?:string;profile_fetched_at?:string|null;local_classification:{sector:string|null;industry:string|null}}
 type Zone = {low:number;high:number;center:number;type:'support'|'resistance';touchCount:number;strength:number;mostRecentTouchDate:string;distancePercent:number}
-type TechnicalItem = {symbol:string;status:string;company_name:string|null;logo_url:string|null;chart_url:string|null;data_through?:string;generated_at?:string;stale?:boolean;analysis?:{latestClose:number;weeklyTrend:string;nearestSupport:Zone|null;nearestResistance:Zone|null;supportZones:Zone[];resistanceZones:Zone[];fibonacci:{available:boolean;direction?:string;levels?:Record<string,number>;omissionReason?:string};trendLines:{type:string;projectedPrice:number;priceRelation:string;confidence:number}[];indicators:Record<string,number|null>;omittedReasons:string[]};profile?:CompanyProfile;data_status?:Record<string,string|null>}
+type TechnicalHeatZone = {lower:number;upper:number;center:number;role:'support'|'resistance'|'neutral';rawCount:number;sourceCount:number;familyCount:number;weightedScore:number;normalizedIntensity:number;distancePercent:number;sources?:string[];methodFamilies?:string[]}
+type HistoricalCausalHeatmap = {version:string;mode:'historical_causal';timeframe:'weekly';priceBinCount:number;timeColumnCount:number;priceMin:number;priceMax:number;minimumFamilyCount:number;renderTimeBlockBars:number;renderPriceBlockBins:number;paletteVersion:string;methodsIncluded:string[];methodsExcluded:string[];calculationMs:number;currentZones:TechnicalHeatZone[]}
+type TechnicalItem = {symbol:string;status:string;company_name:string|null;logo_url:string|null;chart_url:string|null;data_through?:string;generated_at?:string;stale?:boolean;analysis?:{latestClose:number;weeklyTrend:string;nearestSupport:Zone|null;nearestResistance:Zone|null;supportZones:Zone[];resistanceZones:Zone[];fibonacci:{available:boolean;direction?:string;levels?:Record<string,number>;omissionReason?:string};trendLines:{type:string;projectedPrice:number;priceRelation:string;confidence:number}[];indicators:Record<string,number|null>;omittedReasons:string[];historicalCausalHeatmap?:HistoricalCausalHeatmap};profile?:CompanyProfile;data_status?:Record<string,string|null>}
 type IndexQuote = {symbol:string;name:string;price:number|null;previous_close:number|null;change_points:number|null;change_percent:number|null}
 type Indices = {indices:IndexQuote[];market:{is_open:boolean;checked_at:string}}
 type Alert = {id:number;ticker:string;period:string;change_percent:number;triggered_at:string}
@@ -189,7 +191,22 @@ function AuthChart({url,symbol}:{url:string;symbol:string}) {
     }).catch(()=>active&&setSrc(null))
     return ()=>{active=false;if(objectUrl)URL.revokeObjectURL(objectUrl)}
   },[url])
-  return src?<a href={src} target="_blank" rel="noreferrer"><img className="technical-chart" src={src} alt={`${symbol} 周线技术分析图`}/></a>:<div className="technical-chart-empty">图表缓存读取中…</div>
+  return src?<a href={src} target="_blank" rel="noreferrer"><img className="technical-chart" src={src} alt={`${symbol} 周线历史动态技术交叉热力图，绿色表示历史支撑交叉，红色表示历史压力交叉。`}/></a>:<div className="technical-chart-empty">图表缓存读取中…</div>
+}
+
+function TechnicalLevelSummary({latestClose,heatmap}:{latestClose:number;heatmap?:HistoricalCausalHeatmap}) {
+  const zones=heatmap?.currentZones||[]
+  const support=zones.filter(zone=>zone.role==='support'&&zone.upper<latestClose).sort((a,b)=>b.upper-a.upper)[0]
+  const resistance=zones.filter(zone=>zone.role==='resistance'&&zone.lower>latestClose).sort((a,b)=>a.lower-b.lower)[0]
+  const strength=(zone:TechnicalHeatZone)=>zone.familyCount>=5?'强':zone.familyCount>=3?'较强':'一般'
+  const card=(role:'support'|'resistance',zone?:TechnicalHeatZone)=>{
+    const supportRole=role==='support'
+    return <section className={`technical-level-card ${role}`}>
+      <div className="technical-level-card-title"><span>{supportRole?'最近支撑':'最近压力'}</span>{zone&&<em>{strength(zone)}</em>}</div>
+      {zone?<><strong>${zone.lower.toFixed(2)}–${zone.upper.toFixed(2)}</strong><small>{zone.familyCount} 类方法 · {zone.sourceCount} 个技术点位</small><b>{`距现价 ${zone.distancePercent>=0?'+':''}${zone.distancePercent.toFixed(1)}%`}</b></>:<><strong className="unavailable">暂无有效{supportRole?'支撑':'压力'}热区</strong><small>等待更多独立技术方法形成交汇</small></>}
+    </section>
+  }
+  return <div className="technical-level-summary" aria-label="当前技术点位热区">{card('support',support)}{card('resistance',resistance)}</div>
 }
 
 function CompanyProfileSheet({symbol,onClose}:{symbol:string|null;onClose:()=>void}) {
@@ -221,12 +238,11 @@ function TechnicalAnalysisCenter() {
         <header><ProfileLogo symbol={d.symbol} url={d.logo_url}/><div className="tech-sheet-id"><p className="eyebrow">WEEKLY TECHNICAL SNAPSHOT</p><h2>{d.symbol} <small>{d.company_name}</small></h2></div><strong>${a.latestClose.toFixed(2)}<small>数据截至 {d.data_through}{d.stale?' · 已过期':''}</small></strong></header>
         <div className="technical-metrics">
           <div><span>周线趋势</span><b className={`trend-${a.weeklyTrend}`}>{trendLabel[a.weeklyTrend]||a.weeklyTrend}</b></div>
-          <div><span>最近支撑</span><b>{zone(a.nearestSupport)}</b><small>{a.nearestSupport?`${Math.abs(a.nearestSupport.distancePercent).toFixed(1)}% 下方`:'—'}</small></div>
-          <div><span>最近阻力</span><b>{zone(a.nearestResistance)}</b><small>{a.nearestResistance?`${Math.abs(a.nearestResistance.distancePercent).toFixed(1)}% 上方`:'—'}</small></div>
           <div><span>RSI 14</span><b>{a.indicators.rsi14?.toFixed(1)||'—'}</b></div>
           <div><span>MACD</span><b>{(a.indicators.macdHistogram||0)>0?'偏多':(a.indicators.macdHistogram||0)<0?'偏空':'中性'}</b></div>
           <div><span>ATR 14</span><b>{a.indicators.atr14?.toFixed(2)||'—'}</b></div>
         </div>
+        <TechnicalLevelSummary latestClose={a.latestClose} heatmap={a.historicalCausalHeatmap}/>
         {d.chart_url?<figure className="technical-chart-frame"><AuthChart url={d.chart_url} symbol={d.symbol}/><figcaption>周线级别 · 点击图表查看大图</figcaption></figure>:<div className="technical-chart-empty">图表尚未生成。</div>}
         <div className="technical-columns">
           <section><h3>支撑与阻力区域</h3><div className="zone-table">{[...a.supportZones,...a.resistanceZones].map(z=><div key={`${z.type}-${z.center}`}><b className={z.type==='support'?'positive':'negative'}>{z.type==='support'?'支撑':'阻力'}</b><span>{zone(z)}</span><span>{Math.round(z.strength*100)} 分</span><span>{z.touchCount} 次触及</span><time>{z.mostRecentTouchDate}</time></div>)}{![...a.supportZones,...a.resistanceZones].length&&<p>暂无已确认的支撑或阻力区域。</p>}</div></section>

@@ -20,7 +20,7 @@ from app.config import get_settings
 from app.models import HistoricalPrice, TechnicalAnalysis
 from app.services.market_data import fetch_daily_history
 
-ANALYSIS_VERSION = "weekly-v1"
+ANALYSIS_VERSION = "weekly-v2-heatmap-v0.6"
 # 历史数据源优先级：FMP 优先（付费主源），其数据无法覆盖的标的（如 HTTP 402）回退 yfinance 免费源。
 HISTORY_SOURCES = ("fmp", "yahoo")
 FALLBACK_SOURCE = "yahoo"
@@ -501,12 +501,28 @@ def input_hash(rows: list[HistoricalPrice]) -> str:
     return hashlib.sha256(f"{ANALYSIS_VERSION}|{basis}".encode()).hexdigest()
 
 
-def render_chart(symbol: str, weekly: list[dict], analysis: dict, path: str) -> None:
+def render_chart(
+    symbol: str,
+    weekly: list[dict],
+    analysis: dict,
+    path: str,
+    *,
+    historical_heatmap: Any | None = None,
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Rectangle
+    from matplotlib.patches import Patch, Rectangle
+
+    from app.services.technical_heatmap import (
+        RESISTANCE_COLOR,
+        SUPPORT_COLOR,
+        build_historical_causal_heatmap,
+        draw_historical_heat_bars,
+    )
+
+    heatmap = historical_heatmap or build_historical_causal_heatmap(weekly)
 
     fig, (ax, volume_ax) = plt.subplots(
         2,
@@ -521,9 +537,12 @@ def render_chart(symbol: str, weekly: list[dict], analysis: dict, path: str) -> 
         fig.patch.set_facecolor("#10131d")
         ax.set_facecolor("#10131d")
         volume_ax.set_facecolor("#10131d")
+        draw_historical_heat_bars(ax, heatmap)
         for i, row in enumerate(weekly):
             color = "#53c7a2" if row["close"] >= row["open"] else "#ef7186"
-            ax.vlines(i, row["low"], row["high"], color=color, linewidth=0.8)
+            ax.vlines(
+                i, row["low"], row["high"], color=color, linewidth=0.8, zorder=3
+            )
             bottom, height = (
                 min(row["open"], row["close"]),
                 abs(row["close"] - row["open"]),
@@ -535,6 +554,7 @@ def render_chart(symbol: str, weekly: list[dict], analysis: dict, path: str) -> 
                     max(height, row["close"] * 0.0005),
                     color=color,
                     alpha=0.9,
+                    zorder=3,
                 )
             )
             volume_ax.bar(i, row["volume"], color=color, width=0.65, alpha=0.5)
@@ -546,17 +566,17 @@ def render_chart(symbol: str, weekly: list[dict], analysis: dict, path: str) -> 
                 color=color,
                 linewidth=1.2,
                 label=f"MA{period}",
-            )
-        for zone in analysis["supportZones"] + analysis["resistanceZones"]:
-            ax.axhspan(
-                zone["low"],
-                zone["high"],
-                color="#53c7a2" if zone["type"] == "support" else "#ef7186",
-                alpha=0.1,
+                zorder=4,
             )
         if analysis["fibonacci"].get("available"):
             for label, value in analysis["fibonacci"]["levels"].items():
-                ax.axhline(value, color="#d7b96f", alpha=0.18, linewidth=0.7)
+                ax.axhline(
+                    value,
+                    color="#d7b96f",
+                    alpha=0.18,
+                    linewidth=0.7,
+                    zorder=2,
+                )
         for line in analysis["trendLines"]:
             a, b = line["anchors"]
             slope = (b["price"] - a["price"]) / (b["index"] - a["index"])
@@ -565,13 +585,45 @@ def render_chart(symbol: str, weekly: list[dict], analysis: dict, path: str) -> 
                 [a["price"], a["price"] + slope * (len(weekly) - 1 - a["index"])],
                 color="#e8e9f2",
                 alpha=0.55,
+                zorder=4,
             )
+        ax.axhline(
+            analysis["latestClose"],
+            color="#f3f4fa",
+            alpha=0.42,
+            linewidth=0.75,
+            linestyle="--",
+            zorder=4,
+        )
+        ax.set_xlim(-0.5, len(weekly) - 0.5)
         ax.set_title(
-            f"{symbol} · Weekly · through {analysis['dataThrough']} · close {analysis['latestClose']:.2f}",
+            f"{symbol} · Historical Causal Confluence · Weekly · through {analysis['dataThrough']}",
             color="#f3f4fa",
             loc="left",
         )
-        ax.legend(frameon=False, labelcolor="#ccd0df")
+        handles, _ = ax.get_legend_handles_labels()
+        handles.extend(
+            [
+                Patch(
+                    facecolor=SUPPORT_COLOR,
+                    alpha=0.28,
+                    label="Support confluence",
+                ),
+                Patch(
+                    facecolor=RESISTANCE_COLOR,
+                    alpha=0.28,
+                    label="Resistance confluence",
+                ),
+            ]
+        )
+        ax.legend(
+            handles=handles,
+            frameon=False,
+            labelcolor="#ccd0df",
+            ncol=4,
+            fontsize=8,
+            loc="lower right",
+        )
         ax.grid(alpha=0.08)
         volume_ax.grid(alpha=0.06)
         for axis in (ax, volume_ax):
@@ -663,7 +715,19 @@ def generate_for_symbol(db: Session, symbol: str, *, force: bool = False) -> dic
     )
     try:
         analysis, weekly = build_analysis(symbol.upper(), rows, source or "fmp")
-        render_chart(symbol.upper(), weekly, analysis, path)
+        from app.services.technical_heatmap import build_historical_causal_heatmap
+
+        historical_heatmap = build_historical_causal_heatmap(weekly)
+        analysis["historicalCausalHeatmap"] = historical_heatmap.metadata(
+            analysis["latestClose"], len(weekly)
+        )
+        render_chart(
+            symbol.upper(),
+            weekly,
+            analysis,
+            path,
+            historical_heatmap=historical_heatmap,
+        )
     except Exception as exc:
         row = existing or TechnicalAnalysis(
             symbol=symbol.upper(),
