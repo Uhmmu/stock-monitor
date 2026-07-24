@@ -15,7 +15,7 @@ from typing import Literal
 
 import numpy as np
 
-HEATMAP_VERSION = "historical-technical-heatmap-v0.6"
+HEATMAP_VERSION = "historical-technical-heatmap-v0.7"
 PALETTE_VERSION = "apple-semantic-v1"
 SUPPORT_COLOR = "#34c759"
 RESISTANCE_COLOR = "#ff3b30"
@@ -44,6 +44,8 @@ class WeeklyHeatmapConfig:
     render_center_merge_blocks: int = 4
     render_intensity_merge_tolerance: int = 1
     render_min_time_blocks: int = 1
+    projection_space_bars: int = 10
+    projection_extension_bars: int = 8
 
 
 WEEKLY_HEATMAP_CONFIG = WeeklyHeatmapConfig()
@@ -118,6 +120,7 @@ class HistoricalHeatmapResult:
     support_heat: np.ndarray
     resistance_heat: np.ndarray
     current_zones: list[HeatZone]
+    current_levels: list[dict]
     calculation_ms: float
     methods_included: list[str]
     config: WeeklyHeatmapConfig
@@ -134,6 +137,8 @@ class HistoricalHeatmapResult:
             "minimumFamilyCount": self.config.minimum_family_count,
             "renderTimeBlockBars": self.config.render_time_block_bars,
             "renderPriceBlockBins": self.config.render_price_block_bins,
+            "projectionSpaceBars": self.config.projection_space_bars,
+            "projectionExtensionBars": self.config.projection_extension_bars,
             "paletteVersion": PALETTE_VERSION,
             "methodsIncluded": list(self.methods_included),
             "methodsExcluded": [
@@ -142,6 +147,7 @@ class HistoricalHeatmapResult:
                 "依赖未来突破确认的结构",
             ],
             "calculationMs": round(self.calculation_ms, 3),
+            "currentLevels": list(self.current_levels),
             "currentZones": [
                 zone.to_dict(latest_close)
                 for zone in sorted(
@@ -536,7 +542,9 @@ def build_historical_causal_heatmap(
     if not weekly:
         grid = np.linspace(0.0, 1.0, config.price_bin_count)
         empty = np.zeros((config.price_bin_count, 0), dtype=np.float32)
-        return HistoricalHeatmapResult(grid, empty, empty.copy(), [], 0.0, [], config)
+        return HistoricalHeatmapResult(
+            grid, empty, empty.copy(), [], [], 0.0, [], config
+        )
     series = _prepare_series(weekly)
     if price_grid is None:
         atr_values = [value for value in series["atr"] if value is not None]
@@ -555,6 +563,7 @@ def build_historical_causal_heatmap(
     resistance = np.zeros_like(support)
     pivots: list[ConfirmedPivot] = []
     latest_zones: list[HeatZone] = []
+    latest_levels: list[dict] = []
     for index, row in enumerate(weekly):
         pivot = _confirmed_pivot_at(weekly, index, config)
         if pivot:
@@ -566,6 +575,29 @@ def build_historical_causal_heatmap(
         if index < config.minimum_warmup_bars:
             continue
         levels = _levels_at(weekly, series, index, active, config)
+        if index == len(weekly) - 1:
+            latest_levels = [
+                {
+                    "source": level.source,
+                    "methodFamily": level.method_family,
+                    "price": float(level.price),
+                    "role": _classify_role(
+                        level, row["close"], atr_value, config
+                    ),
+                    "confidence": float(level.confidence),
+                    "distancePercent": float(
+                        (level.price / row["close"] - 1) * 100
+                    ),
+                }
+                for level in sorted(
+                    levels,
+                    key=lambda item: (
+                        abs(item.price - row["close"]),
+                        item.method_family,
+                        item.source,
+                    ),
+                )
+            ]
         zones, _ = _cluster_levels(
             levels, row["close"], atr_value, config
         )
@@ -591,6 +623,7 @@ def build_historical_causal_heatmap(
         support,
         resistance,
         latest_zones,
+        latest_levels,
         (perf_counter() - started) * 1000,
         methods,
         config,
@@ -761,10 +794,12 @@ def draw_historical_heat_bars(ax, result: HistoricalHeatmapResult) -> list[Rende
         all_bars.extend(bars)
         for bar in bars:
             alpha = alpha_steps[bar.intensity_step]
+            final_edge = matrix.shape[1] - 0.5
+            historical_end = min(bar.end, final_edge)
             ax.add_patch(
                 Rectangle(
                     (bar.start, bar.lower),
-                    bar.end - bar.start,
+                    historical_end - bar.start,
                     bar.upper - bar.lower,
                     facecolor=color,
                     edgecolor=color,
@@ -773,4 +808,22 @@ def draw_historical_heat_bars(ax, result: HistoricalHeatmapResult) -> list[Rende
                     zorder=0.8,
                 )
             )
+            if (
+                matrix.shape[1]
+                and bar.end >= final_edge
+                and result.config.projection_extension_bars > 0
+            ):
+                ax.add_patch(
+                    Rectangle(
+                        (final_edge, bar.lower),
+                        result.config.projection_extension_bars,
+                        bar.upper - bar.lower,
+                        facecolor=color,
+                        edgecolor=color,
+                        linewidth=0.55,
+                        linestyle=(0, (2.5, 2.5)),
+                        alpha=alpha * 0.68,
+                        zorder=0.75,
+                    )
+                )
     return all_bars

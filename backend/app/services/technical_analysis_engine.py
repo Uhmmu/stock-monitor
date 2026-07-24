@@ -20,7 +20,7 @@ from app.config import get_settings
 from app.models import HistoricalPrice, TechnicalAnalysis
 from app.services.market_data import fetch_daily_history
 
-ANALYSIS_VERSION = "weekly-v2-heatmap-v0.6"
+ANALYSIS_VERSION = "weekly-v2-heatmap-v0.7"
 # 历史数据源优先级：FMP 优先（付费主源），其数据无法覆盖的标的（如 HTTP 402）回退 yfinance 免费源。
 HISTORY_SOURCES = ("fmp", "yahoo")
 FALLBACK_SOURCE = "yahoo"
@@ -595,7 +595,31 @@ def render_chart(
             linestyle="--",
             zorder=4,
         )
-        ax.set_xlim(-0.5, len(weekly) - 0.5)
+        current_edge = len(weekly) - 0.5
+        ax.axvline(
+            current_edge,
+            color="#8990a7",
+            alpha=0.22,
+            linewidth=0.7,
+            linestyle=(0, (2, 4)),
+            zorder=1,
+        )
+        ax.text(
+            current_edge + 0.7,
+            0.985,
+            "CURRENT LEVELS",
+            transform=ax.get_xaxis_transform(),
+            color="#8990a7",
+            alpha=0.72,
+            fontsize=6.5,
+            fontweight="semibold",
+            ha="left",
+            va="top",
+        )
+        ax.set_xlim(
+            -0.5,
+            current_edge + heatmap.config.projection_space_bars,
+        )
         ax.set_title(
             f"{symbol} · Historical Causal Confluence · Weekly · through {analysis['dataThrough']}",
             color="#f3f4fa",

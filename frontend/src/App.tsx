@@ -17,7 +17,8 @@ type Dashboard = { market:{is_open:boolean; checked_at:string}; stocks:{ticker:s
 type CompanyProfile = {symbol:string;status:string;company_name:string|null;logo_url?:string|null;website?:string|null;ceo?:string|null;exchange?:string|null;exchange_full_name?:string|null;ipo_date?:string|null;employee_count?:number|null;description_en?:string|null;description_zh?:string|null;translation_status?:string;profile_fetched_at?:string|null;local_classification:{sector:string|null;industry:string|null}}
 type Zone = {low:number;high:number;center:number;type:'support'|'resistance';touchCount:number;strength:number;mostRecentTouchDate:string;distancePercent:number}
 type TechnicalHeatZone = {lower:number;upper:number;center:number;role:'support'|'resistance'|'neutral';rawCount:number;sourceCount:number;familyCount:number;weightedScore:number;normalizedIntensity:number;distancePercent:number;sources?:string[];methodFamilies?:string[]}
-type HistoricalCausalHeatmap = {version:string;mode:'historical_causal';timeframe:'weekly';priceBinCount:number;timeColumnCount:number;priceMin:number;priceMax:number;minimumFamilyCount:number;renderTimeBlockBars:number;renderPriceBlockBins:number;paletteVersion:string;methodsIncluded:string[];methodsExcluded:string[];calculationMs:number;currentZones:TechnicalHeatZone[]}
+type TechnicalPriceLevel = {source:string;methodFamily:string;price:number;role:'support'|'resistance'|'neutral';confidence:number;distancePercent:number}
+type HistoricalCausalHeatmap = {version:string;mode:'historical_causal';timeframe:'weekly';priceBinCount:number;timeColumnCount:number;priceMin:number;priceMax:number;minimumFamilyCount:number;renderTimeBlockBars:number;renderPriceBlockBins:number;projectionSpaceBars?:number;projectionExtensionBars?:number;paletteVersion:string;methodsIncluded:string[];methodsExcluded:string[];calculationMs:number;currentLevels?:TechnicalPriceLevel[];currentZones:TechnicalHeatZone[]}
 type TechnicalItem = {symbol:string;status:string;company_name:string|null;logo_url:string|null;chart_url:string|null;data_through?:string;generated_at?:string;stale?:boolean;analysis?:{latestClose:number;weeklyTrend:string;nearestSupport:Zone|null;nearestResistance:Zone|null;supportZones:Zone[];resistanceZones:Zone[];fibonacci:{available:boolean;direction?:string;levels?:Record<string,number>;omissionReason?:string};trendLines:{type:string;projectedPrice:number;priceRelation:string;confidence:number}[];indicators:Record<string,number|null>;omittedReasons:string[];historicalCausalHeatmap?:HistoricalCausalHeatmap};profile?:CompanyProfile;data_status?:Record<string,string|null>}
 type IndexQuote = {symbol:string;name:string;price:number|null;previous_close:number|null;change_points:number|null;change_percent:number|null}
 type Indices = {indices:IndexQuote[];market:{is_open:boolean;checked_at:string}}
@@ -209,6 +210,69 @@ function TechnicalLevelSummary({latestClose,heatmap}:{latestClose:number;heatmap
   return <div className="technical-level-summary" aria-label="当前技术点位热区">{card('support',support)}{card('resistance',resistance)}</div>
 }
 
+const technicalFamilyLabels:Record<string,string>={
+  moving_average:'均线系统',
+  volatility_band:'波动通道',
+  rolling_extreme:'周期高低点',
+  previous_period_pivot:'周枢轴',
+  swing_structure:'确认结构',
+  fibonacci:'斐波那契',
+  trendline:'趋势线',
+}
+
+function technicalSourceLabel(source:string) {
+  let match=source.match(/^ma(\d+)$/)
+  if(match)return `MA ${match[1]} 周`
+  match=source.match(/^ema(\d+)$/)
+  if(match)return `EMA ${match[1]} 周`
+  const fixed:Record<string,string>={
+    bollinger_low:'布林下轨',
+    bollinger_middle:'布林中轨',
+    bollinger_high:'布林上轨',
+    pivot_p:'中心枢轴 P',
+    pivot_r1:'第一压力 R1',
+    pivot_s1:'第一支撑 S1',
+    pivot_r2:'第二压力 R2',
+    pivot_s2:'第二支撑 S2',
+  }
+  if(fixed[source])return fixed[source]
+  match=source.match(/^rolling_(high|low)_(\d+)$/)
+  if(match)return `${match[2]} 周${match[1]==='high'?'高点':'低点'}`
+  match=source.match(/^confirmed_swing_(high|low)_(\d+)$/)
+  if(match)return `确认摆动${match[1]==='high'?'高点':'低点'} · #${match[2]}`
+  match=source.match(/^causal_fibonacci_([0-9.]+)_/)
+  if(match)return `回撤 ${Math.round(Number(match[1])*1000)/10}%`
+  if(source.startsWith('causal_low_trendline_'))return '上升支撑线'
+  if(source.startsWith('causal_high_trendline_'))return '下降压力线'
+  return source.replaceAll('_',' ')
+}
+
+function TechnicalIndicatorPositions({heatmap}:{heatmap?:HistoricalCausalHeatmap}) {
+  const levels=heatmap?.currentLevels||[]
+  if(!heatmap)return null
+  if(!levels.length)return <section className="technical-indicator-positions">
+    <header><div><p>PRICE-BASED INDICATORS</p><h3>各指标当前位置</h3></div><small>价格坐标尚不可用</small></header>
+    <p className="technical-indicator-empty">周线历史样本不足，暂不能形成可靠的均线、结构与交汇点位；补齐至少 52 周数据后自动显示。</p>
+  </section>
+  const familyOrder=Object.keys(technicalFamilyLabels)
+  const families=familyOrder.map(family=>({
+    family,
+    levels:levels.filter(level=>level.methodFamily===family),
+  })).filter(group=>group.levels.length)
+  return <section className="technical-indicator-positions" aria-labelledby="technical-position-title">
+    <header><div><p>PRICE-BASED INDICATORS</p><h3 id="technical-position-title">各指标当前位置</h3></div><small>{levels.length} 个有效价格坐标 · 以最新周线收盘为基准</small></header>
+    <div className="technical-indicator-groups">{families.map(group=><article key={group.family}>
+      <h4>{technicalFamilyLabels[group.family]} <small>{group.levels.length}</small></h4>
+      <div>{group.levels.map(level=><div className={`technical-indicator-row ${level.role}`} key={level.source}>
+        <span><i aria-hidden="true"/>{technicalSourceLabel(level.source)}</span>
+        <strong>{level.price.toFixed(2)}</strong>
+        <small>{`${level.distancePercent>=0?'+':''}${level.distancePercent.toFixed(1)}%`}</small>
+      </div>)}</div>
+    </article>)}</div>
+    <footer><span className="support">低于现价 / 支撑侧</span><span className="neutral">贴近现价</span><span className="resistance">高于现价 / 压力侧</span></footer>
+  </section>
+}
+
 function CompanyProfileSheet({symbol,onClose}:{symbol:string|null;onClose:()=>void}) {
   const profile = useQuery({queryKey:['company-profile',symbol],queryFn:()=>api<CompanyProfile>(`/company-profile/${symbol}`),enabled:!!symbol})
   const p=profile.data
@@ -243,7 +307,8 @@ function TechnicalAnalysisCenter() {
           <div><span>ATR 14</span><b>{a.indicators.atr14?.toFixed(2)||'—'}</b></div>
         </div>
         <TechnicalLevelSummary latestClose={a.latestClose} heatmap={a.historicalCausalHeatmap}/>
-        {d.chart_url?<figure className="technical-chart-frame"><AuthChart url={d.chart_url} symbol={d.symbol}/><figcaption>周线级别 · 点击图表查看大图</figcaption></figure>:<div className="technical-chart-empty">图表尚未生成。</div>}
+        {d.chart_url?<figure className="technical-chart-frame"><AuthChart url={d.chart_url} symbol={d.symbol}/><figcaption>周线级别 · 右侧延伸为当前仍有效的技术结构参考，并非价格预测 · 点击查看大图</figcaption></figure>:<div className="technical-chart-empty">图表尚未生成。</div>}
+        <TechnicalIndicatorPositions heatmap={a.historicalCausalHeatmap}/>
         <div className="technical-columns">
           <section><h3>支撑与阻力区域</h3><div className="zone-table">{[...a.supportZones,...a.resistanceZones].map(z=><div key={`${z.type}-${z.center}`}><b className={z.type==='support'?'positive':'negative'}>{z.type==='support'?'支撑':'阻力'}</b><span>{zone(z)}</span><span>{Math.round(z.strength*100)} 分</span><span>{z.touchCount} 次触及</span><time>{z.mostRecentTouchDate}</time></div>)}{![...a.supportZones,...a.resistanceZones].length&&<p>暂无已确认的支撑或阻力区域。</p>}</div></section>
           <section><h3>斐波那契与趋势线</h3>{a.fibonacci.available?<p>{a.fibonacci.direction==='up'?'上升':'下降'}主摆动；关键回撤位由最近已确认周线枢轴确定。</p>:<p>{a.fibonacci.omissionReason}</p>}{a.trendLines.map(line=><p key={line.type}>{line.type==='rising_support'?'上升支撑线':'下降阻力线'}投影 ${line.projectedPrice.toFixed(2)} · 置信度 {Math.round(line.confidence*100)}%</p>)}{a.omittedReasons.map(reason=><small key={reason}>{reason}</small>)}</section>

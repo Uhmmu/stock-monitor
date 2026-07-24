@@ -9,6 +9,7 @@ from app.services.technical_heatmap import (
     aggregate_heat_for_render,
     build_historical_causal_heatmap,
     build_render_bars,
+    draw_historical_heat_bars,
     quantize_intensity,
 )
 
@@ -109,3 +110,42 @@ def test_empty_history_returns_valid_empty_heatmap():
     assert result.support_heat.shape == (400, 0)
     assert result.resistance_heat.shape == (400, 0)
     assert result.current_zones == []
+    assert result.current_levels == []
+
+
+def test_metadata_exposes_current_price_levels_and_projection_contract():
+    result = build_historical_causal_heatmap(weekly_candles())
+    metadata = result.metadata(weekly_candles()[-1]["close"], 156)
+    assert metadata["currentLevels"]
+    assert {
+        "source",
+        "methodFamily",
+        "price",
+        "role",
+        "confidence",
+        "distancePercent",
+    } <= metadata["currentLevels"][0].keys()
+    assert metadata["projectionSpaceBars"] == 10
+    assert metadata["projectionExtensionBars"] == 8
+
+
+def test_active_final_heat_bars_extend_into_projection_space():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    result = build_historical_causal_heatmap(weekly_candles())
+    fig, ax = plt.subplots()
+    try:
+        draw_historical_heat_bars(ax, result)
+        final_edge = result.support_heat.shape[1] - 0.5
+        projected = [
+            patch
+            for patch in ax.patches
+            if patch.get_x() >= final_edge
+        ]
+        assert projected
+        assert max(patch.get_width() for patch in projected) == 8
+    finally:
+        plt.close(fig)
