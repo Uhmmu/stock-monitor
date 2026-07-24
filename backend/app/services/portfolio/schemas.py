@@ -223,3 +223,30 @@ class PortfolioInterpretationResponse(BaseModel):
     overall_summary: str
     recommendations: list[PersonalizedRecommendation]
     unavailable_dimensions: list[str]
+
+
+class PortfolioBenchmarkUpdate(BaseModel):
+    start_date: date | None = None
+    portfolio_return_percent: float | None = Field(default=None, ge=-100, le=1_000_000)
+
+
+class PortfolioBenchmarkOut(BaseModel):
+    symbol: str
+    name: str
+    start_price: float | None
+    start_price_date: date | None
+    latest_price: float | None
+    latest_price_date: date | None
+    return_percent: float | None
+    relative_return_percent: float | None
+    status: str
+    message: str | None = None
+
+
+class PortfolioBenchmarkResponse(BaseModel):
+    start_date: date | None
+    portfolio_return_percent: float | None
+    configured: bool
+    benchmarks: list[PortfolioBenchmarkOut]
+    source: str
+    as_of: datetime

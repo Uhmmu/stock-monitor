@@ -8,6 +8,7 @@ from app.services.portfolio.performance import (
     build_position_detail,
     build_summary,
 )
+from app.services.portfolio.benchmark import build_benchmark_comparison
 from app.services.portfolio.portfolio_health import build_health
 from app.services.portfolio.personalized_interpretation import build_personalized_interpretation
 from app.services.portfolio.position_builder import (
@@ -17,6 +18,8 @@ from app.services.portfolio.position_builder import (
 from app.services.portfolio.position_technical import build_position_technical
 from app.services.portfolio.schemas import (
     ManualPositionIn,
+    PortfolioBenchmarkResponse,
+    PortfolioBenchmarkUpdate,
     PortfolioHealthResponse,
     PortfolioInterpretationResponse,
     PortfolioStrategyProfileResponse,
@@ -42,6 +45,8 @@ from app.services.portfolio.transaction_service import (
 
 __all__ = [
     "ManualPositionIn",
+    "PortfolioBenchmarkResponse",
+    "PortfolioBenchmarkUpdate",
     "PortfolioHealthResponse",
     "PortfolioInterpretationResponse",
     "PortfolioStrategyProfileResponse",
@@ -49,6 +54,7 @@ __all__ = [
     "TransactionIn",
     "TransactionOut",
     "build_health",
+    "build_benchmark_comparison",
     "build_personalized_interpretation",
     "build_position_detail",
     "build_position_technical",

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, post } from './api'
 import { Sheet } from './Sheet'
@@ -213,6 +213,14 @@ type TransactionRow = {
   note:string|null
   source:string
 }
+type PortfolioBenchmark = {
+  start_date:string|null
+  portfolio_return_percent:number|null
+  configured:boolean
+  benchmarks:{symbol:string;name:string;start_price:number|null;start_price_date:string|null;latest_price:number|null;latest_price_date:string|null;return_percent:number|null;relative_return_percent:number|null;status:'available'|'unavailable';message:string|null}[]
+  source:string
+  as_of:string
+}
 
 export const fmtMoney = (value:number|null, currency='USD') => value==null?'数据不足':`${currency==='USD'?'$':currency+' '}${value.toLocaleString('zh-CN',{maximumFractionDigits:2,minimumFractionDigits:2})}`
 export const fmtPercent = (value:number|null) => value==null?'—':`${value>=0?'+':''}${value.toFixed(2)}%`
@@ -239,6 +247,7 @@ export function PortfolioModule() {
 
   const summary = useQuery({queryKey:['portfolio-summary'],queryFn:()=>api<PortfolioSummary>('/portfolio/summary'),staleTime:30_000})
   const strategy = useQuery({queryKey:['portfolio-strategy-profile'],queryFn:()=>api<StrategyProfileResponse>('/portfolio/strategy-profile'),staleTime:60_000})
+  const benchmark = useQuery({queryKey:['portfolio-benchmark'],queryFn:()=>api<PortfolioBenchmark>('/portfolio/benchmark'),enabled:subtab==='overview',staleTime:15*60_000,refetchInterval:15*60_000})
   const health = useQuery({queryKey:['portfolio-health'],queryFn:()=>api<PortfolioHealth>('/portfolio/health'),enabled:subtab==='health',staleTime:60_000})
   const interpretation = useQuery({queryKey:['portfolio-interpretation'],queryFn:()=>api<PersonalizedInterpretation>('/portfolio/interpretation'),enabled:subtab==='health',staleTime:60_000})
   const transactions = useQuery({queryKey:['portfolio-transactions'],queryFn:()=>api<TransactionRow[]>('/portfolio/transactions'),enabled:subtab==='transactions'})
@@ -298,6 +307,10 @@ export function PortfolioModule() {
       client.invalidateQueries({queryKey:['portfolio-interpretation']})
     },
   })
+  const saveBenchmark = useMutation({
+    mutationFn:(payload:{start_date:string;portfolio_return_percent:number})=>api<PortfolioBenchmark>('/portfolio/benchmark',{method:'PUT',body:JSON.stringify(payload)}),
+    onSuccess:data=>client.setQueryData(['portfolio-benchmark'],data),
+  })
 
   const s = summary.data
   const subtabs:[PortfolioTab,string][] = [['overview','总览'],['positions','持仓明细'],['technical','技术位置'],['health','组合健康'],['transactions','交易记录']]
@@ -342,6 +355,7 @@ export function PortfolioModule() {
           <div className="metric-card portfolio-pnl-card"><span>浮动盈亏</span><strong className={((s.total_unrealized_pnl)||0)>=0?'positive':'negative'}>{fmtMoney(s.total_unrealized_pnl,s.base_currency)}</strong><small>{fmtPercent(s.total_unrealized_pnl_percent)}</small></div>
           <div className="metric-card portfolio-count-card"><span>持仓数量</span><strong>{s.position_count}</strong><small>{s.priced_count} 个已折算</small></div>
         </div>
+        <PortfolioBenchmarkSection data={benchmark.data} loading={benchmark.isLoading} saving={saveBenchmark.isPending} error={saveBenchmark.error} onSave={payload=>saveBenchmark.mutate(payload)}/>
         <div className="table portfolio-table">
           <div className="table-head portfolio-row"><span>代码</span><span>数量</span><span>成本价</span><span>现价</span><span>市值</span><span>浮动盈亏</span><span>占比</span></div>
           {s.positions.map(p=><button key={p.symbol} className="table-row portfolio-row" onClick={()=>openTechnical(p.symbol)}>
@@ -422,6 +436,42 @@ export function PortfolioModule() {
       />
     </Sheet>
   </div>
+}
+
+function PortfolioBenchmarkSection({data,loading,saving,error,onSave}:{
+  data:PortfolioBenchmark|undefined;loading:boolean;saving:boolean;error:Error|null
+  onSave:(payload:{start_date:string;portfolio_return_percent:number})=>void
+}) {
+  const today = new Date().toISOString().slice(0,10)
+  const [startDate,setStartDate] = useState('')
+  const [portfolioReturn,setPortfolioReturn] = useState('')
+  useEffect(()=>{
+    if(data){setStartDate(data.start_date||'');setPortfolioReturn(data.portfolio_return_percent==null?'':String(data.portfolio_return_percent))}
+  },[data?.start_date,data?.portfolio_return_percent])
+  const canSave = !!startDate && portfolioReturn.trim()!=='' && Number.isFinite(Number(portfolioReturn))
+  return <section className="portfolio-benchmark" aria-label="组合基准对比">
+    <div className="portfolio-benchmark-heading"><div><small>PERFORMANCE BASELINE</small><h3>组合与大盘对比</h3></div><span>{data?.configured?'自动同步指数收盘价':'设置后开始比较'}</span></div>
+    <p>输入你的入市日与组合至今累计涨跌幅，系统会持续对照 SPY、QQQ、VT；相对收益为你的组合涨跌幅减去对应基准。</p>
+    <form className="portfolio-benchmark-form" onSubmit={event=>{event.preventDefault();if(canSave)onSave({start_date:startDate,portfolio_return_percent:Number(portfolioReturn)})}}>
+      <label><span>入市日期</span><input type="date" required max={today} value={startDate} onChange={event=>setStartDate(event.target.value)}/></label>
+      <label><span>组合累计涨跌幅</span><div className="benchmark-percent-input"><input type="number" required inputMode="decimal" step="any" min="-100" value={portfolioReturn} onChange={event=>setPortfolioReturn(event.target.value)} placeholder="例如 18.5"/><b>%</b></div></label>
+      <button disabled={!canSave||saving}>{saving?'正在更新…':data?.configured?'更新基准':'开始比较'}</button>
+    </form>
+    {error&&<p className="error">保存失败：{error.message}</p>}
+    {loading&&<div className="benchmark-empty">正在读取市场基准…</div>}
+    {!loading&&data?.configured&&<>
+      <div className="benchmark-grid">
+        {data.benchmarks.map(row=><article className={row.status==='available'?'':'unavailable'} key={row.symbol}>
+          <div><b>{row.symbol}</b><span>{row.name}</span></div>
+          {row.status==='available'?<>
+            <dl><div><dt>基准涨跌</dt><dd className={(row.return_percent||0)>=0?'positive':'negative'}>{fmtPercent(row.return_percent)}</dd></div><div><dt>相对表现</dt><dd className={(row.relative_return_percent||0)>=0?'positive':'negative'}>{fmtPercent(row.relative_return_percent)}</dd></div></dl>
+            <small>{row.start_price_date} 收盘 {fmtMoney(row.start_price)} → {row.latest_price_date} 收盘 {fmtMoney(row.latest_price)}</small>
+          </>:<p>{row.message||'数据不足'}</p>}
+        </article>)}
+      </div>
+      <footer>来源：{data.source}。价格基准不含股息再投资；非交易日自动采用其后第一个交易日的收盘价。</footer>
+    </>}
+  </section>
 }
 
 type EditableStrategyField = 'strategy_type'|'investment_horizon'|'risk_tolerance'|'max_single_position'|'max_theme_exposure'|'valuation_preference'|'minimum_quality_score'|'preferred_regions'|'preferred_market_caps'

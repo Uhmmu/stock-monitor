@@ -695,6 +695,12 @@ class Portfolio(Base):
     name: Mapped[str] = mapped_column(String(120), default="我的持仓")
     base_currency: Mapped[str] = mapped_column(String(8), default="USD")
     cash_balance: Mapped[float] = mapped_column(Float, default=0.0)
+    # The user-declared starting point for comparing the whole portfolio with
+    # passive market benchmarks.  This deliberately stays separate from
+    # transaction-derived performance: deposits, withdrawals and multi-account
+    # history cannot yet be treated as a time-weighted return automatically.
+    benchmark_start_date: Mapped[date | None] = mapped_column(Date)
+    benchmark_portfolio_return_percent: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

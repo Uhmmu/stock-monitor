@@ -13,9 +13,13 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.database import get_db
+from datetime import UTC, datetime
+
 from app.models import PortfolioPosition, User
 from app.services.portfolio import (
     ManualPositionIn,
+    PortfolioBenchmarkResponse,
+    PortfolioBenchmarkUpdate,
     PortfolioHealthResponse,
     PortfolioInterpretationResponse,
     PortfolioStrategyProfileResponse,
@@ -23,6 +27,7 @@ from app.services.portfolio import (
     TransactionIn,
     TransactionOut,
     build_health,
+    build_benchmark_comparison,
     build_personalized_interpretation,
     build_position_detail,
     build_position_technical,
@@ -52,6 +57,28 @@ def _portfolio(db: Session, user: User):
 @router.get("/summary")
 def portfolio_summary(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return build_summary(db, _portfolio(db, user))
+
+
+@router.get("/benchmark", response_model=PortfolioBenchmarkResponse)
+def portfolio_benchmark(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return build_benchmark_comparison(_portfolio(db, user))
+
+
+@router.put("/benchmark", response_model=PortfolioBenchmarkResponse)
+def portfolio_benchmark_update(
+    payload: PortfolioBenchmarkUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if payload.start_date is not None and payload.start_date > datetime.now(UTC).date():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "入市日期不能晚于今天")
+    portfolio = _portfolio(db, user)
+    portfolio.benchmark_start_date = payload.start_date
+    portfolio.benchmark_portfolio_return_percent = payload.portfolio_return_percent
+    portfolio.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(portfolio)
+    return build_benchmark_comparison(portfolio)
 
 
 @router.get("/positions")

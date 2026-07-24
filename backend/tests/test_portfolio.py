@@ -24,6 +24,7 @@ from app.models import (
 )
 from app.services.portfolio.lot_matcher import rebuild_symbol
 from app.services.portfolio.performance import build_summary
+from app.services.portfolio.benchmark import build_benchmark_comparison
 from app.services.portfolio.portfolio_health import build_health
 from app.services.portfolio.position_builder import rebuild_symbol_position
 from app.services.portfolio.position_technical import build_position_technical
@@ -94,6 +95,32 @@ def _txn(portfolio_id, symbol, kind, quantity, price, *, fees=0.0, trade_date=da
         source="manual",
     )
     return txn
+
+
+def test_benchmark_comparison_uses_first_trading_day_and_relative_return(portfolio, monkeypatch):
+    portfolio.benchmark_start_date = date(2026, 1, 3)  # Saturday: provider supplies next trading close.
+    portfolio.benchmark_portfolio_return_percent = 18.0
+
+    def prices(symbol, start_date):
+        assert start_date == date(2026, 1, 3)
+        return ((date(2026, 1, 5), 100.0), (date(2026, 7, 24), 110.0))
+
+    monkeypatch.setattr("app.services.portfolio.benchmark._close_points", prices)
+    result = build_benchmark_comparison(portfolio)
+
+    assert result["configured"] is True
+    assert len(result["benchmarks"]) == 3
+    assert result["benchmarks"][0]["start_price_date"] == date(2026, 1, 5)
+    assert result["benchmarks"][0]["return_percent"] == 10.0
+    assert result["benchmarks"][0]["relative_return_percent"] == 8.0
+
+
+def test_benchmark_comparison_requires_both_user_inputs(portfolio):
+    portfolio.benchmark_start_date = date(2026, 1, 2)
+    portfolio.benchmark_portfolio_return_percent = None
+    result = build_benchmark_comparison(portfolio)
+    assert result["configured"] is False
+    assert result["benchmarks"] == []
 
 
 # ── lot_matcher.rebuild_symbol ────────────────────────────────────────────

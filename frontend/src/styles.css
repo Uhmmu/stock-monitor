@@ -1032,6 +1032,10 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
 .portfolio-subtabs button.active{background:var(--accent);color:#fff;border-color:transparent;box-shadow:0 4px 12px rgba(0,113,227,.28)}
 .metric-card-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:22px}
 .portfolio-gap-hint{display:block;color:var(--down);font-size:10px}
+.portfolio-benchmark{margin:0 0 22px;padding:18px 20px;border:1px solid rgba(75,117,166,.15);border-radius:18px;background:linear-gradient(135deg,rgba(235,244,255,.78),rgba(250,249,255,.72));box-shadow:0 8px 24px rgba(44,72,106,.055)}
+.portfolio-benchmark-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}.portfolio-benchmark-heading small{display:block;color:var(--accent-ink);font-size:9px;font-weight:750;letter-spacing:.035em}.portfolio-benchmark-heading h3{margin:3px 0 0;font-size:18px;letter-spacing:-.02em}.portfolio-benchmark-heading>span{color:var(--ink-4);font-size:11px;font-weight:600}.portfolio-benchmark>p{margin:8px 0 14px;color:var(--ink-3);font-size:12px;line-height:1.55}
+.portfolio-benchmark-form{display:grid;grid-template-columns:minmax(150px,1fr) minmax(170px,1fr) auto;align-items:end;gap:10px}.portfolio-benchmark-form label{display:flex;flex-direction:column;gap:5px}.portfolio-benchmark-form label>span{color:var(--ink-4);font-size:10px;font-weight:650}.portfolio-benchmark-form input{height:38px;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.82);padding:0 10px;color:var(--ink);font:inherit;font-size:13px}.benchmark-percent-input{position:relative}.benchmark-percent-input input{width:100%;padding-right:28px}.benchmark-percent-input b{position:absolute;top:10px;right:10px;color:var(--ink-4);font-size:12px}.portfolio-benchmark-form button{height:38px;border:0;border-radius:10px;background:var(--accent);color:#fff;padding:0 15px;font-size:12px;font-weight:650;cursor:pointer}.portfolio-benchmark-form button:disabled{opacity:.5;cursor:default}
+.benchmark-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:16px}.benchmark-grid article{padding:12px;border:1px solid rgba(84,109,145,.1);border-radius:12px;background:rgba(255,255,255,.68)}.benchmark-grid article>div:first-child{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.benchmark-grid article b{font-size:16px;letter-spacing:-.02em}.benchmark-grid article>div:first-child span{overflow:hidden;color:var(--ink-4);font-size:10px;white-space:nowrap;text-overflow:ellipsis}.benchmark-grid dl{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0 8px}.benchmark-grid dt{color:var(--ink-4);font-size:9px;font-weight:600}.benchmark-grid dd{margin:3px 0 0;font-size:15px;font-weight:750;font-variant-numeric:tabular-nums}.benchmark-grid article small,.benchmark-grid article p,.benchmark-empty{color:var(--ink-4);font-size:10px;line-height:1.45}.benchmark-grid article p{margin:12px 0 0}.benchmark-grid article.unavailable{opacity:.72}.portfolio-benchmark footer{display:block;margin-top:12px;color:var(--ink-4);font-size:10px;line-height:1.45}
 
 .portfolio-row{grid-template-columns:.9fr .9fr 1fr 1fr 1.1fr 1.3fr .7fr!important}
 .table.portfolio-table .table-row.portfolio-row{width:100%;background:none;border:0;border-top:1px solid var(--line-2);cursor:pointer;color:var(--ink);text-align:left}
@@ -1163,6 +1167,7 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
   .portfolio-metrics .portfolio-value-card{grid-column:1/-1;min-height:144px;padding:20px;background:radial-gradient(circle at 88% 12%,rgba(110,180,255,.2),transparent 38%),linear-gradient(145deg,rgba(255,255,255,.9),rgba(226,239,255,.76))}
   .portfolio-value-card>strong{font-size:34px!important;letter-spacing:-.055em!important}
   .portfolio-value-card .portfolio-gap-hint{color:var(--down)}
+  .portfolio-benchmark{padding:16px;margin-bottom:14px;border-radius:17px}.portfolio-benchmark-form{grid-template-columns:1fr 1fr}.portfolio-benchmark-form button{grid-column:1/-1;width:100%}.benchmark-grid{grid-template-columns:1fr}.benchmark-grid article{padding:13px}.benchmark-grid article>div:first-child span{max-width:14rem}.benchmark-grid dl{max-width:15rem}
 
   .table.portfolio-table{overflow:visible;border:0;background:transparent;box-shadow:none}
   .portfolio-table .table-head{display:none}
@@ -1228,11 +1233,11 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
   .sheet-panel{max-height:94dvh;border-radius:24px 24px 0 0}
 }
 @media(prefers-reduced-transparency:reduce) and (max-width:700px){
-  .portfolio-subtabs,.portfolio-overview,.portfolio-metrics .metric-card,.portfolio-table .table-row.portfolio-row,.portfolio-txn-table .portfolio-txn-row,.portfolio-strategy-entry{background:#f8fafc;backdrop-filter:none;-webkit-backdrop-filter:none}
+  .portfolio-subtabs,.portfolio-overview,.portfolio-metrics .metric-card,.portfolio-table .table-row.portfolio-row,.portfolio-txn-table .portfolio-txn-row,.portfolio-strategy-entry,.portfolio-benchmark{background:#f8fafc;backdrop-filter:none;-webkit-backdrop-filter:none}
   .position-technical-header{background:#f8fafc;backdrop-filter:none;-webkit-backdrop-filter:none}
 }
 @media(prefers-contrast:more) and (max-width:700px){
-  .portfolio-overview,.portfolio-subtabs,.portfolio-metrics .metric-card,.portfolio-table .table-row.portfolio-row,.portfolio-txn-table .portfolio-txn-row,.portfolio-sector-list,.portfolio-strategy-entry,.strategy-settings-group{border-color:#64748b}
+  .portfolio-overview,.portfolio-subtabs,.portfolio-metrics .metric-card,.portfolio-table .table-row.portfolio-row,.portfolio-txn-table .portfolio-txn-row,.portfolio-sector-list,.portfolio-strategy-entry,.strategy-settings-group,.portfolio-benchmark{border-color:#64748b}
 }
 @media(prefers-reduced-motion:reduce){.portfolio-strategy-entry,.strategy-setting>button>i,.strategy-selector button,.strategy-reset{transition:none}.portfolio-strategy-entry:active,.strategy-selector button:active,.strategy-reset:active{transform:none}}
 
