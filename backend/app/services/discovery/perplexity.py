@@ -100,7 +100,8 @@ def build_request(*, context: dict, model: str, max_steps: int, max_output_token
         "store": False,
         "response_format": {
             "type": "json_schema",
-            "json_schema": {"name": "stock_discovery_v04", "schema": response_schema()},
+            # Perplexity requires schema names to be alphanumeric (no underscores).
+            "json_schema": {"name": "stockdiscoveryv04", "schema": response_schema()},
         },
     }
 
