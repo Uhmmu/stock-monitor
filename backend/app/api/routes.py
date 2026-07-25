@@ -75,7 +75,7 @@ public_router = APIRouter(prefix="/api")
 router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
 
 
-SNAPSHOT_SECTIONS = {"news", "fundamentals", "financials", "valuation", "sec"}
+SNAPSHOT_SECTIONS = {"news", "fundamentals", "financials", "valuation", "sec", "sentiment"}
 
 
 def _require_watched_ticker(db: Session, ticker: str, snapshot_section: str | None = None) -> str:

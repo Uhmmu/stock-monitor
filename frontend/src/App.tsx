@@ -7,6 +7,9 @@ import { Sheet } from './Sheet'
 import { SecuritySearchAutocomplete, securityPayload, type SecuritySearchResult } from './SecuritySearchAutocomplete'
 import { PortfolioModule } from './Portfolio'
 import { DiscoverySettingsPanel, OpportunityDiscovery } from './OpportunityDiscovery'
+import { SentimentModule } from './Sentiment'
+import { InvestmentCalendar } from './InvestmentCalendar'
+import { OwnershipSection } from './Ownership'
 
 type WatchItem = { id:number; ticker:string; enabled:boolean; alert_enabled:boolean; user_group_id:number|null; display_order:number; threshold_20m:number|null; threshold_1h:number|null; threshold_day:number|null }
 type ManagedStock = {ticker:string;company_name:string|null;official_sector:string|null;official_industry:string|null;user_group_id:number|null;display_order:number;is_watchlisted:boolean;is_peer_referenced:boolean;peer_referenced_by:string[];stock_type:'watchlist'|'matched';price:number|null;change_percent:number|null;alert_enabled:boolean;threshold_20m:number|null;threshold_1h:number|null;threshold_day:number|null;watchlist_id:number|null}
@@ -120,7 +123,7 @@ const industryNames:Record<string,string> = {
 const localizeSector = (value:string|null|undefined,fallback='未分类') => value ? sectorNames[value]||value : fallback
 const localizeIndustry = (value:string|null|undefined,fallback='行业待同步') => value ? industryNames[value]||value : fallback
 
-function SnapshotTickerBar({section,tickers,current,onSelect,leading}:{section:'news'|'fundamentals'|'financials'|'valuation'|'sec';tickers:string[];current:string;onSelect:(ticker:string)=>void;leading?:React.ReactNode}) {
+function SnapshotTickerBar({section,tickers,current,onSelect,leading}:{section:'news'|'fundamentals'|'financials'|'valuation'|'sec'|'sentiment';tickers:string[];current:string;onSelect:(ticker:string)=>void;leading?:React.ReactNode}) {
   const [selectedSecurity,setSelectedSecurity] = useState<SecuritySearchResult|null>(null)
   const client = useQueryClient()
   const snapshots = useQuery({queryKey:['snapshots',section],queryFn:()=>api<TemporarySnapshot[]>(`/snapshots/${section}`)})
@@ -163,7 +166,9 @@ function NavIcon({name}:{name:string}) {
     discovery:<><circle cx="12" cy="12" r="8"/><path d="m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9z"/><circle cx="12" cy="12" r="1"/></>,
     alerts:<><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></>,
     news:<><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></>,
+    sentiment:<><path d="M4 15.5c1.4-1.8 2.8-2.7 4.2-2.7 2.2 0 2.8 3.4 5 3.4 1.5 0 3-1.4 4.8-4.2"/><path d="M4 9c1.1-1.2 2.2-1.8 3.3-1.8 1.8 0 2.5 2.5 4.2 2.5 1.3 0 2.5-.9 3.7-2.7"/><circle cx="19" cy="7" r="2"/><path d="M3 20h18"/></>,
     fundamentals:<><path d="m3 17 5-5 4 3 8-9"/><path d="M15 6h5v5"/></>,
+    calendar:<><path d="M6 2v4M18 2v4M3 9h18"/><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 13h2M14 13h2M8 17h2M14 17h2"/></>,
     financials:<><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h3M13 12h3M8 16h3M13 16h3"/></>,
     crossmodel:<><path d="M4 18V7M10 18V4M16 18v-8M22 18H2"/><path d="m5 11 5-3 4 4 6-6"/></>,
     technical:<><path d="M3 17 8 12l4 3 8-9"/><path d="M4 21h16M7 9v6M12 11v7M17 4v8"/></>,
@@ -364,8 +369,8 @@ export default function App() {
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const tabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
+  const tabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['sentiment','舆情'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['sentiment','市场舆情'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
   const viewIndices = demoMode ? demoIndices : indices.data
   const viewAlerts = demoMode ? demoAlerts : alerts.data
@@ -394,10 +399,12 @@ export default function App() {
       </>}
       {tab==='watchlist'&&<StockManagement onWatchlistChanged={()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}}/>}
       {tab==='holdings'&&<PortfolioModule/>}
+      {tab==='calendar'&&<InvestmentCalendar/>}
       {tab==='discovery'&&<OpportunityDiscovery/>}
       {tab==='alerts'&&<div className="investigations">{groupInvestigations(investigations.data).map(group=><article key={group.key}><div><span className={`status ${group.status}`}>{group.status}</span><h2>{group.ticker} 异动调查{group.items.length>1&&<em className="group-count"> ×{group.items.length}</em>}</h2><p>{formatDate(group.started_at)} — {formatDate(group.ends_at)}</p></div><strong>{group.news_count}<small> 条新闻线索</small></strong>{group.last_error&&<p className="error">{group.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}
       {tab==='reports'&&<div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span className="report-tag">{typeNames[r.report_type]||r.report_type}{r.confidence&&<><span className="report-tag-sep">|</span><span className={`report-conf conf-${r.confidence==='高'?'high':r.confidence==='中'?'mid':'low'}`}>置信度{r.confidence}</span></>}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div>}
       {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
+      {tab==='sentiment'&&<SentimentModule ticker={activeTicker||watchlist.data?.[0]?.ticker||''} selector={<SnapshotTickerBar section="sentiment" tickers={watchlist.data?.map(w=>w.ticker)||[]} current={activeTicker||watchlist.data?.[0]?.ticker||''} onSelect={setActiveTicker}/>}/>}
       {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='financials'&&<FinancialStatementsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onStatementMetric={setSelectedStatementMetric} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='crossmodel'&&<CrossModelCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onMetric={setSelectedModel} onWeight={setSelectedWeight} active={activeTicker} setActive={setActiveTicker}/>}
@@ -630,6 +637,7 @@ function FundamentalsCenter({tickers,active,setActive}:{tickers:string[];active:
     {fundamentals.data&&<div className={`source-notice ${fundamentals.data.source_support.yahoo?'source-ok':'source-error'}`}><span><i aria-hidden="true"/>{fundamentals.data.source_support.yahoo?'Yahoo 实时基本面已连接':'Yahoo 基本面暂不可用'}</span><time>{formatDate(fundamentals.data.as_of)}</time>{!fundamentals.data.source_support.finnhub&&<small>Finnhub 仅作可选补充，不影响下方 Yahoo 数据。</small>}</div>}
     <div className="section-title"><h2>{current} 基本面指标</h2></div>
     <div className="metric-grid">{fundamentals.data?.metrics.map(m=><div className="metric-card" key={m.label}><span>{m.label}</span><strong>{fmtMetric(m.value)}</strong>{m.source&&<em>{m.source==='yahoo'?'Yahoo':'Finnhub'}</em>}</div>)}{fundamentals.isError&&<div className="empty">基本面数据暂不可用。</div>}</div>
+    {!!current&&<OwnershipSection symbol={current}/>}
     <div className="section-title"><h2>分析师评级</h2></div>
     {r?<RatingGauge r={r}/>:<div className="empty">暂无分析师评级。</div>}
     <div className="section-title"><h2>近四季度财报（SEC 单季，已去累计）</h2></div>

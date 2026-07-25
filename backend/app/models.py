@@ -453,6 +453,90 @@ class EarningsEvent(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class EquityShareStatistic(Base):
+    """Normalized, provider-aware share/short-interest snapshot."""
+    __tablename__ = "equity_share_statistics"
+    __table_args__ = (UniqueConstraint("symbol", name="uq_equity_share_statistics_symbol"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id", ondelete="SET NULL"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    market: Mapped[str | None] = mapped_column(String(32))
+    currency: Mapped[str | None] = mapped_column(String(8))
+    shares_outstanding: Mapped[float | None] = mapped_column(Float)
+    float_shares: Mapped[float | None] = mapped_column(Float)
+    free_float_percent: Mapped[float | None] = mapped_column(Float)
+    implied_shares_outstanding: Mapped[float | None] = mapped_column(Float)
+    shares_short: Mapped[float | None] = mapped_column(Float)
+    shares_short_prior_month: Mapped[float | None] = mapped_column(Float)
+    short_percent_of_float: Mapped[float | None] = mapped_column(Float)
+    short_percent_of_outstanding: Mapped[float | None] = mapped_column(Float)
+    short_ratio: Mapped[float | None] = mapped_column(Float)
+    held_percent_insiders: Mapped[float | None] = mapped_column(Float)
+    held_percent_institutions: Mapped[float | None] = mapped_column(Float)
+    average_volume: Mapped[float | None] = mapped_column(Float)
+    average_volume_10d: Mapped[float | None] = mapped_column(Float)
+    as_of_date: Mapped[date | None] = mapped_column(Date, index=True)
+    source: Mapped[str] = mapped_column(String(32), default="yahoo", index=True)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[str] = mapped_column(String(16), default="medium")
+    is_estimated: Mapped[bool] = mapped_column(Boolean, default=False)
+    raw_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class InvestmentCalendarEvent(Base):
+    """A provider-neutral event with a deterministic ID and reconciled provenance."""
+    __tablename__ = "investment_calendar_events"
+    __table_args__ = (
+        Index("ix_investment_calendar_date_type", "event_date", "event_type"),
+        Index("ix_investment_calendar_symbol_date", "symbol", "event_date"),
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(32), index=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), index=True)
+    security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id", ondelete="SET NULL"), index=True)
+    company_name: Mapped[str | None] = mapped_column(String(256))
+    title: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str | None] = mapped_column(Text)
+    event_date: Mapped[date] = mapped_column(Date, index=True)
+    event_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    time_status: Mapped[str] = mapped_column(String(24), default="unknown")
+    timezone: Mapped[str] = mapped_column(String(64), default="America/New_York")
+    fiscal_period: Mapped[str | None] = mapped_column(String(16))
+    fiscal_year: Mapped[int | None] = mapped_column(Integer)
+    is_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_estimated: Mapped[bool] = mapped_column(Boolean, default=True)
+    confidence: Mapped[str] = mapped_column(String(16), default="medium")
+    impact_level: Mapped[str] = mapped_column(String(16), default="low", index=True)
+    primary_source: Mapped[str] = mapped_column(String(32), index=True)
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    has_conflict: Mapped[bool] = mapped_column(Boolean, default=False)
+    conflict_fields: Mapped[list] = mapped_column(JSON, default=list)
+    metadata_payload: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class InvestmentCalendarEventSource(Base):
+    """Provider record retained separately so refreshes never erase provenance."""
+    __tablename__ = "investment_calendar_event_sources"
+    __table_args__ = (
+        UniqueConstraint("event_id", "provider", "source_record_id", name="uq_calendar_event_provider_record"),
+        Index("ix_calendar_event_sources_provider", "provider", "fetched_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("investment_calendar_events.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    source_record_id: Mapped[str] = mapped_column(String(160), default="")
+    source_url: Mapped[str | None] = mapped_column(Text)
+    raw_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SecFiling(Base):
     __tablename__ = "sec_filings"
     __table_args__ = (UniqueConstraint("ticker", "accession_number"),)

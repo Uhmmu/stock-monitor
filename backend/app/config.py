@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     perplexity_manual_refresh_cooldown_seconds: int = 60
     perplexity_evaluation_budget_usd: float = 2.0
     perplexity_live_evaluation_enabled: bool = False
+    # Adanos is server-only. The browser calls the authenticated FastAPI proxy.
+    adanos_api_key: str = ""
+    adanos_api_keys: str = ""
+    adanos_api_base_url: str = "https://api.adanos.org"
+    adanos_request_timeout_seconds: float = 5.0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

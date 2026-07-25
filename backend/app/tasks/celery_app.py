@@ -22,6 +22,7 @@ from app.models import (
     InvestigationStatus,
     NewsItem,
     PriceSnapshot,
+    PortfolioPosition,
     QuarterlyFinancial,
     Report,
     ReportType,
@@ -62,6 +63,8 @@ from app.services.finnhub_mcp import fetch_basic_metrics, fetch_company_peers, f
 from app.services.graham import build_graham_from_sources, get_latest_aaa_corporate_bond_yield
 from app.services.stock_management import cache_official_relations, effective_peer_symbols, referenced_tickers, upsert_profile, valuation_tickers
 from app.services.securities import provider_symbol
+from app.services.investment_calendar import sync_calendar
+from app.services.ownership import refresh_share_statistics
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -73,6 +76,8 @@ celery_app.conf.beat_schedule = {
     "advance-investigations": {"task": "app.tasks.celery_app.advance_investigations", "schedule": 60},
     "scheduled-reports": {"task": "app.tasks.celery_app.scheduled_reports", "schedule": 300},
     "sync-earnings": {"task": "app.tasks.celery_app.sync_earnings", "schedule": 21600},
+    "sync-investment-calendar": {"task": "app.tasks.celery_app.sync_investment_calendar", "schedule": 43200},
+    "sync-share-statistics": {"task": "app.tasks.celery_app.sync_share_statistics", "schedule": 86400},
     "earnings-reports": {"task": "app.tasks.celery_app.earnings_reports", "schedule": 1800},
     "poll-news": {"task": "app.tasks.celery_app.poll_news", "schedule": settings.news_poll_minutes * 60},
     "poll-market-news": {"task": "app.tasks.celery_app.poll_market_news", "schedule": settings.market_news_poll_minutes * 60},
@@ -296,6 +301,29 @@ def sync_earnings():
                 db.add(EarningsEvent(ticker=ticker, event_time=event_time, confidence="estimated"))
         db.commit()
         return {"events": len(events)}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_investment_calendar")
+def sync_investment_calendar():
+    with SessionLocal() as db:
+        return sync_calendar(db)
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_share_statistics")
+def sync_share_statistics():
+    with SessionLocal() as db:
+        tickers = set(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        tickers.update(db.scalars(select(PortfolioPosition.symbol).where(PortfolioPosition.total_quantity > 0)).all())
+        updated, failures = 0, []
+        for ticker in sorted(tickers):
+            try:
+                refresh_share_statistics(db, ticker)
+                db.commit()
+                updated += 1
+            except Exception as exc:
+                db.rollback()
+                failures.append({"symbol": ticker, "error": type(exc).__name__})
+        return {"updated": updated, "failures": failures}
 
 
 def _translation_retryable(error: Exception) -> bool:

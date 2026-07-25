@@ -9,7 +9,8 @@
 - **实时行情与自选股**：按计划轮询自选标的，展示价格、涨跌幅、市场状态和 TradingView 图表。
 - **异动提醒与调查**：按 20 分钟、1 小时和日内阈值检测异常波动，并自动收集相关新闻与上下文。
 - **新闻与 SEC 数据**：个股新闻聚合 Yahoo、Finnhub、Marketaux 与 Tavily；“新闻中心”的紫色“全市场”入口以 Finnhub 市场新闻为主、Marketaux 为补充，并用本地规则过滤、事件聚类、重要度排序和主题均衡，不消耗 LLM 筛选额度。市场新闻与个股新闻都支持按卡片请求 AI 总结。
-- **基本面与估值**：展示财报、分析师评级、季度数据、DCF 情景和同行估值比较。
+- **基本面、股权与估值**：展示财报、分析师评级、季度数据、股本/空头统计、SEC 内部人交易、延迟 13F 申报、DCF 情景和同行估值比较。
+- **投资日历**：以持仓和自选股为中心聚合财报、除息/支付和拆股日期，保留来源、预计/确认状态、冲突与数据新鲜度，并以确定性规则标记组合相关影响。
 - **轻量技术分析**：从 FMP 缓存最多约五年的日线 OHLCV，在本地聚合周线、计算指标与关键区域，并生成可持久化的静态 WebP 图表。
 - **多模型交叉**：根据行业与公司特征组合模型权重，并计算 Forward P/E、PEG、EV/Sales、DCF、ROIC、Piotroski F-Score、Altman Z-Score 等指标。计算结果会显示公式、数据来源、缺失字段和适用性，不把缺失数据伪装成 0 分。
 - **多用户登录**：支持注册申请、登录、JWT 会话、管理员审核/删除用户和管理员权限控制。
@@ -85,6 +86,12 @@ PERPLEXITY_AGENT_MODEL=openai/gpt-5.4
 PERPLEXITY_MAX_MONTHLY_BUDGET_USD=10
 PERPLEXITY_MAX_RUN_COST_USD=1
 
+# 可选：启用 Reddit、X.com、新闻与 Polymarket 聚合舆情
+ADANOS_API_KEY=your-adanos-key
+# 可选：多个 Key 轮询分流，遇到限流或上游错误时自动切换
+ADANOS_API_KEYS=your-adanos-key-1,your-adanos-key-2
+ADANOS_API_BASE_URL=https://api.adanos.org
+
 # 生产环境必须修改
 JWT_SECRET=generate-a-long-random-secret
 ADMIN_INIT_PASSWORD=generate-a-strong-admin-password
@@ -95,6 +102,11 @@ AUTH_PASSWORD_HASH=   # caddy hash-password 生成
 ```
 
 不要把 `.env`、API Key、JWT 密钥或真实密码提交到 GitHub。
+
+Adanos Key 仅由 FastAPI 服务端读取。登录后的“舆情”板块通过后端并发查询四个来源，
+单个来源失败不会影响其余来源；成功结果缓存 5 分钟，浏览器不会接触 Key。配置
+`ADANOS_API_KEYS` 时，四个来源会在 Key 池中轮询分流；单个 Key 返回
+401、403、429 或可重试的 5xx 时，会自动尝试池中的下一个 Key。
 
 ### 2. 启动服务
 
@@ -127,6 +139,8 @@ docker compose -f compose.yaml -f compose.override.yaml up -d
 登录后进入“自选股”，添加股票代码，例如 `AAPL`、`MSFT` 或 `NVDA`。后台任务会逐步拉取行情、财报、新闻和模型快照。
 
 FMP 配额按 UTC 自然日记账。每次 HTTP 尝试都会先原子预留并持久化，实际可用量为 `FMP_DAILY_REQUEST_LIMIT - FMP_REQUEST_RESERVE`；耗尽后保存当前队列位置，下一 UTC 日从未完成股票继续。公开读取接口只访问数据库与图表缓存，不会触发 FMP 请求。公司资料默认按 180 天长缓存处理，Yahoo 仍是财务报表来源。
+
+“基本面 → 股权与股本”的股本统计使用 Yahoo 24 小时缓存；上游失败时保留并标记最近一次有效缓存。SEC Form 4 与 13F 继续复用现有 SEC 同步任务，13F 会明确提示季度申报的天然滞后。投资日历由后台每 12 小时同步 Yahoo 的财报、分红和拆股结构化数据，页面请求不会直接调用上游。当前版本不会声称支持尚未验证的 IPO、公司活动、宏观日历、政府交易或付费 FMP 端点，也不需要新增环境变量。
 
 ### 新闻采集与总结
 
