@@ -200,6 +200,54 @@ function AuthChart({url,symbol}:{url:string;symbol:string}) {
   return src?<a href={src} target="_blank" rel="noreferrer"><img className="technical-chart" src={src} alt={`${symbol} 周线历史动态技术交叉热力图，绿色表示历史支撑交叉，红色表示历史压力交叉。`}/></a>:<div className="technical-chart-empty">图表缓存读取中…</div>
 }
 
+function TradingViewStockHeatmap() {
+  const widgetRef = useRef<HTMLDivElement>(null)
+
+  useEffect(()=>{
+    const host = widgetRef.current
+    if(!host) return
+
+    const widget = document.createElement('div')
+    widget.className = 'tradingview-widget-container__widget'
+    const script = document.createElement('script')
+    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-stock-heatmap.js'
+    script.type = 'text/javascript'
+    script.async = true
+    script.textContent = JSON.stringify({
+      exchanges:[],
+      dataSource:'SPX500',
+      grouping:'sector',
+      blockSize:'market_cap_basic',
+      blockColor:'change',
+      locale:'zh_CN',
+      symbolUrl:'',
+      colorTheme:'light',
+      hasTopBar:false,
+      isDataSetEnabled:false,
+      isZoomEnabled:true,
+      hasSymbolTooltip:true,
+      isMonoSize:false,
+      width:'100%',
+      height:'100%',
+    })
+    host.replaceChildren(widget,script)
+
+    return ()=>host.replaceChildren()
+  },[])
+
+  return <section className="overview-heatmap">
+    <div className="section-title">
+      <div><p>MARKET BREADTH</p><h2>Stock Heatmap</h2></div>
+      <small>标普 500 · 按行业与市值分组</small>
+    </div>
+    <div className="tradingview-heatmap-shell">
+      <div className="tradingview-widget-container" ref={widgetRef}/>
+      <noscript>请启用 JavaScript 以查看 TradingView 股票热力图。</noscript>
+    </div>
+    <a className="tradingview-attribution" href="https://www.tradingview.com/markets/stocks-usa/market-movers-large-cap/" target="_blank" rel="noopener nofollow">Stock Heatmap <span>by TradingView</span></a>
+  </section>
+}
+
 function TechnicalLevelSummary({latestClose,heatmap}:{latestClose:number;heatmap?:HistoricalCausalHeatmap}) {
   const zones=heatmap?.currentZones||[]
   const support=zones.filter(zone=>zone.role==='support'&&zone.upper<latestClose).sort((a,b)=>b.upper-a.upper)[0]
@@ -395,6 +443,7 @@ export default function App() {
       {tab==='overview'&&<>
         <section className="hero index-hero"><div className="hero-copy"><span className={`badge${viewIndices?.market.is_open?'':' closed'}`}><i/>{viewIndices?.market.is_open?'LIVE MARKET':'MARKET CLOSED'}</span><h2>早上好，{authUser.username}</h2><p>你的市场雷达保持安静。我们只在真正值得注意时打扰你。</p></div><div className="index-row">{(viewIndices?.indices||[{symbol:'^GSPC',name:'标普500'},{symbol:'^IXIC',name:'纳斯达克'},{symbol:'^DJI',name:'道琼斯'}] as IndexQuote[]).map(idx=>{const up=idx.change_percent!=null&&idx.change_percent>=0;return <div className="index-card" key={idx.symbol}><span className="index-name">{idx.name}</span><strong>{idx.price!=null?idx.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}</strong><span className={idx.change_percent==null?'':up?'positive':'negative'}>{idx.change_points==null||idx.change_percent==null?'数据不足':`${up?'+':''}${idx.change_points.toFixed(2)} (${up?'+':''}${idx.change_percent.toFixed(2)}%)`}</span></div>})}</div></section>
         <section><div className="section-title"><div><p>WATCHLIST</p><h2>市场快照</h2></div><div className="section-actions"><button className="stock-collapse-btn" onClick={()=>setStocksExpanded(v=>!v)}>{stocksExpanded?'收起':'展开更多'} <span>{stocksExpanded?'↑':'↓'}</span></button><button onClick={()=>setTab('watchlist')}>管理自选股 <span>→</span></button></div></div><div className={`stock-grid${stocksExpanded?' is-expanded':' is-collapsed'}`}>{overviewStocks.map(stock=>{const change=stock.price&&stock.previous_close?(stock.price-stock.previous_close)/stock.previous_close*100:null;return <article className="stock-card" key={stock.ticker}><div className="stock-card-head"><ProfileLogo symbol={stock.ticker} url={stock.logo_url}/><div className="stock-card-id"><span className="ticker">{stock.ticker}</span><small>{stock.updated_at?'刚刚更新':'等待首次采集'}</small></div></div><strong>{formatPrice(stock.price)}</strong><span className={change!=null&&change<0?'negative':'positive'}>{change==null?'—':`${change>=0?'+':''}${change.toFixed(2)}% 今日`}</span><button className="company-overview-btn" onClick={()=>setSelectedProfileSymbol(stock.ticker)}>公司概览</button>{stock.volume_label&&stock.volume_label!=='正常'&&<span className={`vol-tag ${stock.volume_label==='放量'?'heavy':'light'}`}>{stock.volume_label} · {stock.volume_ratio?.toFixed(2)}×</span>}<div className="card-glow"/></article>})}{!overviewStocks.length&&<div className="empty">添加第一只股票，开始建立你的市场雷达。</div>}</div></section>
+        <TradingViewStockHeatmap/>
         <section className="split"><div><div className="section-title"><div><p>SIGNALS</p><h2>最近异动</h2></div></div>{viewAlerts?.slice(0,5).map(a=><div className="list-row" key={a.id}><span className="signal-symbol">{a.ticker.slice(0,1)}</span><b>{a.ticker}</b><span>{a.period}</span><em className={a.change_percent<0?'negative':'positive'}>{a.change_percent>=0?'+':''}{a.change_percent.toFixed(2)}%</em></div>)}</div><div><div className="section-title"><div><p>INTELLIGENCE</p><h2>最新报告</h2></div></div>{viewReports?.slice(0,5).map(r=><button className="report-row" key={r.id} onClick={()=>!demoMode&&setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{demoMode?'刚刚生成':formatDate(r.created_at)}</small></button>)}</div></section>
       </>}
       {tab==='watchlist'&&<StockManagement onWatchlistChanged={()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}}/>}
