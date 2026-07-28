@@ -6,7 +6,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import AppSetting, Investigation, InvestigationStatus, PriceAlert, PriceSnapshot, WatchlistItem
+from app.models import (
+    AppSetting,
+    Investigation,
+    InvestigationStatus,
+    PriceAlert,
+    PriceSnapshot,
+    UserPriceAlert,
+    WatchlistItem,
+)
 
 
 PERIODS = {"20m": timedelta(minutes=20), "1h": timedelta(hours=1)}
@@ -122,3 +130,62 @@ def evaluate_quote(db: Session, item: WatchlistItem, current: PriceSnapshot) -> 
         )
     )
     return [alert]
+
+
+def evaluate_user_price_alerts(
+    db: Session, current: PriceSnapshot
+) -> list[PriceAlert]:
+    """Evaluate user-owned chart target lines using the already-polled quote."""
+    rows = db.scalars(
+        select(UserPriceAlert).where(
+            UserPriceAlert.ticker == current.ticker,
+            UserPriceAlert.enabled.is_(True),
+            UserPriceAlert.triggered_at.is_(None),
+        )
+    ).all()
+    if not rows:
+        return []
+    runtime = _runtime_settings(db)
+    triggered: list[PriceAlert] = []
+    for target in rows:
+        crossed = (
+            current.price >= target.target_price
+            if target.direction == "above"
+            else current.price <= target.target_price
+        )
+        if not crossed:
+            continue
+        event_key = hashlib.sha256(f"price-target:{target.id}".encode()).hexdigest()
+        existing = db.scalar(
+            select(PriceAlert).where(PriceAlert.event_key == event_key)
+        )
+        alert = existing or PriceAlert(
+            event_key=event_key,
+            ticker=current.ticker,
+            period="price_target",
+            baseline_price=target.target_price,
+            current_price=current.price,
+            change_percent=_change(current.price, target.target_price),
+            triggered_at=current.quote_time,
+        )
+        if existing is None:
+            db.add(alert)
+            db.flush()
+            db.add(
+                Investigation(
+                    alert_id=alert.id,
+                    ticker=current.ticker,
+                    started_at=current.quote_time,
+                    ends_at=current.quote_time
+                    + timedelta(
+                        minutes=runtime["investigation_duration_minutes"]
+                    ),
+                    next_search_at=current.quote_time,
+                    status=InvestigationStatus.active,
+                )
+            )
+        target.enabled = False
+        target.triggered_at = current.quote_time
+        target.triggered_price_alert_id = alert.id
+        triggered.append(alert)
+    return triggered

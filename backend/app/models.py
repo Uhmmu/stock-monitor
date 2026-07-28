@@ -150,6 +150,34 @@ class PriceAlert(Base):
     investigation: Mapped["Investigation | None"] = relationship(back_populates="alert", uselist=False)
 
 
+class UserPriceAlert(Base):
+    """Authenticated user-owned target line evaluated by the existing quote poller."""
+    __tablename__ = "user_price_alerts"
+    __table_args__ = (
+        Index("ix_user_price_alerts_ticker_enabled", "ticker", "enabled"),
+        CheckConstraint("target_price > 0", name="ck_user_price_alerts_target_price"),
+        CheckConstraint("direction IN ('above', 'below')", name="ck_user_price_alerts_direction"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    target_price: Mapped[float] = mapped_column(Float)
+    direction: Mapped[str] = mapped_column(String(8))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    triggered_price_alert_id: Mapped[int | None] = mapped_column(
+        ForeignKey("price_alerts.id", ondelete="SET NULL"), unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Investigation(Base):
     __tablename__ = "investigations"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -537,6 +565,28 @@ class InvestmentCalendarEventSource(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class InvestmentCalendarSyncRun(Base):
+    """Durable calendar-refresh telemetry used for due checks and coverage reporting."""
+    __tablename__ = "investment_calendar_sync_runs"
+    __table_args__ = (
+        Index("ix_calendar_sync_runs_status_started", "status", "started_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), default="running", index=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tracked_symbols: Mapped[int] = mapped_column(Integer, default=0)
+    successful_symbols: Mapped[int] = mapped_column(Integer, default=0)
+    events_seen: Mapped[int] = mapped_column(Integer, default=0)
+    active_future_events: Mapped[int] = mapped_column(Integer, default=0)
+    future_symbol_count: Mapped[int] = mapped_column(Integer, default=0)
+    provider_counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    failures: Mapped[list] = mapped_column(JSON, default=list)
+    error_type: Mapped[str | None] = mapped_column(String(128))
+
+
 class SecFiling(Base):
     __tablename__ = "sec_filings"
     __table_args__ = (UniqueConstraint("ticker", "accession_number"),)
@@ -811,6 +861,27 @@ class PortfolioStrategyProfile(Base):
     )
 
 
+class PortfolioAnalysisRun(Base):
+    """Immutable input/result snapshot for deterministic portfolio analyses."""
+    __tablename__ = "portfolio_analysis_runs"
+    __table_args__ = (
+        Index("ix_portfolio_analysis_runs_portfolio_type_created", "portfolio_id", "analysis_type", "created_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    portfolio_id: Mapped[int] = mapped_column(ForeignKey("portfolios.id", ondelete="CASCADE"), index=True)
+    analysis_type: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    input_snapshot_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    assumptions_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    result_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    model_version: Mapped[str] = mapped_column(String(64))
+    price_data_start_date: Mapped[date | None] = mapped_column(Date)
+    price_data_end_date: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
 class StockDiscoverySettings(Base):
     """Per-user discovery policy. Secrets deliberately never enter this table."""
     __tablename__ = "stock_discovery_settings"
@@ -821,6 +892,7 @@ class StockDiscoverySettings(Base):
     # Discovery is manual-only and application code must not read them.
     auto_update_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     interval_days: Mapped[int] = mapped_column(Integer, default=3)
+    discovery_mode: Mapped[str] = mapped_column(String(32), default="search_local")
     model: Mapped[str] = mapped_column(String(128), default="openai/gpt-5.4")
     enable_web_search: Mapped[bool] = mapped_column(Boolean, default=True)
     max_steps: Mapped[int] = mapped_column(Integer, default=5)
@@ -851,6 +923,7 @@ class StockDiscoveryRun(Base):
     previous_successful_run_id: Mapped[int | None] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="SET NULL"))
     idempotency_key: Mapped[str] = mapped_column(String(160))
     trigger: Mapped[str] = mapped_column(String(16), default="manual")
+    discovery_mode: Mapped[str] = mapped_column(String(32), default="search_local")
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     stage: Mapped[str] = mapped_column(String(48), default="preparing_portfolio")
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -1025,6 +1098,23 @@ class StockDiscoveryUsage(Base):
     model_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     raw_usage: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class OpportunityHistory(Base):
+    """Immutable user-visible result from one manually triggered discovery run."""
+    __tablename__ = "opportunity_history"
+    __table_args__ = (Index("ix_opportunity_history_user_created", "user_id", "created_at"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"), unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    query_context: Mapped[dict] = mapped_column(JSON, default=dict)
+    market_condition: Mapped[str] = mapped_column(Text, default="")
+    result_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    model_version: Mapped[str] = mapped_column(String(128))
+    search_source: Mapped[str] = mapped_column(String(64), default="perplexity_search")
 
 
 class TradeTransaction(Base):

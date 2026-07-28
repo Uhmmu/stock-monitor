@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fmtHealthScore, fmtMoney, fmtNum, fmtPercent } from './Portfolio'
+import { findSavedScenarioRun, type ScenarioHistoryRun } from './PortfolioScenarios'
+import { latestFreshAnalysis, requestsMatch, type PortfolioAnalysisRun } from './PortfolioAnalysisCache'
 
 describe('fmtMoney', () => {
   it('renders an explicit gap instead of fabricating a value', () => {
@@ -46,5 +48,56 @@ describe('fmtHealthScore', () => {
 
   it('rounds a score for compact display', () => {
     expect(fmtHealthScore(74.6)).toBe('75')
+  })
+})
+
+describe('findSavedScenarioRun', () => {
+  const result = (code: string) => ({ status: 'completed', scenario: { code } }) as ScenarioHistoryRun['result']
+  const run = (overrides: Partial<ScenarioHistoryRun>): ScenarioHistoryRun => ({
+    job_id: 1,
+    analysis_type: 'scenario_analysis',
+    status: 'completed',
+    result: result('recession'),
+    input_request: {},
+    model_version: 'test',
+    created_at: '2026-07-28T01:00:00Z',
+    completed_at: '2026-07-28T01:00:00Z',
+    expires_at: '2026-08-04T01:00:00Z',
+    is_fresh: true,
+    error_message: null,
+    ...overrides,
+  })
+
+  it('reuses the latest completed result for the selected scenario', () => {
+    const runs: ScenarioHistoryRun[] = [
+      run({ job_id: 3, result: result('recession'), created_at: '2026-07-28T03:00:00Z' }),
+      run({ job_id: 2, result: result('growth_repricing'), created_at: '2026-07-28T02:00:00Z' }),
+    ]
+    expect(findSavedScenarioRun(runs, 'recession')?.job_id).toBe(3)
+  })
+
+  it('does not reuse pending, expired, or unrelated analysis runs', () => {
+    const runs: ScenarioHistoryRun[] = [
+      run({ job_id: 5, is_fresh: false }),
+      run({ job_id: 4, status: 'pending' }),
+      run({ job_id: 3, analysis_type: 'stress_test' }),
+    ]
+    expect(findSavedScenarioRun(runs, 'recession')).toBeUndefined()
+  })
+})
+
+describe('portfolio analysis cache matching', () => {
+  it('matches the same analysis parameters regardless of object key order and portfolio id', () => {
+    const saved = { portfolio_id: 1, method: 'block_bootstrap', constraints: { max_sector: .35, max_position: .2 } }
+    const current = { constraints: { max_position: .2, max_sector: .35 }, method: 'block_bootstrap', portfolio_id: 9 }
+    expect(requestsMatch(saved, current)).toBe(true)
+  })
+
+  it('returns only fresh completed runs', () => {
+    const runs = [
+      { analysis_type: 'monte_carlo', status: 'completed', is_fresh: false, job_id: 2 },
+      { analysis_type: 'monte_carlo', status: 'completed', is_fresh: true, job_id: 1 },
+    ] as PortfolioAnalysisRun[]
+    expect(latestFreshAnalysis(runs, 'monte_carlo')?.job_id).toBe(1)
   })
 })

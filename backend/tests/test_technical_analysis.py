@@ -4,6 +4,7 @@ from app.services.technical_analysis_engine import (
     aggregate_weekly,
     bollinger,
     build_analysis,
+    build_weekly_chart_data,
     macd,
     render_chart,
     rsi,
@@ -77,6 +78,40 @@ def test_insufficient_history_records_omissions():
     assert weekly
     assert "Insufficient data for weekly MA50" in result["omittedReasons"]
     assert result["fibonacci"]["available"] is False
+
+
+def test_weekly_chart_data_uses_business_days_and_backend_ma_values():
+    payload = build_weekly_chart_data(candles(420), "fmp")
+    assert payload["chart_data_status"] == "ready"
+    assert payload["chart_data_source"] == "fmp"
+    assert payload["weekly"]
+    assert set(payload["weekly"][0]) == {
+        "time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    }
+    assert len(payload["weekly"][0]["time"]) == 10
+    assert payload["moving_averages"]["ma20"][0]["time"] == payload["weekly"][19]["time"]
+    assert payload["moving_averages"]["ma20"][0]["value"] == sma(
+        [row["close"] for row in payload["weekly"]], 20
+    )[19]
+    assert set(payload["chart_series"]) == {"day", "week", "month"}
+    assert payload["chart_series"]["week"]["candles"] == payload["weekly"]
+    assert payload["chart_series"]["day"]["candles"]
+    assert payload["chart_series"]["month"]["candles"]
+
+
+def test_weekly_chart_data_explicitly_reports_missing_history():
+    payload = build_weekly_chart_data([], None)
+    assert payload["chart_data_status"] == "insufficient"
+    assert payload["chart_data_reason"] == "historical_data_unavailable"
+    assert payload["weekly"] == []
+    assert all(
+        not item["candles"] for item in payload["chart_series"].values()
+    )
 
 
 def test_static_webp_chart_generation(tmp_path):

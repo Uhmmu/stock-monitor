@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import rehypeSanitize from 'rehype-sanitize'
-import { api, getToken, patch, post } from './api'
+import { api, patch, post } from './api'
 import { Sheet } from './Sheet'
 import { SecuritySearchAutocomplete, securityPayload, type SecuritySearchResult } from './SecuritySearchAutocomplete'
 import { PortfolioModule } from './Portfolio'
@@ -10,6 +10,14 @@ import { DiscoverySettingsPanel, OpportunityDiscovery } from './OpportunityDisco
 import { SentimentModule } from './Sentiment'
 import { InvestmentCalendar } from './InvestmentCalendar'
 import { OwnershipSection } from './Ownership'
+import {
+  TechnicalChart,
+  type TechnicalChartEvent,
+  type TechnicalChartSeries,
+  type TechnicalMovingAverages,
+  type TechnicalPriceAlert,
+  type WeeklyCandle,
+} from './TechnicalChart'
 
 type WatchItem = { id:number; ticker:string; enabled:boolean; alert_enabled:boolean; user_group_id:number|null; display_order:number; threshold_20m:number|null; threshold_1h:number|null; threshold_day:number|null }
 type ManagedStock = {ticker:string;company_name:string|null;official_sector:string|null;official_industry:string|null;user_group_id:number|null;display_order:number;is_watchlisted:boolean;is_peer_referenced:boolean;peer_referenced_by:string[];stock_type:'watchlist'|'matched';price:number|null;change_percent:number|null;alert_enabled:boolean;threshold_20m:number|null;threshold_1h:number|null;threshold_day:number|null;watchlist_id:number|null}
@@ -22,7 +30,7 @@ type Zone = {low:number;high:number;center:number;type:'support'|'resistance';to
 type TechnicalHeatZone = {lower:number;upper:number;center:number;role:'support'|'resistance'|'neutral';rawCount:number;sourceCount:number;familyCount:number;weightedScore:number;normalizedIntensity:number;distancePercent:number;sources?:string[];methodFamilies?:string[]}
 type TechnicalPriceLevel = {source:string;methodFamily:string;price:number;role:'support'|'resistance'|'neutral';confidence:number;distancePercent:number}
 type HistoricalCausalHeatmap = {version:string;mode:'historical_causal';timeframe:'weekly';priceBinCount:number;timeColumnCount:number;priceMin:number;priceMax:number;minimumFamilyCount:number;renderTimeBlockBars:number;renderPriceBlockBins:number;projectionSpaceBars?:number;projectionExtensionBars?:number;paletteVersion:string;methodsIncluded:string[];methodsExcluded:string[];calculationMs:number;currentLevels?:TechnicalPriceLevel[];currentZones:TechnicalHeatZone[]}
-type TechnicalItem = {symbol:string;status:string;company_name:string|null;logo_url:string|null;chart_url:string|null;data_through?:string;generated_at?:string;stale?:boolean;analysis?:{latestClose:number;weeklyTrend:string;nearestSupport:Zone|null;nearestResistance:Zone|null;supportZones:Zone[];resistanceZones:Zone[];fibonacci:{available:boolean;direction?:string;levels?:Record<string,number>;omissionReason?:string};trendLines:{type:string;projectedPrice:number;priceRelation:string;confidence:number}[];indicators:Record<string,number|null>;omittedReasons:string[];historicalCausalHeatmap?:HistoricalCausalHeatmap};profile?:CompanyProfile;data_status?:Record<string,string|null>}
+type TechnicalItem = {symbol:string;status:string;company_name:string|null;logo_url:string|null;chart_url:string|null;data_through?:string;generated_at?:string;stale?:boolean;chart_data_status?:'ready'|'insufficient';chart_data_reason?:string|null;chart_data_source?:string|null;weekly?:WeeklyCandle[];moving_averages?:TechnicalMovingAverages;chart_series?:TechnicalChartSeries;events?:TechnicalChartEvent[];portfolio_cost?:{average_cost:number;quantity:number;currency:string}|null;price_alerts?:TechnicalPriceAlert[];analysis?:{latestClose:number;weeklyTrend:string;nearestSupport:Zone|null;nearestResistance:Zone|null;supportZones:Zone[];resistanceZones:Zone[];fibonacci:{available:boolean;direction?:string;levels?:Record<string,number>;omissionReason?:string};trendLines:{type:string;projectedPrice:number;priceRelation:string;confidence:number;anchors?:{date:string;price:number}[]}[];indicators:Record<string,number|null>;omittedReasons:string[];historicalCausalHeatmap?:HistoricalCausalHeatmap};profile?:CompanyProfile;data_status?:Record<string,string|null>}
 type IndexQuote = {symbol:string;name:string;price:number|null;previous_close:number|null;change_points:number|null;change_percent:number|null}
 type Indices = {indices:IndexQuote[];market:{is_open:boolean;checked_at:string}}
 type Alert = {id:number;ticker:string;period:string;change_percent:number;triggered_at:string}
@@ -188,18 +196,6 @@ function ProfileLogo({symbol,url,className='' }:{symbol:string;url?:string|null;
   return <img className={`profile-logo ${className}`} src={url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={()=>setFailed(true)}/>
 }
 
-function AuthChart({url,symbol}:{url:string;symbol:string}) {
-  const [src,setSrc] = useState<string|null>(null)
-  useEffect(()=>{
-    let active=true, objectUrl=''
-    fetch(url,{headers:{Authorization:`Bearer ${getToken()}`}}).then(response=>{if(!response.ok)throw new Error('chart unavailable');return response.blob()}).then(blob=>{
-      if(!active)return; objectUrl=URL.createObjectURL(blob);setSrc(objectUrl)
-    }).catch(()=>active&&setSrc(null))
-    return ()=>{active=false;if(objectUrl)URL.revokeObjectURL(objectUrl)}
-  },[url])
-  return src?<a href={src} target="_blank" rel="noreferrer"><img className="technical-chart" src={src} alt={`${symbol} 周线历史动态技术交叉热力图，绿色表示历史支撑交叉，红色表示历史压力交叉。`}/></a>:<div className="technical-chart-empty">图表缓存读取中…</div>
-}
-
 function TradingViewStockHeatmap() {
   const widgetRef = useRef<HTMLDivElement>(null)
 
@@ -340,7 +336,7 @@ function TechnicalAnalysisCenter() {
   const trendLabel:Record<string,string>={bullish:'偏多',bearish:'偏空',neutral:'中性'}
   const zone=(value:Zone|null|undefined)=>value?`$${value.low.toFixed(2)}–${value.high.toFixed(2)}`:'数据不足'
   return <div className="technical-workspace">
-    <div className="section-title"><div><p>FMP EOD · LOCAL CALCULATION</p><h2>周线技术分析</h2></div><small>图表与指标来自缓存，不会在页面打开时请求 FMP。</small></div>
+    <div className="section-title"><div><p>CACHED EOD · LOCAL CALCULATION</p><h2>交互式技术分析</h2></div><small>图表与指标来自数据库缓存，打开页面不会请求外部行情源。</small></div>
     <div className="technical-list">{list.data?.map(item=><button key={item.symbol} className={selected===item.symbol?'active':''} onClick={()=>setSelected(item.symbol)}>
       <ProfileLogo symbol={item.symbol} url={item.logo_url}/>
       <span className="tech-card-id"><b>{item.symbol}</b><small>{item.company_name||'公司资料待同步'}</small></span>
@@ -360,13 +356,31 @@ function TechnicalAnalysisCenter() {
           <div><span>ATR 14</span><b>{a.indicators.atr14?.toFixed(2)||'—'}</b></div>
         </div>
         <TechnicalLevelSummary latestClose={a.latestClose} heatmap={a.historicalCausalHeatmap}/>
-        {d.chart_url?<figure className="technical-chart-frame"><AuthChart url={d.chart_url} symbol={d.symbol}/><figcaption>周线级别 · 右侧延伸为当前仍有效的技术结构参考，并非价格预测 · 点击查看大图</figcaption></figure>:<div className="technical-chart-empty">图表尚未生成。</div>}
+        <figure className="technical-chart-frame">
+          <TechnicalChart
+            key={d.symbol}
+            symbol={d.symbol}
+            series={d.chart_series||{
+              day:{candles:[],moving_averages:{ma20:[],ma50:[]}},
+              week:{candles:d.weekly||[],moving_averages:d.moving_averages||{ma20:[],ma50:[]}},
+              month:{candles:[],moving_averages:{ma20:[],ma50:[]}},
+            }}
+            staticChartUrl={d.chart_url}
+            heatZones={a.historicalCausalHeatmap?.currentZones}
+            fibonacci={a.fibonacci}
+            trendLines={a.trendLines}
+            events={d.events}
+            portfolioCost={d.portfolio_cost}
+            initialPriceAlerts={d.price_alerts}
+          />
+          <figcaption>{d.chart_data_status==='ready'?'周线级别 · 数据来自本地历史缓存 · 均线由后端统一计算':'周线 OHLC 数据不足，未请求外部行情；静态缓存如可用仍可查看。'}</figcaption>
+        </figure>
         <TechnicalIndicatorPositions heatmap={a.historicalCausalHeatmap}/>
         <div className="technical-columns">
           <section><h3>支撑与阻力区域</h3><div className="zone-table">{[...a.supportZones,...a.resistanceZones].map(z=><div key={`${z.type}-${z.center}`}><b className={z.type==='support'?'positive':'negative'}>{z.type==='support'?'支撑':'阻力'}</b><span>{zone(z)}</span><span>{Math.round(z.strength*100)} 分</span><span>{z.touchCount} 次触及</span><time>{z.mostRecentTouchDate}</time></div>)}{![...a.supportZones,...a.resistanceZones].length&&<p>暂无已确认的支撑或阻力区域。</p>}</div></section>
           <section><h3>斐波那契与趋势线</h3>{a.fibonacci.available?<p>{a.fibonacci.direction==='up'?'上升':'下降'}主摆动；关键回撤位由最近已确认周线枢轴确定。</p>:<p>{a.fibonacci.omissionReason}</p>}{a.trendLines.map(line=><p key={line.type}>{line.type==='rising_support'?'上升支撑线':'下降阻力线'}投影 ${line.projectedPrice.toFixed(2)} · 置信度 {Math.round(line.confidence*100)}%</p>)}{a.omittedReasons.map(reason=><small key={reason}>{reason}</small>)}</section>
         </div>
-        <footer>来源：FMP 历史日线；本地确定性计算 · 图表生成 {d.generated_at&&formatDate(d.generated_at)}</footer>
+        <footer>来源：{d.chart_data_source==='yahoo'?'Yahoo':d.chart_data_source==='fmp'?'FMP':'数据不足'} 历史日线缓存；本地确定性计算 · 图表生成 {d.generated_at&&formatDate(d.generated_at)}</footer>
       </article>:<div className="empty">{detail.isLoading?'正在读取详情…':'历史数据或分析正在后台同步；已有有效缓存会继续保留。'}</div>}
     </Sheet>
   </div>
@@ -386,7 +400,7 @@ export default function App() {
   const [selectedStatementMetric,setSelectedStatementMetric] = useState<StatementMetric|null>(null)
   const [selectedProfileSymbol,setSelectedProfileSymbol] = useState<string|null>(null)
   const [stocksExpanded,setStocksExpanded] = useState(false)
-  const [activeTicker,setActiveTicker] = useState('')
+  const [activeTicker,setActiveTicker] = useState(()=>new URLSearchParams(window.location.search).get('symbol')||'')
   const client = useQueryClient()
   const live = !!authUser&&!demoMode
   const dashboard = useQuery({queryKey:['dashboard'],queryFn:()=>api<Dashboard>('/dashboard'),refetchInterval:30000,enabled:live})

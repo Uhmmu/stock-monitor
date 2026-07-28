@@ -6,8 +6,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-PROMPT_VERSION = "stock-discovery-prompt-v0.4"
-SCHEMA_VERSION = "stock-discovery-schema-v0.4"
+PROMPT_VERSION = "stock-discovery-prompt-v0.6"
+SCHEMA_VERSION = "stock-discovery-schema-v0.6"
 FILTER_VERSION = "stock-discovery-filter-v0.4"
 
 
@@ -161,9 +161,7 @@ class DiscoveryResult(StrictModel):
 
 
 class DiscoverySettingsUpdate(BaseModel):
-    model: str | None = Field(default=None, min_length=3, max_length=128)
-    enable_web_search: bool | None = None
-    max_steps: int | None = Field(default=None, ge=1, le=10)
+    discovery_mode: Literal["search_local", "agent_finance"] | None = None
     max_output_tokens: int | None = Field(default=None, ge=2048, le=32000)
     monthly_budget_usd: float | None = Field(default=None, ge=0, le=1000)
     max_run_cost_usd: float | None = Field(default=None, ge=0.01, le=100)
@@ -176,3 +174,33 @@ class DiscoverySettingsUpdate(BaseModel):
     max_price_to_sales: float | None = Field(default=None, ge=1, le=1000)
     filter_extreme_momentum: bool | None = None
     missing_data_policy: Literal["warn", "watch_only", "reject"] | None = None
+
+
+OpportunityCategory = Literal["估值错杀", "行业趋势", "盈利改善", "事件驱动", "技术反转", "长期成长"]
+OpportunityAction = Literal["关注", "深入研究", "等待确认"]
+
+
+class OpportunityEvidence(StrictModel):
+    type: Literal["financial", "news", "market"]
+    content: str = Field(min_length=1)
+
+
+class OpportunityAnalysis(StrictModel):
+    """The stable item persisted in opportunity_history.result_json."""
+
+    title: str = Field(min_length=1)
+    ticker: str = Field(min_length=1, max_length=32)
+    category: list[OpportunityCategory] = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    why_now: list[str] = Field(min_length=1)
+    evidence: list[OpportunityEvidence] = Field(min_length=1)
+    catalysts: list[str]
+    risks: list[str] = Field(min_length=1)
+    valuation_view: str = Field(min_length=1)
+    confidence: int = Field(ge=0, le=100)
+    action: list[OpportunityAction] = Field(min_length=1)
+
+
+class OpportunityBatch(StrictModel):
+    market_condition: str = Field(min_length=1)
+    opportunities: list[OpportunityAnalysis] = Field(min_length=1, max_length=12)

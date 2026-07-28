@@ -24,6 +24,8 @@ from app.services.discovery.service import (
     discovery_settings,
     latest_discovery_payload,
     monthly_spend,
+    opportunity_history_detail,
+    opportunity_history_list,
     settings_payload,
     update_discovery_settings,
 )
@@ -62,6 +64,25 @@ def discovery_history(
     return [discovery_run_payload(db, run, include_candidates=False) for run in runs]
 
 
+@router.get("/history")
+def opportunity_history(
+    limit: int = Query(default=30, ge=1, le=100),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return opportunity_history_list(db, user.id, limit)
+
+
+@router.get("/history/{history_id}")
+def opportunity_history_report(
+    history_id: int,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    payload = opportunity_history_detail(db, user.id, history_id)
+    if payload is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "未找到该历史机会")
+    return payload
+
+
 @router.get("/runs/{run_id}")
 def discovery_run(run_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return discovery_run_payload(db, _owned_run(db, user.id, run_id))
@@ -69,8 +90,18 @@ def discovery_run(run_id: int, user: User = Depends(get_current_user), db: Sessi
 
 @router.post("/refresh", status_code=status.HTTP_202_ACCEPTED)
 def discovery_refresh(payload: RefreshIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not get_settings().perplexity_api_key.strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "无法运行：尚未配置 Perplexity API Key。")
+    settings = get_settings()
+    config = discovery_settings(db, user.id)
+    missing = []
+    if not settings.perplexity_api_key.strip():
+        missing.append("Perplexity API Key")
+    if config.discovery_mode == "search_local" and not settings.openai_api_key.strip():
+        missing.append("OPENAI_API_KEY")
+    if missing:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"无法运行：尚未配置{'、'.join(missing)}。",
+        )
     portfolio = get_or_create_default_portfolio(db, user.id)
     try:
         run, should_queue = create_discovery_run(db, portfolio, user.id)

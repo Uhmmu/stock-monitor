@@ -11,6 +11,7 @@ from app.auth import get_current_user
 from app.database import get_db
 from app.models import (
     InvestmentCalendarEvent,
+    InvestmentCalendarSyncRun,
     Sec13FHolding,
     SecInsiderTrade,
     Security,
@@ -21,6 +22,7 @@ from app.models import (
 from app.services.investment_calendar import (
     EVENT_TYPES,
     calendar_capabilities,
+    calendar_provider_capabilities,
     relevance_context,
     serialize_event,
 )
@@ -205,9 +207,70 @@ def _calendar_query(
 def calendar_capability_report():
     return {
         "capabilities": calendar_capabilities(),
-        "providers": {"yahoo": ["earnings", "dividend", "splits"]},
+        "providers": calendar_provider_capabilities(),
         "analyzer_version": "v0.4",
         "parameter_set_version": "v0.4",
+    }
+
+
+@router.get("/calendar/status")
+def calendar_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    today = datetime.now(UTC).date()
+    held, watchlist, _ = relevance_context(db, user.id)
+    relevant = held | watchlist
+    tracked_count = len(relevant)
+    future_earnings_symbols = 0
+    next_30_day_symbols = 0
+    if relevant:
+        future_earnings_symbols = db.scalar(select(func.count(func.distinct(
+            InvestmentCalendarEvent.symbol
+        ))).where(
+            InvestmentCalendarEvent.status == "active",
+            InvestmentCalendarEvent.event_type == "earnings",
+            InvestmentCalendarEvent.symbol.in_(relevant),
+            InvestmentCalendarEvent.event_date.between(today, today + timedelta(days=120)),
+        )) or 0
+        next_30_day_symbols = db.scalar(select(func.count(func.distinct(
+            InvestmentCalendarEvent.symbol
+        ))).where(
+            InvestmentCalendarEvent.status == "active",
+            InvestmentCalendarEvent.symbol.in_(relevant),
+            InvestmentCalendarEvent.event_date.between(today, today + timedelta(days=30)),
+        )) or 0
+    latest = db.scalar(select(InvestmentCalendarSyncRun).order_by(
+        InvestmentCalendarSyncRun.started_at.desc(),
+        InvestmentCalendarSyncRun.id.desc(),
+    ).limit(1))
+    last_successful = db.scalar(select(InvestmentCalendarSyncRun).where(
+        InvestmentCalendarSyncRun.status.in_(("succeeded", "partial")),
+        InvestmentCalendarSyncRun.successful_symbols > 0,
+    ).order_by(
+        InvestmentCalendarSyncRun.completed_at.desc(),
+        InvestmentCalendarSyncRun.id.desc(),
+    ).limit(1))
+    return {
+        "scope": "tracked",
+        "tracked_symbols": tracked_count,
+        "future_earnings_symbols": future_earnings_symbols,
+        "earnings_coverage_percent": round(
+            future_earnings_symbols / tracked_count * 100, 1
+        ) if tracked_count else 0,
+        "next_30_day_symbols": next_30_day_symbols,
+        "providers": calendar_provider_capabilities(),
+        "latest_run": {
+            "id": latest.id,
+            "status": latest.status,
+            "started_at": latest.started_at,
+            "completed_at": latest.completed_at,
+            "successful_symbols": latest.successful_symbols,
+            "tracked_symbols": latest.tracked_symbols,
+            "events_seen": latest.events_seen,
+            "provider_counts": latest.provider_counts,
+            "failures": latest.failures,
+            "error_type": latest.error_type,
+        } if latest else None,
+        "last_successful_sync_at": last_successful.completed_at if last_successful else None,
+        "generated_at": datetime.now(UTC),
     }
 
 
@@ -230,8 +293,9 @@ def calendar_events(
         raise HTTPException(422, "日期范围无效或超过 366 天")
     if portfolio_only and watchlist_only:
         raise HTTPException(422, "持仓与自选股范围不能同时设为仅限")
-    if provider and provider != "yahoo":
-        raise HTTPException(422, "当前仅支持 yahoo 调试覆盖")
+    supported_providers = set(calendar_provider_capabilities()) | {"yfinance"}
+    if provider and provider not in supported_providers:
+        raise HTTPException(422, "不支持的数据源筛选")
     held, watchlist, weights = relevance_context(db, user.id)
     query = _calendar_query(db, start_date=start_date, end_date=end_date, symbols=symbols, event_types=event_types)
     if provider:

@@ -111,6 +111,137 @@ def aggregate_weekly(daily: Iterable[Any]) -> list[dict]:
     return output
 
 
+def aggregate_monthly(daily: Iterable[Any]) -> list[dict]:
+    groups: dict[tuple[int, int], list[dict]] = defaultdict(list)
+    for item in daily:
+        get = item.get if isinstance(item, dict) else lambda key: getattr(item, key)
+        try:
+            day, o, h, low, close = (
+                get("date"),
+                _f(get("open")),
+                _f(get("high")),
+                _f(get("low")),
+                _f(get("close")),
+            )
+        except (AttributeError, KeyError):
+            continue
+        if not isinstance(day, date) or None in (o, h, low, close):
+            continue
+        groups[(day.year, day.month)].append(
+            {
+                "date": day,
+                "open": o,
+                "high": h,
+                "low": low,
+                "close": close,
+                "volume": max(0, int(get("volume") or 0)),
+            }
+        )
+    output = []
+    for year_month in sorted(groups):
+        rows = sorted(groups[year_month], key=lambda row: row["date"])
+        output.append(
+            {
+                "time": date(year_month[0], year_month[1], 1),
+                "open": rows[0]["open"],
+                "high": max(row["high"] for row in rows),
+                "low": min(row["low"] for row in rows),
+                "close": rows[-1]["close"],
+                "volume": sum(row["volume"] for row in rows),
+            }
+        )
+    return output
+
+
+def _chart_series_payload(rows: list[dict], time_key: str) -> dict:
+    closes = [row["close"] for row in rows]
+    moving_averages: dict[str, list[dict]] = {}
+    for period in (20, 50):
+        moving_averages[f"ma{period}"] = [
+            {"time": row[time_key].isoformat(), "value": float(value)}
+            for row, value in zip(rows, sma(closes, period))
+            if value is not None
+        ]
+    return {
+        "candles": [
+            {
+                "time": row[time_key].isoformat(),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": int(row["volume"]),
+            }
+            for row in rows
+        ],
+        "moving_averages": moving_averages,
+    }
+
+
+def build_weekly_chart_data(rows: Iterable[Any], source: str | None = None) -> dict:
+    """Build the interactive-chart payload from cached daily history only."""
+    cached_rows = list(rows)
+    weekly = aggregate_weekly(cached_rows)[-156:]
+    if not weekly:
+        return {
+            "chart_data_status": "insufficient",
+            "chart_data_reason": "historical_data_unavailable",
+            "chart_data_source": source,
+            "weekly": [],
+            "moving_averages": {"ma20": [], "ma50": []},
+            "chart_series": {
+                "day": {"candles": [], "moving_averages": {"ma20": [], "ma50": []}},
+                "week": {"candles": [], "moving_averages": {"ma20": [], "ma50": []}},
+                "month": {"candles": [], "moving_averages": {"ma20": [], "ma50": []}},
+            },
+        }
+
+    daily = []
+    for item in cached_rows[-780:]:
+        try:
+            day = item["date"] if isinstance(item, dict) else item.date
+            get = item.get if isinstance(item, dict) else lambda key: getattr(item, key)
+            values = {
+                "time": day,
+                "open": _f(get("open")),
+                "high": _f(get("high")),
+                "low": _f(get("low")),
+                "close": _f(get("close")),
+                "volume": max(0, int(get("volume") or 0)),
+            }
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
+        if isinstance(day, date) and None not in (
+            values["open"],
+            values["high"],
+            values["low"],
+            values["close"],
+        ):
+            daily.append(values)
+    monthly = aggregate_monthly(cached_rows)[-120:]
+    weekly_payload = _chart_series_payload(weekly, "week")
+    chart_series = {
+        "day": _chart_series_payload(daily, "time"),
+        "week": weekly_payload,
+        "month": _chart_series_payload(monthly, "time"),
+    }
+
+    return {
+        "chart_data_status": "ready",
+        "chart_data_reason": None,
+        "chart_data_source": source,
+        "weekly": weekly_payload["candles"],
+        "moving_averages": weekly_payload["moving_averages"],
+        "chart_series": chart_series,
+    }
+
+
+def load_cached_weekly_chart_data(db: Session, symbol: str) -> dict:
+    """Read chart data from HistoricalPrice without performing an upstream fetch."""
+    rows, source = _load_history(db, symbol)
+    return build_weekly_chart_data(rows, source)
+
+
 def sma(values: list[float], period: int) -> list[float | None]:
     return [
         None if index + 1 < period else mean(values[index + 1 - period : index + 1])

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 
@@ -10,26 +11,37 @@ from sqlalchemy.orm import Session
 from app.database import Base
 from app.models import (
     Portfolio,
+    OpportunityHistory,
+    NewsItem,
     StockDiscoveryCandidate,
     StockDiscoveryCandidateGroup,
     StockDiscoveryCandidateGroupMembership,
     StockDiscoveryCandidateMetric,
     StockDiscoveryRun,
+    StockDiscoveryPortfolioSnapshot,
     StockDiscoverySettings,
     StockDiscoverySource,
     User,
+    WatchlistItem,
 )
 from app.services.discovery.context import build_portfolio_context
+from app.services.discovery.analysis import parse_opportunity_output
 from app.services.discovery.locks import discovery_lock
 from app.services.discovery.normalization import apply_filters, enrich_candidate, normalize_ticker
-from app.services.discovery.perplexity import PerplexityResponseError, build_request, parse_agent_response, response_schema
-from app.services.discovery.schemas import DiscoveryResult
+from app.services.discovery.schemas import DiscoveryResult, OpportunityBatch
+from app.services.discovery.perplexity import AgentResult, build_request
+from app.services.discovery.search import build_search_queries, run_search
 from app.services.discovery.service import (
+    _as_legacy_result,
     _persist_annotations,
     _persist_candidates,
     _persist_tool_sources,
     create_discovery_run,
+    execute_discovery_run,
+    estimate_max_cost,
     latest_discovery_payload,
+    opportunity_history_detail,
+    opportunity_history_list,
     settings_payload,
 )
 
@@ -68,33 +80,119 @@ def _structured_result():
     }
 
 
-def test_request_uses_agent_structured_output_and_finance_search():
-    request = build_request(context={"holdings": []}, model="openai/gpt-5.4-mini", max_steps=5, max_output_tokens=12000, enable_web_search=True)
+def _opportunity_batch():
+    return {
+        "market_condition": "市场分化，事件驱动机会增加",
+        "opportunities": [{
+            "title": "支付数据需求改善",
+            "ticker": "SPGI",
+            "category": ["盈利改善", "长期成长"],
+            "summary": "评级与数据业务需求改善，值得进一步研究",
+            "why_now": ["近期管理层指引与分析师预期改善"],
+            "evidence": [
+                {"type": "news", "content": "公司更新了业务展望"},
+                {"type": "financial", "content": "本地现金流快照保持正值"},
+            ],
+            "catalysts": ["下一次财报确认利润率改善"],
+            "risks": ["估值仍可能偏高"],
+            "valuation_view": "需以本地估值快照进一步核对",
+            "confidence": 78,
+            "action": ["深入研究"],
+        }],
+    }
+
+
+def test_local_engine_normalizes_endpoint_shape_seen_in_production():
+    payload = {
+        "market_condition": "市场分化",
+        "excluded_current_holdings": ["META"],
+        "limitations": ["部分数据不足"],
+        "opportunities": [{
+            "ticker": "WM",
+            "company_name": "Waste Management",
+            "sector": "Industrials",
+            "thesis": {"fact": "现金流保持正值", "inference": "防御属性值得研究"},
+            "why_now": "工业板块关注度改善",
+            "evidence": [
+                {"type": "market", "fact": "资金关注上升", "source": "search"},
+                {"type": "financial", "fact": "本地自由现金流为正", "source": "local_data"},
+            ],
+            "key_risks": ["估值偏高"],
+            "research_questions": ["利润率能否维持"],
+            "confidence": .8,
+            "action": "深入研究",
+        }],
+    }
+    parsed = parse_opportunity_output(json.dumps(payload, ensure_ascii=False))
+    item = parsed.opportunities[0]
+    assert item.ticker == "WM"
+    assert item.confidence == 80
+    assert item.why_now == ["工业板块关注度改善"]
+    assert item.evidence[0].content == "资金关注上升"
+    assert item.action == ["深入研究"]
+
+
+def test_search_queries_exclude_existing_fundamental_lookups():
+    queries = build_search_queries({"current_watchlist": ["SPGI"], "portfolio_summary": {}})
+    text = " ".join(queries).lower()
+    assert "why-now" in text
+    assert "quantitative fundamentals are provided locally" in text
+    assert "current price" not in text and "market cap" not in text
+    assert len(queries) == 5
+
+
+def test_agent_mode_keeps_finance_search_and_gpt54():
+    request = build_request(
+        context={"local_news_summaries": [{"title": "Event", "summary": "概要"}]},
+        model="openai/gpt-5.4",
+        max_steps=5,
+        max_output_tokens=12000,
+        enable_web_search=True,
+    )
+    assert request["model"] == "openai/gpt-5.4"
     assert request["tools"] == [{"type": "finance_search"}, {"type": "web_search"}]
-    assert request["response_format"]["type"] == "json_schema"
-    assert request["store"] is False
-    assert "$ref" not in str(response_schema())
+    assert "概要" in request["input"]
 
 
-def test_agent_response_parser_walks_output_and_preserves_tool_results():
-    payload = {"status": "completed", "model": "openai/gpt-5.4-mini",
-        "output": [
-            {"type": "finance_results", "results": [{"category": "quote", "tickers": ["SPGI"], "sources": ["https://www.perplexity.ai/finance/SPGI"]}]},
-            {"type": "search_results", "results": [{"title": "Flow", "url": "https://example.com/flow"}]},
-            {"type": "message", "content": [{"type": "output_text", "text": __import__("json").dumps(_structured_result())}]},
-        ], "usage": {"input_tokens": 100, "output_tokens": 200, "total_tokens": 300,
-            "cost": {"input_cost": .001, "output_cost": .002, "tool_calls_cost": .01, "total_cost": .013}}}
-    result = parse_agent_response(payload)
-    assert result.parsed.candidate_groups[0].candidates[0].ticker == "SPGI"
-    assert result.finance_search_calls == 1 and result.web_search_calls == 1
-    assert len(result.tool_results) == 2
-    assert result.model_cost_usd == pytest.approx(.003)
-    assert result.total_cost_usd == pytest.approx(.013)
+def test_mode_specific_cost_estimate():
+    local = StockDiscoverySettings(
+        user_id=1, discovery_mode="search_local", model="openai/gpt-5.4",
+        max_steps=5, max_output_tokens=12000, enable_web_search=True,
+    )
+    agent = StockDiscoverySettings(
+        user_id=1, discovery_mode="agent_finance", model="openai/gpt-5.4",
+        max_steps=5, max_output_tokens=12000, enable_web_search=True,
+    )
+    assert estimate_max_cost({"holdings": []}, local) == pytest.approx(.005)
+    assert estimate_max_cost({"holdings": []}, agent) > .1
 
 
-def test_invalid_structured_output_is_not_accepted():
-    with pytest.raises(PerplexityResponseError):
-        parse_agent_response({"status": "completed", "model": "x", "output": [{"type": "message", "content": [{"type": "output_text", "text": "{}"}]}]})
+def test_raw_search_api_request_contains_no_model(monkeypatch):
+    class Response:
+        status_code = 200
+        def json(self):
+            return {"results": [{"title": "Event", "url": "https://example.com/event", "snippet": "why now"}]}
+    captured = {}
+    monkeypatch.setattr("app.services.discovery.search.get_settings", lambda: type("S", (), {
+        "perplexity_api_key": "key", "perplexity_search_url": "https://api.perplexity.ai/search",
+        "perplexity_request_timeout_seconds": 10,
+    })())
+    monkeypatch.setattr("app.services.discovery.search.httpx.post",
+        lambda *args, **kwargs: (captured.update(kwargs.get("json") or {}) or Response()))
+    result = run_search(["recent event"])
+    assert result.results[0]["url"] == "https://example.com/event"
+    assert "model" not in captured and "tools" not in captured
+    assert result.cost_usd == pytest.approx(.005)
+
+
+def test_fixed_opportunity_schema_adapts_to_local_verification_pipeline():
+    batch = OpportunityBatch.model_validate(_opportunity_batch())
+    parsed = _as_legacy_result(batch)
+    candidate = parsed.candidate_groups[0].candidates[0]
+    assert candidate.ticker == "SPGI"
+    assert candidate.confidence == pytest.approx(.78)
+    assert candidate.financial_snapshot.price is None
+    assert "管理层指引" in candidate.why_now
 
 
 def test_portfolio_context_is_compact_and_excludes_identifiers(db, owner):
@@ -105,6 +203,24 @@ def test_portfolio_context_is_compact_and_excludes_identifiers(db, owner):
     assert "user_id" not in str(context) and "account" not in str(context)
     __import__("json").dumps(context)
     assert len(digest) == 64
+
+
+def test_local_news_title_and_summary_are_in_analysis_context(db, owner):
+    user, portfolio = owner
+    db.add(WatchlistItem(ticker="SPGI", enabled=True))
+    db.add(NewsItem(
+        ticker="SPGI", provider="finnhub", fingerprint="news-summary",
+        scope="company", title="Original title", translated_title="中文标题",
+        url="https://example.com/news", summary="供应商概要", ai_summary="AI 新闻概要",
+        ai_summary_status="completed", published_at=datetime.now(UTC),
+    ))
+    db.commit()
+    context, _ = build_portfolio_context(db, portfolio, user.id)
+    from app.services.discovery.context import build_local_research_context
+    enriched = build_local_research_context(db, context)
+    news = enriched["local_news_summaries"][0]
+    assert news["title"] == "中文标题"
+    assert news["summary"] == "AI 新闻概要"
 
 
 @pytest.mark.parametrize("raw,exchange,expected", [
@@ -186,6 +302,68 @@ def test_failed_run_keeps_previous_success_visible(db, owner):
     assert "is_fresh" not in payload
 
 
+def test_opportunity_history_is_persistent_and_user_scoped(db, owner):
+    user, portfolio = owner
+    run = StockDiscoveryRun(
+        user_id=user.id, portfolio_id=portfolio.id, idempotency_key="history-run",
+        status="completed", stage="completed", requested_at=datetime.now(UTC),
+        completed_at=datetime.now(UTC), analysis_date=date.today(),
+        model_requested="gpt-5.6-sol", model_used="gpt-5.6-sol",
+        portfolio_snapshot_hash="h" * 64,
+    )
+    db.add(run); db.flush()
+    row = OpportunityHistory(
+        user_id=user.id, run_id=run.id,
+        query_context={"queries": ["recent events"]},
+        market_condition="市场分化",
+        result_json=_opportunity_batch(),
+        model_version="gpt-5.6-sol",
+        search_source="perplexity_search",
+    )
+    db.add(row); db.commit()
+    history = opportunity_history_list(db, user.id)
+    assert history[0]["tickers"] == ["SPGI"]
+    assert history[0]["max_confidence"] == 78
+    assert opportunity_history_detail(db, user.id, row.id)["opportunities"][0]["category"] == ["盈利改善", "长期成长"]
+    assert opportunity_history_detail(db, user.id + 999, row.id) is None
+
+
+def test_finance_agent_mode_executes_original_pipeline_and_writes_history(db, owner, monkeypatch):
+    user, portfolio = owner
+    settings = StockDiscoverySettings(
+        user_id=user.id, discovery_mode="agent_finance", model="openai/gpt-5.4",
+        max_steps=5, max_output_tokens=12000, enable_web_search=True,
+    )
+    run = StockDiscoveryRun(
+        user_id=user.id, portfolio_id=portfolio.id, idempotency_key="agent-run",
+        trigger="manual", discovery_mode="agent_finance", status="pending",
+        stage="preparing_portfolio", requested_at=datetime.now(UTC),
+        model_requested="openai/gpt-5.4", portfolio_snapshot_hash="z" * 64,
+    )
+    db.add_all([settings, run]); db.flush()
+    db.add(StockDiscoveryPortfolioSnapshot(
+        run_id=run.id, context_hash="z" * 64, payload={"holdings": [], "current_watchlist": []},
+    ))
+    db.commit()
+    parsed = DiscoveryResult.model_validate(_structured_result())
+    result = AgentResult(
+        parsed=parsed, raw_response={"status": "completed"}, output_text="{}",
+        tool_results=[], model="openai/gpt-5.4", usage={},
+        finance_search_calls=2, web_search_calls=1,
+        input_tokens=100, output_tokens=200, total_tokens=300,
+        tool_cost_usd=.015, model_cost_usd=.1, total_cost_usd=.115,
+    )
+    monkeypatch.setattr("app.services.discovery.service.build_local_research_context", lambda _db, context: context)
+    monkeypatch.setattr("app.services.discovery.service.run_agent", lambda request: result)
+    monkeypatch.setattr("app.services.discovery.service._persist_candidates", lambda *_: [])
+    completed = execute_discovery_run(db, run.id)
+    assert completed.status == "completed"
+    assert completed.model_used == "openai/gpt-5.4"
+    history = opportunity_history_list(db, user.id)[0]
+    assert history["search_source"] == "perplexity_finance_agent"
+    assert history["tickers"] == ["SPGI"]
+
+
 def test_candidate_persistence_deduplicates_groups_and_applies_local_verification(db, owner, monkeypatch):
     user, portfolio = owner
     config = StockDiscoverySettings(user_id=user.id)
@@ -194,6 +372,10 @@ def test_candidate_persistence_deduplicates_groups_and_applies_local_verificatio
         model_requested="model", portfolio_snapshot_hash="c" * 64)
     db.add_all([config, run]); db.commit(); db.refresh(run)
     payload = _structured_result()
+    payload["candidate_groups"][0]["candidates"][0]["financial_snapshot"]["data_periods"] = [
+        "price/marketCap as of 2026-07-24",
+        "local research financial period 2026-03-31 / 2025-09-30",
+    ]
     duplicate_group = {**payload["candidate_groups"][0], "group_name": "重复分组"}
     payload["candidate_groups"].append(duplicate_group)
     parsed = DiscoveryResult.model_validate(payload)
@@ -221,6 +403,7 @@ def test_candidate_persistence_deduplicates_groups_and_applies_local_verificatio
     )).all()
     assert {row.source for row in pe_rows if row.is_preferred} == {"yfinance"}
     assert all(row.has_discrepancy for row in pe_rows)
+    assert all(row.data_period is None or len(row.data_period) <= 64 for row in pe_rows)
 
 
 def test_source_extraction_preserves_finance_tools_and_message_annotations(db, owner):

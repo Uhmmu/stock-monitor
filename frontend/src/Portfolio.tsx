@@ -3,6 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, post } from './api'
 import { Sheet } from './Sheet'
 import { SecuritySearchAutocomplete, securityPayload, type SecuritySearchResult } from './SecuritySearchAutocomplete'
+import { PortfolioRiskAnalysis } from './PortfolioAnalysis'
+import { ScenarioAnalysisView, StressTestView } from './PortfolioScenarios'
+import { MonteCarloView } from './PortfolioMonteCarlo'
+import { PortfolioOptimizationView } from './PortfolioOptimization'
+import { PortfolioAnalysisHistory } from './PortfolioAnalysisHistory'
 
 // ── 持仓模块类型 ──────────────────────────────────────────────
 type PositionView = {
@@ -229,7 +234,7 @@ export const fmtHealthScore = (value:number|null) => value==null?'数据不足':
 const typeLabel:Record<string,string> = {buy:'买入',sell:'卖出',dividend:'股息',fee:'费用',deposit:'转入现金',withdrawal:'转出现金',split:'拆股',transfer_in:'转入',transfer_out:'转出'}
 const trendLabel:Record<string,string> = {uptrend:'上升趋势',downtrend:'下降趋势',range:'区间震荡',unknown:'趋势不明'}
 const volLabel:Record<string,string> = {expanding:'波动扩大',contracting:'波动收窄',normal:'波动正常',unknown:'数据不足'}
-type PortfolioTab = 'overview'|'positions'|'technical'|'health'|'transactions'
+type PortfolioTab = 'overview'|'positions'|'technical'|'health'|'stress'|'scenario'|'monte-carlo'|'optimization'|'history'
 
 function emptyManualForm(today:string) {
   return {symbol:'',price:'',quantity:'',trade_date:today,fees:'0',currency:'USD',account:'',note:''}
@@ -250,7 +255,7 @@ export function PortfolioModule() {
   const benchmark = useQuery({queryKey:['portfolio-benchmark'],queryFn:()=>api<PortfolioBenchmark>('/portfolio/benchmark'),enabled:subtab==='overview',staleTime:15*60_000,refetchInterval:15*60_000})
   const health = useQuery({queryKey:['portfolio-health'],queryFn:()=>api<PortfolioHealth>('/portfolio/health'),enabled:subtab==='health',staleTime:60_000})
   const interpretation = useQuery({queryKey:['portfolio-interpretation'],queryFn:()=>api<PersonalizedInterpretation>('/portfolio/interpretation'),enabled:subtab==='health',staleTime:60_000})
-  const transactions = useQuery({queryKey:['portfolio-transactions'],queryFn:()=>api<TransactionRow[]>('/portfolio/transactions'),enabled:subtab==='transactions'})
+  const transactions = useQuery({queryKey:['portfolio-transactions'],queryFn:()=>api<TransactionRow[]>('/portfolio/transactions'),enabled:subtab==='history'})
   const detail = useQuery({queryKey:['portfolio-technical',detailSymbol],queryFn:()=>api<PositionTechnical>(`/portfolio/positions/${detailSymbol}/technical`),enabled:!!detailSymbol})
 
   const resetEntry = () => {setEntryOpen(false);setEntrySecurity(null);setEntryForm(emptyManualForm(today))}
@@ -313,7 +318,7 @@ export function PortfolioModule() {
   })
 
   const s = summary.data
-  const subtabs:[PortfolioTab,string][] = [['overview','总览'],['positions','持仓明细'],['technical','技术位置'],['health','组合健康'],['transactions','交易记录']]
+  const subtabs:[PortfolioTab,string][] = [['overview','持仓概览'],['health','风险体检'],['stress','压力测试'],['scenario','情景分析'],['monte-carlo','蒙特卡洛'],['optimization','组合优化'],['history','历史记录']]
   const openTab = (key:PortfolioTab) => {
     if(key==='technical'&&!detailSymbol&&s?.positions[0]) setDetailSymbol(s.positions[0].symbol)
     setSubtab(key)
@@ -390,9 +395,16 @@ export function PortfolioModule() {
 
     {subtab==='technical'&&technicalContent}
 
-    {subtab==='health'&&healthContent}
+    {subtab==='health'&&s&&<PortfolioRiskAnalysis portfolioId={s.portfolio_id} currency={s.base_currency} healthContent={healthContent}/>}
 
-    {subtab==='transactions'&&<div className="portfolio-transactions">
+    {subtab==='stress'&&s&&<StressTestView portfolioId={s.portfolio_id}/>}
+    {subtab==='scenario'&&s&&<ScenarioAnalysisView portfolioId={s.portfolio_id}/>}
+    {subtab==='monte-carlo'&&s&&<MonteCarloView portfolioId={s.portfolio_id}/>}
+    {subtab==='optimization'&&s&&<PortfolioOptimizationView portfolioId={s.portfolio_id} symbols={s.positions.map(row=>row.symbol)}/>}
+
+    {subtab==='history'&&<div className="portfolio-transactions">
+      <PortfolioAnalysisHistory/>
+      <div className="portfolio-health-heading"><div><small>TRANSACTIONS</small><h3>交易记录</h3></div></div>
       <div className="table portfolio-txn-table">
         <div className="table-head portfolio-txn-row"><span>日期</span><span>代码</span><span>类型</span><span>数量</span><span>价格</span><span>手续费</span><span>账户</span><span></span></div>
         {transactions.data?.map(t=><div key={t.id} className="table-row portfolio-txn-row">

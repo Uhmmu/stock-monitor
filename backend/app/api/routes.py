@@ -42,6 +42,7 @@ from app.models import (
     StockProfile,
     TechnicalAnalysis,
     TemporarySnapshot,
+    UserPriceAlert,
     WatchlistItem,
     WeeklyNewsArchive,
 )
@@ -57,6 +58,7 @@ from app.schemas import (
     TradeLogCreate,
     TradeLogOut,
     TradeLogUpdate,
+    UserPriceAlertCreate,
     WatchlistCreate,
     WatchlistOut,
     WatchlistUpdate,
@@ -69,6 +71,10 @@ from app.services.stock_management import normalize_ticker, stock_management_pay
 from app.services.securities import SecuritySearchUnavailable, provider_symbol, resolve_security, search_securities
 from app.services.llm import summarize_trade_log
 from app.services.market_calendar import market_status
+from app.services.technical_chart_context import (
+    build_technical_chart_context,
+    price_alert_out,
+)
 from app.services.volume_stats import volume_context
 
 public_router = APIRouter(prefix="/api")
@@ -313,9 +319,14 @@ def technical_analysis_list(db: Session = Depends(get_db)):
 
 
 @router.get("/technical-analysis/{symbol}")
-def technical_analysis_detail(symbol: str, db: Session = Depends(get_db)):
+def technical_analysis_detail(
+    symbol: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     value = _require_watched_ticker(db, symbol)
     result = _technical_out(db, value, db.get(TechnicalAnalysis, value))
+    result.update(build_technical_chart_context(db, value, user.id))
     result["profile"] = _profile_out(db, value, db.get(CompanyProfile, value))
     oldest = db.scalar(select(HistoricalPrice.date).where(HistoricalPrice.symbol == value).order_by(HistoricalPrice.date).limit(1))
     newest = db.scalar(select(HistoricalPrice.date).where(HistoricalPrice.symbol == value).order_by(HistoricalPrice.date.desc()).limit(1))
@@ -324,6 +335,80 @@ def technical_analysis_detail(symbol: str, db: Session = Depends(get_db)):
                              "last_successful_sync": result.get("generated_at"),
                              "profile_status": result["profile"]["status"], "analysis_status": result["status"]}
     return result
+
+
+@router.get("/technical-analysis/{symbol}/price-alerts")
+def technical_price_alerts(
+    symbol: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    value = _require_watched_ticker(db, symbol)
+    rows = db.scalars(
+        select(UserPriceAlert)
+        .where(UserPriceAlert.user_id == user.id, UserPriceAlert.ticker == value)
+        .order_by(UserPriceAlert.created_at.desc(), UserPriceAlert.id.desc())
+    ).all()
+    return [price_alert_out(row) for row in rows]
+
+
+@router.post(
+    "/technical-analysis/{symbol}/price-alerts",
+    status_code=status.HTTP_201_CREATED,
+)
+def technical_price_alert_create(
+    symbol: str,
+    payload: UserPriceAlertCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    value = _require_watched_ticker(db, symbol)
+    existing = db.scalar(
+        select(UserPriceAlert).where(
+            UserPriceAlert.user_id == user.id,
+            UserPriceAlert.ticker == value,
+            UserPriceAlert.target_price == payload.target_price,
+            UserPriceAlert.direction == payload.direction,
+            UserPriceAlert.enabled.is_(True),
+        )
+    )
+    if existing:
+        return price_alert_out(existing)
+    row = UserPriceAlert(
+        user_id=user.id,
+        ticker=value,
+        target_price=payload.target_price,
+        direction=payload.direction,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return price_alert_out(row)
+
+
+@router.delete(
+    "/technical-analysis/{symbol}/price-alerts/{alert_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def technical_price_alert_delete(
+    symbol: str,
+    alert_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    value = _require_watched_ticker(db, symbol)
+    row = db.scalar(
+        select(UserPriceAlert).where(
+            UserPriceAlert.id == alert_id,
+            UserPriceAlert.user_id == user.id,
+            UserPriceAlert.ticker == value,
+        )
+    )
+    if not row:
+        raise HTTPException(404, "未找到该价格提醒")
+    db.delete(row)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/technical-analysis/{symbol}/chart")

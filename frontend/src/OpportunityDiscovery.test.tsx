@@ -33,11 +33,14 @@ describe('机会发现候选展示', () => {
     const result={
       id:1,status:'completed',stage:'completed',trigger:'manual',requested_at:'2026-07-24T00:00:00Z',started_at:'2026-07-24T00:00:01Z',completed_at:'2026-07-24T00:01:00Z',analysis_date:'2026-07-24',next_scheduled_at:null,
       model_requested:'openai/gpt-5.4-mini',model_used:'openai/gpt-5.4-mini',prompt_version:'stock-discovery-prompt-v0.4',schema_version:'stock-discovery-schema-v0.4',filter_version:'stock-discovery-filter-v0.4',warnings:[],failure_code:null,failure_reason:null,previous_successful_run_id:null,
-      usage:{input_tokens:100,output_tokens:200,total_tokens:300,finance_search_calls:3,web_search_calls:1,tool_cost_usd:.02,model_cost_usd:.01,total_cost_usd:.03},
+      discovery_mode:'search_local' as const,
+      usage:{input_tokens:100,output_tokens:200,total_tokens:300,finance_search_calls:0,web_search_calls:1,tool_cost_usd:.02,model_cost_usd:0,total_cost_usd:.03},
       market_context:{},portfolio_diagnosis:{overweight:[],missing:[],strength:[],vulnerability:[]},capital_flows:{strong:[],early:[]},groups:[],raw_candidates:[],filtered_candidates:[],counts:{raw:0,accepted:0,watch_only:0,rejected:0},portfolio_actions:[],limitations:[],
     }
     const html=renderToStaticMarkup(<DiscoveryRunMetadata result={result}/>)
-    expect(html).toContain('金融搜索次数')
+    expect(html).toContain('Search API 请求')
+    expect(html).toContain('本机端点输入 / 输出 token')
+    expect(html).toContain('>0</dd>')
     expect(html).toContain('$0.0300')
     expect(discoveryStatusText(result.status)).toBe('已完成')
   })

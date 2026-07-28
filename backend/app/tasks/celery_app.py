@@ -20,6 +20,7 @@ from app.models import (
     FmpSyncState,
     Investigation,
     InvestigationStatus,
+    InvestmentCalendarSyncRun,
     NewsItem,
     PriceSnapshot,
     PortfolioPosition,
@@ -39,7 +40,7 @@ from app.models import (
     WeeklyNewsArchive,
 )
 from app.services import archive
-from app.services.alerting import evaluate_quote
+from app.services.alerting import evaluate_quote, evaluate_user_price_alerts
 from app.services.financials import quarters_from_yf
 from app.services.sec_edgar import fetch_filings
 from app.services.market_context import build_market_context
@@ -76,7 +77,12 @@ celery_app.conf.beat_schedule = {
     "advance-investigations": {"task": "app.tasks.celery_app.advance_investigations", "schedule": 60},
     "scheduled-reports": {"task": "app.tasks.celery_app.scheduled_reports", "schedule": 300},
     "sync-earnings": {"task": "app.tasks.celery_app.sync_earnings", "schedule": 21600},
-    "sync-investment-calendar": {"task": "app.tasks.celery_app.sync_investment_calendar", "schedule": 43200},
+    # The database-backed due check survives beat container recreation. A raw
+    # 12-hour interval restarts its clock after every deployment and can starve.
+    "sync-investment-calendar": {
+        "task": "app.tasks.celery_app.ensure_investment_calendar_fresh",
+        "schedule": 600,
+    },
     "sync-share-statistics": {"task": "app.tasks.celery_app.sync_share_statistics", "schedule": 86400},
     "earnings-reports": {"task": "app.tasks.celery_app.earnings_reports", "schedule": 1800},
     "poll-news": {"task": "app.tasks.celery_app.poll_news", "schedule": settings.news_poll_minutes * 60},
@@ -201,6 +207,8 @@ def poll_market():
             watched = by_ticker.get(quote.ticker)
             if watched and watched.alert_enabled:
                 evaluate_quote(db, watched, snapshot)
+            if watched:
+                evaluate_user_price_alerts(db, snapshot)
         db.commit()
         return {"quotes": len(quotes)}
 
@@ -295,17 +303,57 @@ def sync_earnings():
     with SessionLocal() as db:
         tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
         events = fetch_earnings_events(tickers)
+        now = datetime.now(UTC)
+        inserted = refreshed = 0
         for ticker, event_time in events:
-            exists = db.scalar(select(EarningsEvent.id).where(EarningsEvent.ticker == ticker, EarningsEvent.event_time == event_time))
-            if not exists:
+            existing = db.scalar(select(EarningsEvent).where(
+                EarningsEvent.ticker == ticker,
+                EarningsEvent.event_time == event_time,
+            ))
+            if existing is None:
                 db.add(EarningsEvent(ticker=ticker, event_time=event_time, confidence="estimated"))
+                inserted += 1
+            else:
+                existing.synced_at = now
+                refreshed += 1
         db.commit()
-        return {"events": len(events)}
+        return {
+            "fetched": len(events),
+            "future_fetched": sum(event_time >= now for _, event_time in events),
+            "inserted": inserted,
+            "refreshed": refreshed,
+        }
 
 
 @celery_app.task(name="app.tasks.celery_app.sync_investment_calendar")
 def sync_investment_calendar():
     with SessionLocal() as db:
+        return sync_calendar(db)
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_investment_calendar_fresh")
+def ensure_investment_calendar_fresh():
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        running = db.scalar(select(InvestmentCalendarSyncRun).where(
+            InvestmentCalendarSyncRun.status == "running",
+        ).order_by(InvestmentCalendarSyncRun.started_at.desc()).limit(1))
+        if running:
+            started_at = running.started_at
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=UTC)
+            if now - started_at < timedelta(hours=2):
+                return {"skipped": "already_running", "run_id": running.id}
+        latest = db.scalar(select(InvestmentCalendarSyncRun).where(
+            InvestmentCalendarSyncRun.status.in_(("succeeded", "partial")),
+            InvestmentCalendarSyncRun.successful_symbols > 0,
+        ).order_by(InvestmentCalendarSyncRun.completed_at.desc()).limit(1))
+        if latest and latest.completed_at:
+            completed_at = latest.completed_at
+            if completed_at.tzinfo is None:
+                completed_at = completed_at.replace(tzinfo=UTC)
+            if now - completed_at < timedelta(hours=10):
+                return {"skipped": "fresh", "run_id": latest.id}
         return sync_calendar(db)
 
 
@@ -1694,6 +1742,7 @@ def run_stock_discovery(self, run_id: int):
     from app.models import StockDiscoveryRun
     from app.services.discovery.locks import discovery_lock
     from app.services.discovery.perplexity import PerplexityError
+    from app.services.discovery.search import SearchError
     from app.services.discovery.service import execute_discovery_run
 
     with SessionLocal() as db:
@@ -1708,7 +1757,7 @@ def run_stock_discovery(self, run_id: int):
             with SessionLocal() as db:
                 run = execute_discovery_run(db, run_id)
                 return {"status": run.status, "run_id": run_id}
-        except PerplexityError as exc:
+        except (SearchError, PerplexityError) as exc:
             if exc.retryable and self.request.retries < self.max_retries:
                 countdown = min(300, 30 * (2 ** self.request.retries))
                 raise self.retry(exc=exc, countdown=countdown)
@@ -1718,3 +1767,13 @@ def run_stock_discovery(self, run_id: int):
                     run.status = "failed"; run.stage = "failed"; run.completed_at = datetime.now(UTC)
                     run.failure_code = exc.code; run.failure_reason = str(exc)[:1000]; db.commit()
             return {"status": "failed", "run_id": run_id}
+
+
+@celery_app.task(name="app.tasks.celery_app.run_portfolio_analysis")
+def run_portfolio_analysis(run_id: int):
+    """Unified deterministic portfolio-analysis worker entrypoint."""
+    from app.services.portfolio_analysis.jobs import execute_analysis_job
+
+    with SessionLocal() as db:
+        result = execute_analysis_job(db, run_id)
+        return {"job_id": run_id, "status": result.get("status", "completed")}

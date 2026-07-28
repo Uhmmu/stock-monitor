@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.models import (
     Portfolio,
     PortfolioPosition,
+    OpportunityHistory,
     Security,
     StockDiscoveryCandidate,
     StockDiscoveryCandidateGroup,
@@ -32,10 +33,19 @@ from app.models import (
     WatchlistItem,
 )
 
-from .context import build_portfolio_context
+from .context import build_local_research_context, build_portfolio_context
 from .normalization import apply_filters, enrich_candidate, resolve_local_symbol
-from .perplexity import AgentResult, PerplexityError, _message_text, _tool_outputs, build_request, run_agent
-from .schemas import DiscoveryResult, DiscoverySettingsUpdate, FILTER_VERSION, PROMPT_VERSION, SCHEMA_VERSION
+from .analysis import AnalysisError, AnalysisResult, analyze_opportunities
+from .perplexity import AgentResult, PerplexityError, build_request, run_agent
+from .search import SearchError, SearchResult, build_search_queries, run_search
+from .schemas import (
+    DiscoveryResult,
+    DiscoverySettingsUpdate,
+    FILTER_VERSION,
+    OpportunityBatch,
+    PROMPT_VERSION,
+    SCHEMA_VERSION,
+)
 
 
 TERMINAL_STATUSES = {"completed", "completed_with_warnings", "failed", "blocked_by_budget"}
@@ -49,11 +59,8 @@ GROUP_LABELS = {
 }
 
 MODEL_PRICING_PER_MILLION = {
-    "perplexity/sonar": (.25, 2.5),
-    "openai/gpt-5-mini": (.25, 2.0),
-    "openai/gpt-5.4-mini": (.75, 4.5),
     "openai/gpt-5.4": (2.5, 15.0),
-    "anthropic/claude-sonnet-4-6": (3.0, 15.0),
+    "openai/gpt-5.4-mini": (.75, 4.5),
 }
 
 
@@ -70,6 +77,7 @@ def _now() -> datetime:
 def _settings_defaults() -> dict:
     env = get_settings()
     return {
+        "discovery_mode": "search_local",
         "model": env.perplexity_agent_model,
         "enable_web_search": env.perplexity_enable_web_search,
         "max_steps": env.perplexity_max_steps,
@@ -113,9 +121,15 @@ def settings_payload(db: Session, user_id: int) -> dict:
     values = {key: getattr(row, key) for key in _settings_defaults()}
     values.update({
         "api_key_configured": bool(get_settings().perplexity_api_key.strip()),
+        "analysis_api_key_configured": bool(get_settings().openai_api_key.strip()),
+        "analysis_model": get_settings().model_important,
+        "agent_model": row.model,
+        "search_source": "perplexity_search",
         "prompt_version": PROMPT_VERSION, "schema_version": SCHEMA_VERSION,
         "filter_version": FILTER_VERSION,
     })
+    for legacy in ("model", "enable_web_search", "max_steps"):
+        values.pop(legacy, None)
     return values
 
 
@@ -132,12 +146,16 @@ def monthly_spend(db: Session, user_id: int, now: datetime | None = None) -> flo
 
 
 def estimate_max_cost(context: dict, settings: StockDiscoverySettings) -> float:
+    if settings.discovery_mode == "search_local":
+        return 0.005
     input_rate, output_rate = MODEL_PRICING_PER_MILLION.get(settings.model, (5.0, 30.0))
     input_tokens = max(1000, len(json.dumps(context, ensure_ascii=False, default=str)) // 3)
-    model = input_tokens / 1_000_000 * input_rate + settings.max_output_tokens / 1_000_000 * output_rate
+    model_cost = (
+        input_tokens / 1_000_000 * input_rate
+        + settings.max_output_tokens / 1_000_000 * output_rate
+    )
     enabled_tools = 1 + int(settings.enable_web_search)
-    tools = settings.max_steps * enabled_tools * .005
-    return round(model + tools, 6)
+    return round(model_cost + settings.max_steps * enabled_tools * .005, 6)
 
 
 def _latest_success(db: Session, user_id: int) -> StockDiscoveryRun | None:
@@ -170,7 +188,9 @@ def create_discovery_run(db: Session, portfolio: Portfolio, user_id: int) -> tup
     context, context_hash = build_portfolio_context(db, portfolio, user_id)
     latest_success = _latest_success(db, user_id)
     bucket = now.strftime("%Y%m%d%H%M")
-    idempotency_key = hashlib.sha256(f"{user_id}:manual:{bucket}:{context_hash}".encode()).hexdigest()
+    idempotency_key = hashlib.sha256(
+        f"{user_id}:manual:{config.discovery_mode}:{bucket}:{context_hash}".encode()
+    ).hexdigest()
     existing = db.scalar(select(StockDiscoveryRun).where(StockDiscoveryRun.idempotency_key == idempotency_key))
     if existing:
         return existing, False
@@ -185,10 +205,16 @@ def create_discovery_run(db: Session, portfolio: Portfolio, user_id: int) -> tup
     run = StockDiscoveryRun(
         user_id=user_id, portfolio_id=portfolio.id,
         previous_successful_run_id=latest_success.id if latest_success else None,
-        idempotency_key=idempotency_key, trigger="manual", status=status,
+        idempotency_key=idempotency_key, trigger="manual",
+        discovery_mode=config.discovery_mode, status=status,
         stage="budget_check" if budget_reason else "preparing_portfolio",
         requested_at=now, completed_at=now if budget_reason else None,
-        model_requested=config.model, portfolio_snapshot_hash=context_hash,
+        model_requested=(
+            get_settings().model_important
+            if config.discovery_mode == "search_local"
+            else config.model
+        ),
+        portfolio_snapshot_hash=context_hash,
         prompt_version=PROMPT_VERSION, schema_version=SCHEMA_VERSION, filter_version=FILTER_VERSION,
         failure_code="budget_exceeded" if budget_reason else None,
         failure_reason=budget_reason,
@@ -206,34 +232,48 @@ def create_discovery_run(db: Session, portfolio: Portfolio, user_id: int) -> tup
     return run, not bool(budget_reason)
 
 
-def _persist_usage(db: Session, run_id: int, result: AgentResult) -> None:
+def _persist_pipeline_usage(
+    db: Session, run_id: int, search: SearchResult, analysis: AnalysisResult
+) -> None:
+    row = db.scalar(select(StockDiscoveryUsage).where(StockDiscoveryUsage.run_id == run_id))
+    if row is None:
+        row = StockDiscoveryUsage(run_id=run_id)
+        db.add(row)
+    row.input_tokens = analysis.input_tokens
+    row.output_tokens = analysis.output_tokens
+    row.total_tokens = analysis.total_tokens
+    row.finance_search_calls = 0
+    row.web_search_calls = search.request_count
+    row.tool_cost_usd = search.cost_usd
+    # The project-level GPT endpoint does not expose a reliable dollar cost.
+    row.model_cost_usd = 0.0
+    row.total_cost_usd = search.cost_usd
+    row.raw_usage = {
+        "search_api_requests": search.request_count,
+        "search_cost_usd": search.cost_usd,
+        "analysis_model": analysis.model,
+        "analysis_tokens": {
+            "input": analysis.input_tokens,
+            "output": analysis.output_tokens,
+            "total": analysis.total_tokens,
+        },
+        "perplexity_model_tokens": 0,
+    }
+
+
+def _persist_agent_usage(db: Session, run_id: int, result: AgentResult) -> None:
     db.add(StockDiscoveryUsage(
-        run_id=run_id, input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-        total_tokens=result.total_tokens, finance_search_calls=result.finance_search_calls,
-        web_search_calls=result.web_search_calls, tool_cost_usd=result.tool_cost_usd,
-        model_cost_usd=result.model_cost_usd, total_cost_usd=result.total_cost_usd,
+        run_id=run_id,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        total_tokens=result.total_tokens,
+        finance_search_calls=result.finance_search_calls,
+        web_search_calls=result.web_search_calls,
+        tool_cost_usd=result.tool_cost_usd,
+        model_cost_usd=result.model_cost_usd,
+        total_cost_usd=result.total_cost_usd,
         raw_usage=result.usage,
     ))
-
-
-def _persist_failed_agent_payload(db: Session, run_id: int, payload: dict) -> None:
-    """Preserve billable malformed/partial responses for audit and budgeting."""
-    tools, finance_calls, web_calls = _tool_outputs(payload)
-    usage = payload.get("usage") or {}
-    costs = usage.get("cost") or {}
-    total_cost = float(costs.get("total_cost") or 0)
-    tool_cost = float(costs.get("tool_calls_cost") or 0)
-    model_cost = float(costs.get("input_cost") or 0) + float(costs.get("output_cost") or 0)
-    if model_cost == 0 and total_cost:
-        model_cost = max(0.0, total_cost - tool_cost)
-    db.add(StockDiscoveryRawPayload(run_id=run_id, response_json=payload,
-        output_text=_message_text(payload), parsed_json={}, tool_results=tools))
-    db.add(StockDiscoveryUsage(run_id=run_id, input_tokens=int(usage.get("input_tokens") or 0),
-        output_tokens=int(usage.get("output_tokens") or 0), total_tokens=int(usage.get("total_tokens") or 0),
-        finance_search_calls=finance_calls, web_search_calls=web_calls, tool_cost_usd=tool_cost,
-        model_cost_usd=model_cost, total_cost_usd=total_cost, raw_usage=usage))
-    _persist_tool_sources(db, run_id, tools)
-    _persist_annotations(db, run_id, payload)
 
 
 def _persist_tool_sources(db: Session, run_id: int, tool_results: list[dict]) -> None:
@@ -267,6 +307,145 @@ def _persist_annotations(db: Session, run_id: int, payload: dict) -> None:
                         url=url, source_type="other", source_origin="perplexity_web"))
 
 
+def _persist_search_sources(db: Session, run_id: int, results: list[dict]) -> None:
+    seen: set[str] = set()
+    for row in results:
+        url = str(row.get("url") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        db.add(StockDiscoverySource(
+            run_id=run_id,
+            title=str(row.get("title") or ""),
+            url=url,
+            source_type="news",
+            source_origin="perplexity_search",
+        ))
+
+
+_CATEGORY_GROUPS = {
+    "估值错杀": ("valuation", "估值错杀", "contrarian"),
+    "行业趋势": ("industry", "行业趋势", "early_theme"),
+    "盈利改善": ("earnings", "盈利改善", "quality_core"),
+    "事件驱动": ("event", "事件驱动", "strong_flow"),
+    "技术反转": ("technical", "技术反转", "contrarian"),
+    "长期成长": ("growth", "长期成长", "quality_core"),
+}
+
+
+def _as_legacy_result(batch: OpportunityBatch) -> DiscoveryResult:
+    """Feed v0.5 analyst items through the existing local verification layer."""
+    grouped: dict[str, list] = defaultdict(list)
+    for item in batch.opportunities:
+        grouped[item.category[0]].append(item)
+    candidate_groups = []
+    for category, items in grouped.items():
+        group_id, group_name, group_type = _CATEGORY_GROUPS[category]
+        candidates = []
+        for item in items:
+            evidence = [row.content for row in item.evidence]
+            candidates.append({
+                "ticker": item.ticker, "company_name": item.ticker,
+                "exchange": None, "country": None, "sector": None, "industry": None,
+                "market_cap": None, "currency": None,
+                "discovery_reason": item.summary,
+                "portfolio_fit": "需结合本地持仓与策略画像继续研究",
+                "diversification_effect": "uncertain",
+                "overlap_with_existing_holdings": [],
+                "business_quality_summary": next(
+                    (row.content for row in item.evidence if row.type == "financial"),
+                    "本地财务数据不足",
+                ),
+                "investment_thesis": list(dict.fromkeys(item.why_now + item.catalysts + evidence)),
+                "capital_flow_context": next(
+                    (row.content for row in item.evidence if row.type == "market"), "数据不足"
+                ),
+                "valuation_context": item.valuation_view,
+                "why_now": "；".join(item.why_now),
+                "financial_snapshot": {
+                    "price": None, "market_cap": None, "pe_trailing": None, "pe_forward": None,
+                    "price_to_sales": None, "ev_to_ebitda": None, "revenue_growth": None,
+                    "earnings_growth": None, "gross_margin": None, "operating_margin": None,
+                    "free_cash_flow": None, "free_cash_flow_margin": None,
+                    "return_on_invested_capital": None, "net_debt_or_cash": None,
+                    "analyst_consensus": None, "data_periods": [],
+                },
+                "quality_level": "uncertain", "valuation_level": "uncertain",
+                "momentum_state": "uncertain",
+                "candidate_priority": "high" if item.confidence >= 75 else "medium" if item.confidence >= 55 else "low",
+                "confidence": item.confidence / 100,
+                "major_risks": item.risks, "thesis_breakers": item.risks,
+                "facts_to_verify_locally": ["核对最新本地财务快照", "核对催化剂时间与来源"],
+                "sources": [],
+            })
+        candidate_groups.append({
+            "group_id": group_id, "group_name": group_name, "group_type": group_type,
+            "group_summary": f"{len(items)} 个{group_name}研究机会", "candidates": candidates,
+        })
+    return DiscoveryResult.model_validate({
+        "analysis_date": _now().date(),
+        "market_context": {
+            "summary": batch.market_condition, "risk_regime": "unknown",
+            "liquidity_or_flow_summary": "由本地 GPT 基于原始搜索结果判断",
+            "important_market_drivers": [],
+            "data_limitations": ["Perplexity Search 仅提供原始检索结果，不参与分析。"],
+        },
+        "portfolio_diagnosis": {
+            "overall_summary": "沿用本地组合数据进行候选过滤",
+            "overweight_exposures": [], "underweight_or_missing_exposures": [],
+            "portfolio_strengths": [], "portfolio_vulnerabilities": [],
+        },
+        "capital_flow_directions": {"strong_current_flows": [], "weak_or_early_flows": []},
+        "candidate_groups": candidate_groups,
+        "avoid_or_overheated": [], "portfolio_actions_for_research": [],
+        "limitations": ["搜索结果不作为价格、估值、市值或财报数字来源。"],
+    })
+
+
+def _legacy_to_opportunity_batch(parsed: DiscoveryResult) -> OpportunityBatch:
+    opportunities = []
+    for group in parsed.candidate_groups:
+        category = {
+            "strong_flow": "事件驱动",
+            "quality_core": "长期成长",
+            "portfolio_complement": "行业趋势",
+            "contrarian": "估值错杀",
+            "early_theme": "行业趋势",
+            "defensive": "长期成长",
+            "watch_only": "等待确认",
+        }.get(group.group_type, "行业趋势")
+        for candidate in group.candidates:
+            valid_category = category if category != "等待确认" else "行业趋势"
+            evidence = []
+            if candidate.business_quality_summary:
+                evidence.append({"type": "financial", "content": candidate.business_quality_summary})
+            if candidate.capital_flow_context:
+                evidence.append({"type": "market", "content": candidate.capital_flow_context})
+            if candidate.why_now:
+                evidence.append({"type": "news", "content": candidate.why_now})
+            if not evidence:
+                evidence.append({"type": "market", "content": "数据不足，需进一步核对"})
+            opportunities.append({
+                "title": candidate.discovery_reason or f"{candidate.ticker} 研究机会",
+                "ticker": candidate.ticker,
+                "category": [valid_category],
+                "summary": candidate.discovery_reason or "值得进一步研究",
+                "why_now": [candidate.why_now or "需结合近期事件进一步确认"],
+                "evidence": evidence,
+                "catalysts": candidate.investment_thesis[:4],
+                "risks": candidate.major_risks or ["数据覆盖不足"],
+                "valuation_view": candidate.valuation_context or "数据不足",
+                "confidence": round(candidate.confidence * 100),
+                "action": ["等待确认" if candidate.candidate_priority == "low" else "深入研究"],
+            })
+    if not opportunities:
+        raise ValueError("Agent 未返回可保存的机会")
+    return OpportunityBatch.model_validate({
+        "market_condition": parsed.market_context.summary or "数据不足",
+        "opportunities": opportunities[:12],
+    })
+
+
 def _persist_diagnosis(db: Session, run_id: int, result: DiscoveryResult) -> None:
     diagnosis = result.portfolio_diagnosis
     for order, item in enumerate(diagnosis.overweight_exposures):
@@ -296,6 +475,15 @@ def _metric_discrepancy(raw_value: Any, local_value: Any) -> bool:
     return abs(raw_number - local_number) / denominator >= .10
 
 
+def _bounded_metric_period(value: Any) -> str | None:
+    """Fit provider period labels into the legacy VARCHAR(64) display column.
+
+    The complete provider payload remains preserved in StockDiscoveryRawPayload.
+    """
+    text = str(value).strip() if value is not None else ""
+    return text[:64] or None
+
+
 def _persist_metrics(
     db: Session,
     candidate: StockDiscoveryCandidate,
@@ -305,6 +493,7 @@ def _persist_metrics(
     include_raw: bool = True,
 ) -> None:
     financial = raw.get("financial_snapshot") or {}
+    raw_period = _bounded_metric_period(", ".join(financial.get("data_periods") or []))
     if include_raw:
         for key, value in financial.items():
             if key in ("data_periods",) or value is None:
@@ -312,7 +501,7 @@ def _persist_metrics(
             db.add(StockDiscoveryCandidateMetric(candidate_id=candidate.id, metric_key=key,
                 value=float(value) if isinstance(value, (int, float)) else None,
                 text_value=value if isinstance(value, str) else None, source="perplexity_finance",
-                data_period=", ".join(financial.get("data_periods") or []) or None,
+                data_period=raw_period,
                 is_preferred=local.get(key) is None, has_discrepancy=_metric_discrepancy(value, local.get(key))))
     for key in ("price", "market_cap", "average_volume", "pe_trailing", "pe_forward", "price_to_sales",
                 "revenue_growth", "earnings_growth", "gross_margin", "operating_margin", "free_cash_flow"):
@@ -329,7 +518,9 @@ def _persist_metrics(
             raw_metric.is_preferred = False
             raw_metric.has_discrepancy = discrepancy
         db.add(StockDiscoveryCandidateMetric(candidate_id=candidate.id, metric_key=key, value=float(value),
-            source="yfinance", data_period=local.get("free_cash_flow_period") if key == "free_cash_flow" else local.get("as_of"),
+            source="yfinance", data_period=_bounded_metric_period(
+                local.get("free_cash_flow_period") if key == "free_cash_flow" else local.get("as_of")
+            ),
             is_preferred=True, has_discrepancy=discrepancy))
 
 
@@ -454,33 +645,110 @@ def execute_discovery_run(db: Session, run_id: int) -> StockDiscoveryRun:
         return run
     config = discovery_settings(db, run.user_id)
     snapshot = db.scalar(select(StockDiscoveryPortfolioSnapshot).where(StockDiscoveryPortfolioSnapshot.run_id == run.id))
-    run.status = "running"; run.stage = "analyzing_portfolio"; run.started_at = run.started_at or _now(); db.commit()
+    run.status = "running"; run.stage = "preparing_local_data"; run.started_at = run.started_at or _now(); db.commit()
     try:
-        request = build_request(context=snapshot.payload, model=config.model, max_steps=config.max_steps,
-            max_output_tokens=config.max_output_tokens, enable_web_search=config.enable_web_search)
-        run.stage = "searching_finance"; db.commit()
-        result = run_agent(request)
-        run.stage = "normalizing_candidates"; run.model_used = result.model; run.analysis_date = result.parsed.analysis_date
-        db.add(StockDiscoveryRawPayload(run_id=run.id, response_json=result.raw_response,
-            output_text=result.output_text, parsed_json=result.parsed.model_dump(mode="json"), tool_results=result.tool_results))
-        _persist_usage(db, run.id, result); _persist_tool_sources(db, run.id, result.tool_results)
-        _persist_annotations(db, run.id, result.raw_response)
-        db.add(StockDiscoveryMarketContext(run_id=run.id, summary=result.parsed.market_context.summary,
-            risk_regime=result.parsed.market_context.risk_regime, payload=result.parsed.market_context.model_dump(mode="json")))
-        _persist_diagnosis(db, run.id, result.parsed)
+        local_context = build_local_research_context(db, snapshot.payload)
+        if run.discovery_mode == "agent_finance":
+            run.stage = "running_finance_agent"; db.commit()
+            request = build_request(
+                context=local_context,
+                model=config.model,
+                max_steps=config.max_steps,
+                max_output_tokens=config.max_output_tokens,
+                enable_web_search=config.enable_web_search,
+            )
+            agent = run_agent(request)
+            parsed = agent.parsed
+            history_batch = _legacy_to_opportunity_batch(parsed)
+            queries: list[str] = []
+            run.model_used = agent.model
+            db.add(StockDiscoveryRawPayload(
+                run_id=run.id,
+                response_json=agent.raw_response,
+                output_text=agent.output_text,
+                parsed_json=parsed.model_dump(mode="json"),
+                tool_results=agent.tool_results,
+            ))
+            _persist_agent_usage(db, run.id, agent)
+            _persist_tool_sources(db, run.id, agent.tool_results)
+            _persist_annotations(db, run.id, agent.raw_response)
+            history_source = "perplexity_finance_agent"
+            measured_cost = agent.total_cost_usd
+        else:
+            queries = build_search_queries(local_context)
+            run.stage = "searching_market"; db.commit()
+            search = run_search(queries)
+            raw_payload = StockDiscoveryRawPayload(
+                run_id=run.id,
+                response_json={"search": search.raw_response},
+                output_text="",
+                parsed_json={},
+                tool_results=search.results,
+            )
+            db.add(raw_payload)
+            db.add(StockDiscoveryUsage(
+                run_id=run.id, input_tokens=0, output_tokens=0, total_tokens=0,
+                finance_search_calls=0, web_search_calls=search.request_count,
+                tool_cost_usd=search.cost_usd, model_cost_usd=0.0,
+                total_cost_usd=search.cost_usd,
+                raw_usage={"search_api_requests": search.request_count, "perplexity_model_tokens": 0},
+            ))
+            _persist_search_sources(db, run.id, search.results)
+            db.commit()
+            run.stage = "analyzing_with_local_ai"; db.commit()
+            analysis = analyze_opportunities(
+                search_results=search.results,
+                local_context=local_context,
+                max_output_tokens=config.max_output_tokens,
+            )
+            history_batch = analysis.parsed
+            parsed = _as_legacy_result(history_batch)
+            run.model_used = analysis.model
+            raw_payload.response_json = {
+                "search": search.raw_response, "analysis_model": analysis.model
+            }
+            raw_payload.output_text = analysis.output_text
+            raw_payload.parsed_json = parsed.model_dump(mode="json")
+            _persist_pipeline_usage(db, run.id, search, analysis)
+            history_source = "perplexity_search"
+            measured_cost = search.cost_usd
+
+        run.stage = "normalizing_candidates"
+        run.analysis_date = parsed.analysis_date
+        db.add(StockDiscoveryMarketContext(
+            run_id=run.id,
+            summary=parsed.market_context.summary,
+            risk_regime=parsed.market_context.risk_regime,
+            payload=parsed.market_context.model_dump(mode="json"),
+        ))
+        _persist_diagnosis(db, run.id, parsed)
         db.commit()
         run.stage = "local_verification"; db.commit()
-        warnings = _persist_candidates(db, run, result.parsed, config)
-        if result.total_cost_usd > config.max_run_cost_usd:
-            warnings.append(f"实际成本 ${result.total_cost_usd:.4f} 超过配置的单次预警线 ${config.max_run_cost_usd:.4f}；后续运行仍受预算保护。")
+        warnings = _persist_candidates(db, run, parsed, config)
+        db.add(OpportunityHistory(
+            user_id=run.user_id,
+            run_id=run.id,
+            query_context={
+                "discovery_mode": run.discovery_mode,
+                "queries": queries,
+                "portfolio_snapshot_hash": run.portfolio_snapshot_hash,
+            },
+            market_condition=history_batch.market_condition,
+            result_json=history_batch.model_dump(mode="json"),
+            model_version=run.model_used or run.model_requested,
+            search_source=history_source,
+        ))
+        if measured_cost > config.max_run_cost_usd:
+            warnings.append(
+                f"实际成本 ${measured_cost:.4f} 超过配置的单次预警线 "
+                f"${config.max_run_cost_usd:.4f}。"
+            )
         run.warnings = warnings
         run.status = "completed_with_warnings" if warnings else "completed"
         run.stage = "completed"; run.completed_at = _now(); run.next_scheduled_at = None
         db.commit(); db.refresh(run); return run
-    except PerplexityError as exc:
+    except (AnalysisError, SearchError, PerplexityError) as exc:
         db.rollback(); run = db.get(StockDiscoveryRun, run_id)
-        if exc.raw_response and not db.scalar(select(StockDiscoveryRawPayload.id).where(StockDiscoveryRawPayload.run_id == run_id)):
-            _persist_failed_agent_payload(db, run_id, exc.raw_response)
         if exc.retryable:
             run.status = "pending"; run.stage = "retrying"; run.failure_code = exc.code
             run.failure_reason = str(exc)[:1000]; db.commit()
@@ -491,14 +759,69 @@ def execute_discovery_run(db: Session, run_id: int) -> StockDiscoveryRun:
     except Exception as exc:
         db.rollback(); run = db.get(StockDiscoveryRun, run_id)
         run.status = "failed"; run.stage = "failed"; run.completed_at = _now(); run.failure_code = "local_processing_failed"
-        run.failure_reason = "本地验证或持久化失败"; db.commit()
+        run.failure_reason = f"本地验证或持久化失败：{type(exc).__name__}"; db.commit()
         raise
+
+
+def opportunity_history_payload(row: OpportunityHistory) -> dict:
+    result = row.result_json or {}
+    opportunities = result.get("opportunities") or []
+    return {
+        "id": row.id,
+        "run_id": row.run_id,
+        "created_at": row.created_at,
+        "market_condition": row.market_condition,
+        "model_version": row.model_version,
+        "search_source": row.search_source,
+        "opportunities": opportunities,
+        "tickers": [item.get("ticker") for item in opportunities if item.get("ticker")],
+        "categories": list(dict.fromkeys(
+            category for item in opportunities for category in (item.get("category") or [])
+        )),
+        "max_confidence": max(
+            (int(item.get("confidence") or 0) for item in opportunities), default=0
+        ),
+    }
+
+
+def opportunity_history_list(db: Session, user_id: int, limit: int = 30) -> list[dict]:
+    rows = db.scalars(
+        select(OpportunityHistory)
+        .where(OpportunityHistory.user_id == user_id)
+        .order_by(OpportunityHistory.created_at.desc(), OpportunityHistory.id.desc())
+        .limit(limit)
+    ).all()
+    return [opportunity_history_payload(row) for row in rows]
+
+
+def opportunity_history_detail(
+    db: Session, user_id: int, history_id: int
+) -> dict | None:
+    row = db.scalar(select(OpportunityHistory).where(
+        OpportunityHistory.id == history_id,
+        OpportunityHistory.user_id == user_id,
+    ))
+    if not row:
+        return None
+    payload = opportunity_history_payload(row)
+    payload["query_context"] = row.query_context
+    sources = db.scalars(
+        select(StockDiscoverySource)
+        .where(StockDiscoverySource.run_id == row.run_id)
+        .order_by(StockDiscoverySource.id)
+    ).all()
+    payload["sources"] = [
+        {"title": source.title, "url": source.url, "origin": source.source_origin}
+        for source in sources
+    ]
+    return payload
 
 
 def _run_payload(run: StockDiscoveryRun | None) -> dict | None:
     if not run: return None
     return {key: getattr(run, key) for key in (
-        "id", "status", "stage", "trigger", "requested_at", "started_at", "completed_at", "analysis_date",
+        "id", "status", "stage", "trigger", "discovery_mode",
+        "requested_at", "started_at", "completed_at", "analysis_date",
         "next_scheduled_at", "model_requested", "model_used", "prompt_version", "schema_version", "filter_version",
         "warnings", "failure_code", "failure_reason", "previous_successful_run_id",
     )}
@@ -518,7 +841,13 @@ def _candidate_payload(db: Session, row: StockDiscoveryCandidate, memberships: l
             discrepancies.append({"metric": key, "values": [{"source": item.source, "value": item.value if item.value is not None else item.text_value, "period": item.data_period} for item in values]})
     raw = row.raw_data or {}
     financial = {**(raw.get("financial_snapshot") or {}), **preferred}
-    sources = list(db.scalars(select(StockDiscoverySource).where(StockDiscoverySource.candidate_id == row.id)).all())
+    sources = list(db.scalars(select(StockDiscoverySource).where(or_(
+        StockDiscoverySource.candidate_id == row.id,
+        (
+            (StockDiscoverySource.run_id == row.run_id)
+            & StockDiscoverySource.candidate_id.is_(None)
+        ),
+    ))).all())
     payload = {
         "id": row.id, "raw_ticker": row.raw_ticker, "normalized_ticker": row.normalized_ticker,
         "company_name": row.company_name, "exchange": row.exchange, "country": row.country,
@@ -609,7 +938,14 @@ def latest_discovery_payload(db: Session, user_id: int) -> dict:
     return {
         "current_run": _run_payload(current), "result": display,
         "using_previous_result": bool(success and current and success.id != current.id and current.status in ACTIVE_STATUSES | {"failed", "blocked_by_budget"}),
-        "api_key_configured": bool(get_settings().perplexity_api_key.strip()),
+        "api_key_configured": bool(
+            get_settings().perplexity_api_key.strip()
+            and (
+                config.discovery_mode == "agent_finance"
+                or get_settings().openai_api_key.strip()
+            )
+        ),
+        "discovery_mode": config.discovery_mode,
         "monthly_spend_usd": monthly_spend(db, user_id), "monthly_budget_usd": config.monthly_budget_usd,
     }
 

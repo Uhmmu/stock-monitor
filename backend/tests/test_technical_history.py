@@ -8,7 +8,23 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.database import Base
-from app.models import HistoricalPrice, TechnicalAnalysis
+from fastapi import HTTPException
+
+from app.api.routes import (
+    technical_analysis_detail,
+    technical_price_alert_create,
+    technical_price_alert_delete,
+)
+from app.models import (
+    HistoricalPrice,
+    InvestmentCalendarEvent,
+    Portfolio,
+    PortfolioPosition,
+    TechnicalAnalysis,
+    User,
+    WatchlistItem,
+)
+from app.schemas import UserPriceAlertCreate
 from app.services import market_data
 from app.services import technical_analysis_engine as technical_analysis
 
@@ -104,3 +120,123 @@ def test_fmp_source_takes_priority_over_yahoo(db, monkeypatch):
     assert source == "fmp"
     result = technical_analysis.generate_for_symbol(db, "AAPL", force=True)
     assert db.get(TechnicalAnalysis, "AAPL").analysis["source"] == "fmp"
+
+
+def test_technical_detail_exposes_cached_weekly_series(db):
+    from datetime import timedelta
+
+    user = User(
+        username="chart-user",
+        password_hash="test",
+        role="user",
+        status="active",
+    )
+    db.add(user)
+    db.flush()
+    portfolio = Portfolio(user_id=user.id, slug="default", name="测试组合")
+    db.add(portfolio)
+    db.flush()
+    db.add(
+        PortfolioPosition(
+            portfolio_id=portfolio.id,
+            symbol="AAPL",
+            total_quantity=10,
+            average_cost=123.45,
+            total_cost=1234.5,
+            currency="USD",
+        )
+    )
+    db.add(
+        InvestmentCalendarEvent(
+            id="earnings-aapl-2025q1",
+            event_type="earnings",
+            symbol="AAPL",
+            title="季度财报",
+            event_date=date(2025, 4, 28),
+            primary_source="test",
+            status="active",
+        )
+    )
+    db.add(WatchlistItem(ticker="AAPL", enabled=True))
+    db.add(
+        TechnicalAnalysis(
+            symbol="AAPL",
+            status="ready",
+            analysis={"latestClose": 169.0, "source": "fmp"},
+            analysis_version=technical_analysis.ANALYSIS_VERSION,
+            input_hash="cached",
+            data_through=date(2025, 4, 28),
+        )
+    )
+    start = date(2024, 1, 1)
+    for index in range(70):
+        price = 100 + index
+        db.add(
+            HistoricalPrice(
+                symbol="AAPL",
+                date=start + timedelta(weeks=index),
+                source="fmp",
+                open=price,
+                high=price + 2,
+                low=price - 2,
+                close=price + 1,
+                volume=1_000_000 + index,
+            )
+        )
+    db.commit()
+
+    result = technical_analysis_detail("aapl", user, db)
+    assert result["chart_data_status"] == "ready"
+    assert result["chart_data_source"] == "fmp"
+    assert len(result["weekly"]) == 70
+    assert len(result["moving_averages"]["ma20"]) == 51
+    assert len(result["moving_averages"]["ma50"]) == 21
+    assert result["portfolio_cost"]["average_cost"] == 123.45
+    assert result["events"][0]["type"] == "earnings"
+
+
+def test_technical_detail_reports_insufficient_chart_data(db):
+    user = User(
+        username="empty-chart-user",
+        password_hash="test",
+        role="user",
+        status="active",
+    )
+    db.add(user)
+    db.add(WatchlistItem(ticker="AAPL", enabled=True))
+    db.commit()
+
+    result = technical_analysis_detail("AAPL", user, db)
+    assert result["status"] == "pending"
+    assert result["chart_data_status"] == "insufficient"
+    assert result["chart_data_reason"] == "historical_data_unavailable"
+    assert result["weekly"] == []
+
+
+def test_price_alert_routes_are_idempotent_and_user_scoped(db):
+    owner = User(
+        username="price-alert-owner",
+        password_hash="test",
+        role="user",
+        status="active",
+    )
+    other = User(
+        username="price-alert-other",
+        password_hash="test",
+        role="user",
+        status="active",
+    )
+    db.add_all([owner, other, WatchlistItem(ticker="AAPL", enabled=True)])
+    db.commit()
+    payload = UserPriceAlertCreate(target_price=200, direction="above")
+
+    created = technical_price_alert_create("AAPL", payload, owner, db)
+    duplicate = technical_price_alert_create("aapl", payload, owner, db)
+    assert duplicate["id"] == created["id"]
+
+    with pytest.raises(HTTPException) as exc:
+        technical_price_alert_delete("AAPL", created["id"], other, db)
+    assert exc.value.status_code == 404
+
+    response = technical_price_alert_delete("AAPL", created["id"], owner, db)
+    assert response.status_code == 204

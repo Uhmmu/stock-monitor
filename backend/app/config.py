@@ -73,9 +73,10 @@ class Settings(BaseSettings):
     sec_13f_cusip_overrides: str = ""
     # 13F 数据集下载页（运行时解析真实 zip 链接，避免猜文件命名）
     sec_13f_index_url: str = "https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets"
-    # Manually triggered Perplexity Agent API discovery. User-editable, non-secret
-    # defaults live in StockDiscoverySettings; the key and endpoint stay server-only.
+    # Manually triggered raw Perplexity Search API discovery. Search never performs
+    # analysis; the configured important-tier OpenAI-compatible model does that.
     perplexity_api_key: str = ""
+    perplexity_search_url: str = "https://api.perplexity.ai/search"
     perplexity_agent_url: str = "https://api.perplexity.ai/v1/agent"
     perplexity_agent_model: str = "openai/gpt-5.4"
     perplexity_max_steps: int = 5

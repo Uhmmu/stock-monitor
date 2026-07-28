@@ -18,7 +18,10 @@ from app.services import ownership
 from app.api.investment_routes import _calendar_query, _page
 from app.services.investment_calendar import (
     calendar_capabilities,
+    filter_sync_window,
+    finalize_event_statuses,
     fetch_yahoo_events,
+    normalize_finnhub_earnings,
     normalize_legacy_earnings,
     normalize_yahoo_calendar,
     normalize_yahoo_splits,
@@ -138,6 +141,60 @@ def test_dividend_dates_share_a_grouping_key_and_keep_distinct_records():
     assert rows[0]["metadata"]["related_dividend_key"] == rows[1]["metadata"]["related_dividend_key"]
 
 
+def test_yahoo_calendar_future_earnings_is_kept_when_earnings_history_is_stale(monkeypatch):
+    from app.services import investment_calendar
+
+    class _Rows:
+        empty = False
+
+        def iterrows(self):
+            yield datetime(2025, 5, 1, 20, tzinfo=UTC), {
+                "EPS Estimate": 1.2,
+                "Reported EPS": 1.3,
+            }
+
+    class _Ticker:
+        def get_earnings_dates(self, limit):
+            assert limit == 8
+            return _Rows()
+
+        def get_calendar(self):
+            return {"Earnings Date": [date(2026, 7, 30)]}
+
+        def get_actions(self):
+            return None
+
+    monkeypatch.setattr(investment_calendar.yf, "Ticker", lambda symbol: _Ticker())
+    rows = fetch_yahoo_events("AMZN")
+    assert [row["event_date"] for row in rows if row["event_type"] == "earnings"] == [
+        date(2025, 5, 1),
+        date(2026, 7, 30),
+    ]
+    assert filter_sync_window(rows, date(2026, 7, 26), date(2026, 11, 24))[0]["event_date"] == date(2026, 7, 30)
+
+
+def test_finnhub_earnings_normalizes_timing_estimates_and_provider():
+    rows = normalize_finnhub_earnings("AMZN", [{
+        "symbol": "AMZN",
+        "date": "2026-07-30",
+        "hour": "amc",
+        "quarter": 2,
+        "year": 2026,
+        "epsEstimate": 1.8556,
+        "revenueEstimate": 200_176_733_847,
+    }])
+    assert len(rows) == 1
+    assert rows[0]["primary_source"] == "finnhub"
+    assert rows[0]["time_status"] == "after_market"
+    assert rows[0]["fiscal_period"] == "Q2"
+    assert rows[0]["metadata"]["eps_estimate"] == 1.8556
+    yahoo = normalize_yahoo_calendar("AMZN", {"Earnings Date": [date(2026, 7, 30)]})[0]
+    assert rows[0]["id"] == yahoo["id"]
+    reconciled = reconcile_events([rows[0], yahoo])
+    assert len(reconciled) == 1
+    assert reconciled[0]["sources"] == ["finnhub", "yahoo"]
+
+
 def test_split_ratio_and_reverse_split_are_not_confused():
     rows = normalize_yahoo_splits("TEST", _Actions([
         (datetime(2026, 8, 1, tzinfo=UTC), 4.0),
@@ -210,6 +267,39 @@ def test_persistence_is_idempotent_and_retains_source_rows():
         db.commit()
         assert db.query(InvestmentCalendarEvent).count() == 1
         assert db.query(InvestmentCalendarEventSource).count() == 1
+
+
+def test_calendar_lifecycle_expires_history_and_deactivates_unseen_rows():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[Security.__table__, InvestmentCalendarEvent.__table__])
+    with Session(engine) as db:
+        db.add_all([
+            InvestmentCalendarEvent(
+                id="old", event_type="earnings", symbol="AAPL", title="季度财报",
+                event_date=date(2026, 7, 20), primary_source="yahoo",
+            ),
+            InvestmentCalendarEvent(
+                id="missing", event_type="earnings", symbol="AAPL", title="季度财报",
+                event_date=date(2026, 8, 1), primary_source="yahoo",
+            ),
+            InvestmentCalendarEvent(
+                id="removed", event_type="earnings", symbol="OLD", title="季度财报",
+                event_date=date(2026, 8, 2), primary_source="yahoo",
+            ),
+        ])
+        db.commit()
+        result = finalize_event_statuses(
+            db,
+            tracked={"AAPL"},
+            fully_synced={"AAPL"},
+            seen_ids=set(),
+            start_date=date(2026, 7, 26),
+            end_date=date(2026, 11, 24),
+        )
+        assert result == {"expired": 1, "inactive": 2}
+        assert db.get(InvestmentCalendarEvent, "old").status == "expired"
+        assert db.get(InvestmentCalendarEvent, "missing").status == "inactive"
+        assert db.get(InvestmentCalendarEvent, "removed").status == "inactive"
 
 
 def test_portfolio_relevance_and_impact_are_user_scoped():

@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.api.auth_routes import router as auth_router
 from app.api.portfolio_routes import router as portfolio_router
+from app.api.portfolio_analysis_routes import router as portfolio_analysis_router
 from app.api.discovery_routes import router as discovery_router
 from app.api.sentiment_routes import router as sentiment_router
 from app.api.investment_routes import router as investment_router
@@ -34,6 +35,7 @@ app.include_router(public_router)
 app.include_router(auth_router)
 app.include_router(router)
 app.include_router(portfolio_router)
+app.include_router(portfolio_analysis_router)
 app.include_router(discovery_router)
 app.include_router(sentiment_router)
 app.include_router(investment_router)

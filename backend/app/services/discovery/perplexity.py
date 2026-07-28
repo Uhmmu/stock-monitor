@@ -64,7 +64,6 @@ class AgentResult:
 
 
 def _inline_schema(schema: dict) -> dict:
-    """Inline Pydantic's local refs because Agent schemas reject external refs."""
     definitions = schema.get("$defs", {})
 
     def expand(value: Any) -> Any:
@@ -74,8 +73,7 @@ def _inline_schema(schema: dict) -> dict:
             return value
         ref = value.get("$ref")
         if ref and ref.startswith("#/$defs/"):
-            name = ref.rsplit("/", 1)[-1]
-            return expand(copy.deepcopy(definitions[name]))
+            return expand(copy.deepcopy(definitions[ref.rsplit("/", 1)[-1]]))
         return {key: expand(item) for key, item in value.items() if key != "$defs"}
 
     return expand(schema)
@@ -100,7 +98,6 @@ def build_request(*, context: dict, model: str, max_steps: int, max_output_token
         "store": False,
         "response_format": {
             "type": "json_schema",
-            # Perplexity requires schema names to be alphanumeric (no underscores).
             "json_schema": {"name": "stockdiscoveryv04", "schema": response_schema()},
         },
     }
@@ -151,15 +148,13 @@ def parse_agent_response(payload: dict) -> AgentResult:
     try:
         parsed = DiscoveryResult.model_validate_json(output_text)
     except (ValidationError, json.JSONDecodeError, ValueError) as exc:
-        raise PerplexityResponseError("Agent API 返回的 JSON 不符合 stock-discovery-schema-v0.4", raw_response=payload) from exc
+        raise PerplexityResponseError("Agent API 返回的 JSON 不符合机会发现结构", raw_response=payload) from exc
     tool_results, finance_calls, web_calls = _tool_outputs(payload)
     usage = payload.get("usage") or {}
     costs = usage.get("cost") or {}
     total_cost = float(costs.get("total_cost") or 0)
     tool_cost = float(costs.get("tool_calls_cost") or 0)
-    input_cost = float(costs.get("input_cost") or 0)
-    output_cost = float(costs.get("output_cost") or 0)
-    model_cost = input_cost + output_cost
+    model_cost = float(costs.get("input_cost") or 0) + float(costs.get("output_cost") or 0)
     if model_cost == 0 and total_cost:
         model_cost = max(0.0, total_cost - tool_cost)
     return AgentResult(

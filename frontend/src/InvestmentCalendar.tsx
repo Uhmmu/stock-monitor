@@ -13,6 +13,11 @@ type CalendarEvent = {
 }
 type EventResponse = {items:CalendarEvent[];total:number;generated_at:string;capabilities:Record<string,boolean>}
 type Summary = {today:number;next_7_days:number;next_30_days:number;high_impact:number;portfolio_events:number}
+type CalendarStatus = {
+  scope:'tracked';tracked_symbols:number;future_earnings_symbols:number;earnings_coverage_percent:number;
+  next_30_day_symbols:number;providers:Record<string,string[]>;last_successful_sync_at:string|null;
+  latest_run:{status:string;successful_symbols:number;tracked_symbols:number;failures:{symbol:string;provider:string;error:string}[]} | null
+}
 
 const eventNames:Record<string,string> = {
   earnings:'财报',dividend_ex_date:'除息',dividend_record_date:'股权登记',dividend_payment_date:'股息支付',
@@ -61,6 +66,7 @@ export function InvestmentCalendar() {
   filters[typeFilter].types.forEach(value=>params.append('event_types',value))
   const events = useQuery({queryKey:['investment-calendar',params.toString()],queryFn:()=>api<EventResponse>(`/calendar/events?${params}`),staleTime:5*60_000})
   const summary = useQuery({queryKey:['investment-calendar-summary'],queryFn:()=>api<Summary>('/calendar/summary'),staleTime:5*60_000})
+  const status = useQuery({queryKey:['investment-calendar-status'],queryFn:()=>api<CalendarStatus>('/calendar/status'),staleTime:5*60_000})
   const grouped = useMemo(()=>{
     const result = new Map<string,CalendarEvent[]>()
     for(const event of events.data?.items||[]) result.set(event.event_date,[...(result.get(event.event_date)||[]),event])
@@ -86,8 +92,15 @@ export function InvestmentCalendar() {
         <span><b>{summary.data?.next_7_days??'—'}</b><small>未来 7 天</small></span>
         <span><b>{summary.data?.high_impact??'—'}</b><small>重点事件</small></span>
         <span><b>{summary.data?.portfolio_events??'—'}</b><small>持仓相关</small></span>
+        <span><b>{status.data?`${status.data.future_earnings_symbols}/${status.data.tracked_symbols}`:'—'}</b><small>未来财报覆盖</small></span>
       </div>
     </section>
+    <div className={`calendar-sync-state ${status.data?.latest_run?.status||''}`}>
+      <span>已追踪 {status.data?.tracked_symbols??'—'} 家 · 财报覆盖 {status.data?.earnings_coverage_percent??'—'}%</span>
+      <span>数据源 {status.data?Object.keys(status.data.providers).map(value=>value.toUpperCase()).join(' + '):'—'}</span>
+      <span>上次成功同步 {status.data?.last_successful_sync_at?new Date(status.data.last_successful_sync_at).toLocaleString('zh-CN'):'尚无记录'}</span>
+      {!!status.data?.latest_run?.failures.length&&<span className="warning">最近同步有 {status.data.latest_run.failures.length} 项来源失败，已保留有效缓存</span>}
+    </div>
 
     <section className="calendar-controls" aria-label="日历筛选">
       <div className="calendar-control-row">
@@ -96,7 +109,7 @@ export function InvestmentCalendar() {
             <button key={key} role="tab" aria-selected={range===key} className={range===key?'active':''} onClick={()=>setRange(key as typeof range)}>{label}</button>)}
         </div>
         <div className="segmented compact" role="tablist" aria-label="证券范围">
-          {[['mine','持仓与自选'],['portfolio','我的持仓'],['watchlist','自选股'],['all','全部']].map(([key,label])=>
+          {[['mine','持仓与自选'],['portfolio','我的持仓'],['watchlist','自选股'],['all','全部已追踪']].map(([key,label])=>
             <button key={key} role="tab" aria-selected={scope===key} className={scope===key?'active':''} onClick={()=>setScope(key as typeof scope)}>{label}</button>)}
         </div>
       </div>
@@ -123,6 +136,6 @@ export function InvestmentCalendar() {
         </article>)}</div>
       </section>)}
     </section>
-    <p className="calendar-footnote">数据来自当前已验证的 Yahoo 适配器并由后台定时刷新。日期可能由上游估算；IPO、公司活动与宏观日历在缺少可靠来源时保持关闭。</p>
+    <p className="calendar-footnote">财报日期由 Yahoo 与 Finnhub 交叉验证，分红和拆股来自 Yahoo；后台按持久化同步状态自动补刷。“全部已追踪”不代表全市场。日期可能由上游估算；IPO、公司活动与宏观日历在缺少可靠来源时保持关闭。</p>
   </div>
 }

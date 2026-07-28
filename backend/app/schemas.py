@@ -97,6 +97,11 @@ class SettingsOut(SettingsUpdate):
     price_poll_minutes: int
 
 
+class UserPriceAlertCreate(BaseModel):
+    target_price: float = Field(gt=0, allow_inf_nan=False)
+    direction: str = Field(pattern="^(above|below)$")
+
+
 class GrahamOverride(BaseModel):
     """按请求临时覆盖 Graham 输入，不写回每日快照。"""
     growth_rate: float | None = Field(default=None, ge=-4, le=15, allow_inf_nan=False)
