@@ -1,6 +1,6 @@
 # Stock Monitor
 
-一个可自托管的美股监控与研究工作台。它把实时行情、异动提醒、新闻与 SEC 披露、基本面数据、AI 分析、交易日志和多模型指标集中在一个响应式仪表盘中。
+一个可自托管的美股监控与研究工作台。它把实时行情、异动提醒、新闻与 SEC 披露、基本面数据、AI 研究助手、交易日志和多模型指标集中在一个响应式仪表盘中。
 
 项目面向希望自己掌握数据、API 密钥和部署环境的个人投资者与小团队。它提供研究辅助，不构成投资建议。
 
@@ -17,6 +17,13 @@
 - **交易日志区**：按用户记录交易计划、买卖方向、数量、价格、标签、图片和复盘内容，并可调用 AI 生成总结。
 - **多币种持仓**：记录本币成本与行情，组合总市值、盈亏、权重和行业暴露通过 Yahoo 外汇报价折算到组合基础币种；汇率缺失时明确排除并提示，不按 1:1 混算。
 - **机会发现**：仅手动触发，可在“Perplexity Search API + `gpt-5.6-sol`”低成本模式与“`finance_search` + Perplexity GPT-5.4”深度 Agent 模式间切换；两种模式都会结合 Yahoo、FMP、Finnhub、SEC、持仓、股票池以及新闻标题和概要，结果、本地验证、来源与历史报告均持久化。
+- **AI 研究助手**：内置多轮对话页面（`/ai/new`、`/ai/{id}`），支持 SSE 流式输出、会话归档/软删除/恢复、重新生成、停止生成、引用抽屉和工具活动展示。回答只使用已入库数据，缺数据时明确标注。
+- **只读 AI 工具层**：44 个版本化只读工具建立在 Research Data Gateway 之上，覆盖组合、新闻、SEC、公司、行情与技术数据。工具不写库、不调用上游 API、不递归调用，全部执行都有预算、超时、压缩和审计。
+- **AI 长期记忆与投资决策**：跨会话的用户偏好/约束记忆需显式确认才生效，推断内容停留在 proposed；投资决策记录动作、期限、论点、催化剂、风险和失效条件，草稿必须用户确认后才转为正式，执行状态只是日志，不下单。
+- **富内容回答**：模型只选择服务端生成的候选块 ID，指标网格、对比表、迷你走势、新闻聚类、风险面板、SEC 摘要等组件由确定性工厂产出，并始终附带完整 Markdown 回退。
+- **可选联网研究**：Exa 普通 Search 与五档 Agent Deep Search，默认关闭；私有记忆和决策上下文不会发送到外部搜索。
+- **标准化行情快照**：`price_snapshots` 记录真实行情时间戳、OHLC、涨跌、10/20 日均量与相对量、盘口时段、来源和原始载荷，通过 `snapshot_key` 保证幂等，只有新快照才触发异动评估。
+- **交易日志与持仓同步**：已执行的日志记录通过稳定 source key 幂等同步为权威交易流水并重建派生持仓，编辑和删除都可对账。
 - **SEC 官方数据**：支持 8-K、10-Q、10-K、内幕交易和 13F 持仓信息。
 - **数据缺口提示**：当外部数据覆盖不足时明确显示缺少的字段，方便排错和判断模型可信度。
 
@@ -24,12 +31,12 @@
 
 | 层 | 技术 |
 |---|---|
-| 前端 | React 19、TypeScript、Vite、TanStack Query、react-markdown |
+| 前端 | React 19、TypeScript、Vite、TanStack Query、react-markdown、remark-gfm |
 | 后端 | FastAPI、SQLAlchemy 2、Alembic、Pydantic Settings |
 | 后台任务 | Celery、Redis |
 | 数据库 | PostgreSQL 16 |
 | 数据源 | yfinance、Finnhub MCP、FMP（仅历史日线与公司资料）、Tavily、SEC EDGAR / edgartools |
-| AI | 可配置的 OpenAI-compatible API |
+| AI | 可配置的 OpenAI-compatible API（对话、工具调用、总结、记忆抽取）、可选 Exa 联网搜索 |
 | 网关 | Caddy（HTTPS 和 Basic Auth） |
 | 部署 | Docker Compose |
 
@@ -96,7 +103,7 @@ ADANOS_API_BASE_URL=https://api.adanos.org
 JWT_SECRET=generate-a-long-random-secret
 ADMIN_INIT_PASSWORD=generate-a-strong-admin-password
 
-SITE_DOMAIN=stocks.example.com
+SITE_DOMAINS="stocks.example.com, www.stocks.example.com"
 AUTH_USER=admin
 AUTH_PASSWORD_HASH=   # caddy hash-password 生成
 ```
@@ -107,6 +114,25 @@ Adanos Key 仅由 FastAPI 服务端读取。登录后的“舆情”板块通过
 单个来源失败不会影响其余来源；成功结果缓存 5 分钟，浏览器不会接触 Key。配置
 `ADANOS_API_KEYS` 时，四个来源会在 Key 池中轮询分流；单个 Key 返回
 401、403、429 或可重试的 5xx 时，会自动尝试池中的下一个 Key。
+
+### 可选：AI 研究助手
+
+AI 对话、工具层、总结、长期记忆、投资决策和富内容默认开启，但 `AI_API_KEY` 与 `AI_API_BASE` 只能由服务端配置，浏览器不会接触密钥。若不打算启用，请显式设置 `AI_ENABLED=false`，不要依赖"有表无配置"的隐式状态：
+
+```env
+AI_ENABLED=true
+AI_API_BASE=https://api.openai.com/v1
+AI_API_KEY=your-key
+AI_MODEL=gpt-5.6-sol
+```
+
+对话上下文由会话摘要、最近未摘要消息、已确认记忆和活跃决策组成，三类记录相互独立且可分别关闭。模型没有写工具：记忆和决策的落库都需要用户显式确认。
+
+### 可选：AI 对话联网研究
+
+AI 对话支持“不联网”、Exa 普通 Search，以及 Minimal、Low、Medium、High、X-High 五档 Exa Agent Deep Search。默认关闭且默认模式为“不联网”；启用时只在服务端设置 `EXA_API_KEY`，浏览器不会接触 Key、API Base、内部预算或 Provider Run ID。High 与 X-High 默认需要费用确认，X-High 不会被自动选择。
+
+普通搜索和 Deep Search 是两条独立链路：普通搜索调用 `/search` 并由当前主模型组织答案；Deep Search 创建持久化 `/agent/runs`，支持刷新恢复与主动取消，完成后再交给当前主模型轻量整理。生产配置、费用、隐私边界和测试命令见 [docs/external-search.md](docs/external-search.md) 与 [docs/exa-deep-search.md](docs/exa-deep-search.md)。
 
 ### 2. 启动服务
 
@@ -124,7 +150,7 @@ docker compose build frontend
 docker compose up -d frontend
 ```
 
-配置 Caddy 域名后，访问 `https://SITE_DOMAIN`。本地开发可以使用：
+配置 Caddy 域名后，访问 `SITE_DOMAINS` 中的任一 HTTPS 地址。多个域名使用英文逗号和空格分隔；旧的 `SITE_DOMAIN` 配置仍然兼容。本地开发可以使用：
 
 ```bash
 docker compose -f compose.yaml -f compose.override.yaml up -d
@@ -191,15 +217,36 @@ stock-monitor/
 ├── backend/
 │   ├── app/api/             # FastAPI 路由、认证、交易日志、多模型 API
 │   ├── app/services/        # 行情、新闻、SEC、LLM、多模型计算
+│   ├── app/research/        # 只读 Research Data Gateway
+│   ├── app/ai/              # 无状态 AI Orchestrator 与会话层
+│   ├── app/ai_tools/        # 只读 AI 工具适配、策略与执行器
+│   ├── app/ai_memory/       # 长期记忆与投资决策
+│   ├── app/ai_rich_content/ # 确定性富内容块工厂
+│   ├── app/external_search/ # 可选 Exa Search / Agent Deep Search
 │   ├── app/tasks/           # Celery 定时任务和后台同步
 │   ├── alembic/versions/    # 数据库迁移
 │   └── tests/               # 后端测试
 ├── frontend/src/            # React 单页应用
+├── frontend/src/features/   # AI 对话与记忆前端模块
+├── docs/                    # AI、搜索与 Gateway 边界文档
 ├── finnhub-mcp/             # Finnhub MCP sidecar
 ├── compose.yaml
 ├── Caddyfile
 └── .env.example
 ```
+
+各模块的边界、配置、隐私约束和测试命令见 `docs/`：
+[research-data-gateway](docs/research-data-gateway.md)、
+[ai-tool-layer](docs/ai-tool-layer.md)、
+[ai-orchestrator](docs/ai-orchestrator.md)、
+[ai-conversations](docs/ai-conversations.md)、
+[ai-conversation-summary](docs/ai-conversation-summary.md)、
+[ai-long-term-memory](docs/ai-long-term-memory.md)、
+[ai-investment-decisions](docs/ai-investment-decisions.md)、
+[ai-rich-content](docs/ai-rich-content.md)、
+[ai-chat-frontend](docs/ai-chat-frontend.md)、
+[external-search](docs/external-search.md)、
+[exa-deep-search](docs/exa-deep-search.md)。
 
 ## 数据与安全
 

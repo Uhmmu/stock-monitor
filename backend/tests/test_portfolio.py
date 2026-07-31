@@ -18,11 +18,17 @@ from app.models import (
     SecFiling,
     StockProfile,
     TechnicalAnalysis,
+    TradeLog,
     TradeTransaction,
     User,
     ValuationSnapshot,
 )
 from app.services.portfolio.lot_matcher import rebuild_symbol
+from app.services.portfolio.journal_sync import (
+    delete_trade_log_transactions,
+    reconcile_user_trade_logs,
+    sync_trade_log_transactions,
+)
 from app.services.portfolio.performance import build_summary
 from app.services.portfolio.benchmark import build_benchmark_comparison
 from app.services.portfolio.portfolio_health import build_health
@@ -42,6 +48,7 @@ from app.services.portfolio.strategy_profile import (
     reset_strategy_profile,
     update_strategy_profile,
 )
+from app.schemas import TradeLogTableRow
 from app.services.portfolio.transaction_service import (
     create_manual_position,
     get_or_create_default_portfolio,
@@ -51,6 +58,7 @@ TABLES = [
     User.__table__,
     PortfolioStrategyProfile.__table__,
     Portfolio.__table__,
+    TradeLog.__table__,
     TradeTransaction.__table__,
     PortfolioPosition.__table__,
     PortfolioPositionLot.__table__,
@@ -255,6 +263,100 @@ def test_create_manual_position_creates_transaction_and_rebuilds_position(db, po
 def test_manual_position_rejects_unsupported_currency():
     with pytest.raises(Exception):
         ManualPositionIn(symbol="AAPL", price=100.0, quantity=10, trade_date=date(2026, 1, 1), currency="XXX")
+
+
+# ── trading journal → portfolio transactions ─────────────────────────────
+
+def test_journal_buy_and_sell_rebuild_position_from_entered_values(db, portfolio):
+    security = Security(
+        display_symbol="AAPL", yahoo_symbol="AAPL", display_name="Apple",
+        currency="USD", mapping_method="test",
+    )
+    db.add(security)
+    db.flush()
+    log = TradeLog(
+        user_id=portfolio.user_id,
+        trade_date=date(2026, 1, 5),
+        table_rows=[
+            {"security_id": security.id, "ticker": "AAPL", "direction": "买入", "quantity": 12, "price": 100, "fee": 2},
+            {"security_id": security.id, "ticker": "AAPL", "direction": "卖出", "quantity": 5, "price": 125, "fee": 1},
+        ],
+        photo_urls=[],
+    )
+    db.add(log)
+    db.flush()
+
+    assert sync_trade_log_transactions(db, portfolio, log) is True
+    db.commit()
+
+    txns = db.query(TradeTransaction).filter_by(portfolio_id=portfolio.id).order_by(TradeTransaction.id).all()
+    assert [(txn.transaction_type, txn.quantity, txn.price, txn.trade_date) for txn in txns] == [
+        ("buy", 12, 100, date(2026, 1, 5)),
+        ("sell", 5, 125, date(2026, 1, 5)),
+    ]
+    assert all(txn.source == "journal" and txn.source_log_id == log.id for txn in txns)
+    assert [txn.source_log_row_index for txn in txns] == [0, 1]
+    position = db.query(PortfolioPosition).filter_by(portfolio_id=portfolio.id, symbol="AAPL").one()
+    assert position.total_quantity == 7
+    assert position.average_cost == pytest.approx((1200 + 2) / 12)
+    assert position.total_cost == pytest.approx(7 * ((1200 + 2) / 12))
+    assert position.last_transaction_at == date(2026, 1, 5)
+
+
+def test_journal_edit_and_delete_reconcile_existing_position(db, portfolio):
+    log = TradeLog(
+        user_id=portfolio.user_id,
+        trade_date=date(2026, 1, 1),
+        table_rows=[{"ticker": "MSFT", "direction": "买入", "quantity": 10, "price": 200}],
+        photo_urls=[],
+    )
+    db.add(log)
+    db.flush()
+    sync_trade_log_transactions(db, portfolio, log)
+    db.commit()
+
+    log.trade_date = date(2026, 1, 3)
+    log.table_rows = [{"ticker": "MSFT", "direction": "买入", "quantity": 4, "price": 220}]
+    assert sync_trade_log_transactions(db, portfolio, log) is True
+    db.commit()
+    assert db.query(TradeTransaction).filter_by(portfolio_id=portfolio.id).count() == 1
+    position = db.query(PortfolioPosition).filter_by(portfolio_id=portfolio.id, symbol="MSFT").one()
+    assert position.total_quantity == 4
+    assert position.average_cost == 220
+    assert position.last_transaction_at == date(2026, 1, 3)
+
+    assert delete_trade_log_transactions(db, portfolio, log) is True
+    db.delete(log)
+    db.commit()
+    assert db.query(TradeTransaction).filter_by(portfolio_id=portfolio.id).count() == 0
+    assert db.query(PortfolioPosition).filter_by(portfolio_id=portfolio.id, symbol="MSFT").first() is None
+
+
+def test_reconcile_backfills_existing_logs_and_ignores_non_executed_rows(db, portfolio):
+    db.add(TradeLog(
+        user_id=portfolio.user_id,
+        trade_date=date(2026, 2, 1),
+        table_rows=[
+            {"ticker": "NVDA", "direction": "观望", "quantity": 3, "price": 100},
+            {"ticker": "NVDA", "direction": "买入", "quantity": 2, "price": 110},
+        ],
+        photo_urls=[],
+    ))
+    db.commit()
+
+    assert reconcile_user_trade_logs(db, portfolio) is True
+    db.commit()
+    txn = db.query(TradeTransaction).filter_by(portfolio_id=portfolio.id).one()
+    assert txn.transaction_type == "buy"
+    assert txn.quantity == 2
+    assert reconcile_user_trade_logs(db, portfolio) is False
+
+
+def test_executed_journal_row_requires_ticker_quantity_and_price():
+    with pytest.raises(Exception, match="买入/卖出必须填写"):
+        TradeLogTableRow(ticker="AAPL", direction="买入", quantity=None, price=100)
+    row = TradeLogTableRow(ticker="AAPL", direction="观望", quantity=None, price=None)
+    assert row.direction == "观望"
 
 
 # ── performance.build_summary ─────────────────────────────────────────────

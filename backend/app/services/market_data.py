@@ -15,6 +15,208 @@ class Quote:
     volume: int | None
 
 
+@dataclass(frozen=True)
+class LiveQuote:
+    """An on-demand Yahoo chart quote with the provider's market timestamp."""
+
+    ticker: str
+    quote_time: datetime
+    retrieved_at: datetime
+    trading_date: date
+    price: float
+    regular_market_price: float | None
+    previous_close: float | None
+    open: float | None
+    day_high: float | None
+    day_low: float | None
+    volume: int | None
+    currency: str | None
+    exchange: str | None
+    average_volume_10d: float | None
+    average_volume_20d: float | None
+    market_status: str
+    quote_session: str
+    timestamp_source: str = "provider"
+    is_delayed: bool | None = None
+    delay_seconds: int | None = None
+    raw_payload: dict[str, Any] | None = None
+    source: str = "yahoo_chart_1m"
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result == result and result not in (float("inf"), float("-inf")) else None
+
+
+def _epoch(value: Any) -> datetime | None:
+    number = _finite_float(value)
+    return datetime.fromtimestamp(number, UTC) if number is not None else None
+
+
+def _quote_session(moment: datetime, periods: dict[str, Any]) -> str:
+    timestamp = moment.timestamp()
+    has_period = False
+    for key, label in (("pre", "pre_market"), ("regular", "regular"), ("post", "after_hours")):
+        period = periods.get(key) or {}
+        start, end = _finite_float(period.get("start")), _finite_float(period.get("end"))
+        if start is not None and end is not None:
+            has_period = True
+            if start <= timestamp <= end:
+                return label
+    return "closed" if has_period else "unknown"
+
+
+def _current_market_status(moment: datetime, periods: dict[str, Any]) -> str:
+    session = _quote_session(moment, periods)
+    return "open" if session == "regular" else session
+
+
+def fetch_live_quote(ticker: str) -> LiveQuote:
+    """Fetch the latest tradable quote on demand.
+
+    The one-minute Yahoo chart is preferred over ``fast_info`` because its row
+    index is the provider's actual quote time. Extended-hours rows are included.
+    Callers can therefore distinguish quote time from retrieval time instead of
+    presenting a request timestamp as if it were a trade timestamp.
+    """
+    symbol = ticker.strip().upper()
+    stock = yf.Ticker(symbol)
+    frame = stock.history(
+        period="1d",
+        interval="1m",
+        prepost=True,
+        auto_adjust=False,
+        timeout=6,
+    )
+    retrieved_at = datetime.now(UTC)
+    if frame is None or frame.empty or "Close" not in frame:
+        raise ValueError(f"no live quote rows for {symbol}")
+    closes = frame["Close"].dropna()
+    if closes.empty:
+        raise ValueError(f"no valid live quote price for {symbol}")
+
+    last_index = closes.index[-1]
+    trading_date = last_index.date()
+    quote_time = last_index.to_pydatetime()
+    if quote_time.tzinfo is None:
+        quote_time = quote_time.replace(tzinfo=UTC)
+    quote_time = quote_time.astimezone(UTC)
+    price = _finite_float(closes.iloc[-1])
+    if price is None or price <= 0:
+        raise ValueError(f"invalid live quote price for {symbol}")
+
+    metadata = stock.history_metadata or {}
+    periods = metadata.get("currentTradingPeriod") or {}
+    regular_market_time = _epoch(metadata.get("regularMarketTime"))
+    regular_price = _finite_float(metadata.get("regularMarketPrice"))
+    if regular_market_time and quote_time <= regular_market_time and regular_price is not None:
+        price, quote_time = regular_price, regular_market_time
+
+    regular_frame = None
+    regular_period = periods.get("regular") or {}
+    regular_start = _finite_float(regular_period.get("start"))
+    regular_end = _finite_float(regular_period.get("end"))
+    if regular_start is not None and regular_end is not None:
+        regular_mask = [
+            regular_start <= index.to_pydatetime().timestamp() <= regular_end
+            for index in frame.index
+        ]
+        regular_frame = frame.loc[regular_mask]
+        if regular_frame.empty:
+            regular_frame = None
+
+    def _regular_value(column: str, operation: str) -> float | None:
+        if regular_frame is None or column not in regular_frame:
+            return None
+        values = regular_frame[column].dropna()
+        if values.empty:
+            return None
+        if operation == "first":
+            return _finite_float(values.iloc[0])
+        if operation == "max":
+            return _finite_float(values.max())
+        if operation == "min":
+            return _finite_float(values.min())
+        if operation == "sum":
+            return _finite_float(values.sum())
+        return None
+
+    open_price = _finite_float(metadata.get("regularMarketOpen"))
+    day_high = _finite_float(metadata.get("regularMarketDayHigh"))
+    day_low = _finite_float(metadata.get("regularMarketDayLow"))
+    volume = _finite_float(metadata.get("regularMarketVolume"))
+    open_price = open_price or _regular_value("Open", "first")
+    day_high = day_high or _regular_value("High", "max")
+    day_low = day_low or _regular_value("Low", "min")
+    volume = volume or _regular_value("Volume", "sum")
+    daily = stock.history(
+        period="1mo",
+        interval="1d",
+        prepost=False,
+        auto_adjust=False,
+        timeout=6,
+    )
+    historical_volumes: list[float] = []
+    if daily is not None and not daily.empty and "Volume" in daily:
+        for index, value in daily["Volume"].dropna().items():
+            point_date = index.date() if hasattr(index, "date") else None
+            number = _finite_float(value)
+            if point_date != trading_date and number is not None and number > 0:
+                historical_volumes.append(number)
+    average_10d = (
+        sum(historical_volumes[-10:]) / len(historical_volumes[-10:])
+        if historical_volumes[-10:]
+        else None
+    )
+    average_20d = (
+        sum(historical_volumes[-20:]) / len(historical_volumes[-20:])
+        if historical_volumes[-20:]
+        else None
+    )
+    reported_delay = _finite_float(metadata.get("exchangeDataDelayedBy"))
+    return LiveQuote(
+        ticker=symbol,
+        quote_time=quote_time,
+        retrieved_at=retrieved_at,
+        trading_date=trading_date,
+        price=price,
+        regular_market_price=regular_price,
+        previous_close=_finite_float(metadata.get("previousClose") or metadata.get("chartPreviousClose")),
+        open=open_price,
+        day_high=day_high,
+        day_low=day_low,
+        volume=int(volume) if volume is not None else None,
+        currency=str(metadata["currency"]) if metadata.get("currency") else None,
+        exchange=str(metadata.get("fullExchangeName") or metadata.get("exchangeName") or "") or None,
+        average_volume_10d=average_10d,
+        average_volume_20d=average_20d,
+        market_status=_current_market_status(retrieved_at, periods),
+        quote_session=_quote_session(quote_time, periods),
+        is_delayed=reported_delay > 0 if reported_delay is not None else None,
+        delay_seconds=int(reported_delay * 60) if reported_delay is not None else None,
+        raw_payload={
+            key: metadata.get(key)
+            for key in (
+                "currency",
+                "symbol",
+                "exchangeName",
+                "fullExchangeName",
+                "regularMarketTime",
+                "regularMarketPrice",
+                "regularMarketDayHigh",
+                "regularMarketDayLow",
+                "regularMarketVolume",
+                "previousClose",
+                "exchangeDataDelayedBy",
+            )
+            if metadata.get(key) is not None
+        },
+    )
+
+
 def fetch_earnings_events(tickers: list[str]) -> list[tuple[str, datetime]]:
     events: list[tuple[str, datetime]] = []
     for ticker in tickers:

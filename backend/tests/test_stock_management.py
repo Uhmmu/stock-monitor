@@ -152,11 +152,29 @@ def test_full_watchlist_sync_queues_all_existing_capabilities(monkeypatch):
     tasks = importlib.import_module("app.tasks.celery_app")
 
     called = []
-    for name in ("sync_ticker_financials", "sync_ticker_filings", "sync_ticker_sec_all", "sync_ticker_congress", "sync_ticker_valuation", "poll_news", "sync_fmp_symbol"):
+    for name in (
+        "sync_ticker_financials",
+        "sync_ticker_filings",
+        "sync_ticker_sec_all",
+        "sync_ticker_congress",
+        "sync_ticker_valuation",
+        "sync_ticker_price_snapshot",
+        "poll_news",
+        "sync_fmp_symbol",
+    ):
         monkeypatch.setattr(getattr(tasks, name), "delay", lambda ticker, name=name: called.append((name, ticker)))
     result = tasks.sync_ticker_full.run("msft")
     assert result["status"] == "queued_full_sync"
-    assert {name for name, _ in called} == {"sync_ticker_financials", "sync_ticker_filings", "sync_ticker_sec_all", "sync_ticker_congress", "sync_ticker_valuation", "poll_news", "sync_fmp_symbol"}
+    assert {name for name, _ in called} == {
+        "sync_ticker_financials",
+        "sync_ticker_filings",
+        "sync_ticker_sec_all",
+        "sync_ticker_congress",
+        "sync_ticker_valuation",
+        "sync_ticker_price_snapshot",
+        "poll_news",
+        "sync_fmp_symbol",
+    }
 
 
 def test_peer_sync_uses_only_quote_financial_and_valuation_dependencies(monkeypatch):
@@ -176,7 +194,12 @@ def test_peer_sync_uses_only_quote_financial_and_valuation_dependencies(monkeypa
     monkeypatch.setattr(tasks, "SessionLocal", lambda: FakeContext())
     monkeypatch.setattr(tasks, "_sync_ticker_financials", lambda db, ticker: calls.append("financials") or True)
     monkeypatch.setattr(tasks, "_sync_ticker_valuation", lambda db, ticker, explain=False: calls.append(("valuation", explain)) or True)
-    monkeypatch.setattr(tasks, "fetch_quotes", lambda tickers: [])
+    monkeypatch.setattr(tasks, "collect_price_snapshot", lambda db, ticker: object())
+    monkeypatch.setattr(
+        tasks,
+        "persist_price_snapshot",
+        lambda db, snapshot: (object(), False),
+    )
     result = tasks.sync_peer_valuation_data.run("orcl")
     assert result == {"ticker": "ORCL", "financials": True, "valuation": True, "quotes": 0}
     assert calls == ["financials", ("valuation", False), "commit"]

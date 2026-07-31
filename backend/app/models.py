@@ -1,8 +1,27 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import JSON, BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func, text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.database import Base
 
@@ -127,14 +146,60 @@ class PeerExclusion(Base):
 
 class PriceSnapshot(Base):
     __tablename__ = "price_snapshots"
-    __table_args__ = (UniqueConstraint("ticker", "quote_time"),)
+    __table_args__ = (
+        UniqueConstraint("snapshot_key", name="uq_price_snapshots_snapshot_key"),
+        Index(
+            "ix_price_snapshots_latest",
+            "ticker",
+            "quote_time",
+            "fetched_at",
+            "persisted_at",
+        ),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
-    ticker: Mapped[str] = mapped_column(String(16), index=True)
-    quote_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    price: Mapped[float] = mapped_column(Float)
+    # The physical legacy column names are retained for a safe in-place
+    # migration; all new Python/API code uses the normalized attribute names.
+    symbol: Mapped[str] = mapped_column("ticker", String(16), index=True)
+    exchange: Mapped[str | None] = mapped_column(String(64))
+    currency: Mapped[str | None] = mapped_column(String(12))
+    source_type: Mapped[str] = mapped_column(String(32), default="price_snapshot")
+    provider: Mapped[str] = mapped_column("source", String(32), default="yfinance")
+    provider_symbol: Mapped[str | None] = mapped_column(String(32))
+    provider_role: Mapped[str | None] = mapped_column(String(32), default="market_data_aggregator")
+
+    last_price: Mapped[float] = mapped_column("price", Float)
+    open_price: Mapped[float | None] = mapped_column(Float)
+    day_high: Mapped[float | None] = mapped_column(Float)
+    day_low: Mapped[float | None] = mapped_column(Float)
     previous_close: Mapped[float | None] = mapped_column(Float)
-    volume: Mapped[int | None] = mapped_column(Integer)
-    source: Mapped[str] = mapped_column(String(32), default="yfinance")
+    price_change: Mapped[float | None] = mapped_column(Float)
+    price_change_percent: Mapped[float | None] = mapped_column(Float)
+
+    day_volume: Mapped[int | None] = mapped_column("volume", Integer)
+    average_volume_10d: Mapped[float | None] = mapped_column(Float)
+    average_volume_20d: Mapped[float | None] = mapped_column(Float)
+    relative_volume_20d: Mapped[float | None] = mapped_column(Float)
+    relative_volume_basis: Mapped[str | None] = mapped_column(String(32))
+
+    market_timestamp: Mapped[datetime | None] = mapped_column("quote_time", DateTime(timezone=True), index=True)
+    trading_date: Mapped[date | None] = mapped_column(Date)
+    market_session: Mapped[str] = mapped_column(String(16), default="unknown")
+    timestamp_source: Mapped[str | None] = mapped_column(String(32))
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    persisted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+    is_delayed: Mapped[bool | None] = mapped_column(Boolean)
+    delay_seconds: Mapped[int | None] = mapped_column(Integer)
+    raw_payload: Mapped[dict | None] = mapped_column(JSON)
+    snapshot_key: Mapped[str | None] = mapped_column(String(64))
+
+    # Compatibility aliases keep existing alert/portfolio code and historical
+    # fixtures readable while new boundaries consistently expose snake_case.
+    ticker = synonym("symbol")
+    quote_time = synonym("market_timestamp")
+    price = synonym("last_price")
+    volume = synonym("day_volume")
+    source = synonym("provider")
 
 
 class PriceAlert(Base):
@@ -819,6 +884,592 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AIConversation(Base):
+    """User-owned conversation metadata; model execution remains stateless."""
+    __tablename__ = "ai_conversations"
+    __table_args__ = (
+        CheckConstraint("status IN ('active','archived','deleted')", name="ck_ai_conversations_status"),
+        CheckConstraint("summary_status IN ('none','pending','ready','stale','failed')", name="ck_ai_conversations_summary_status"),
+        Index("ix_ai_conversations_user_deleted_last", "user_id", "deleted_at", "last_message_at"),
+        Index("ix_ai_conversations_user_status_last", "user_id", "status", "last_message_at"),
+        Index("ix_ai_conversations_user_archived", "user_id", "archived_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="新对话")
+    title_source: Mapped[str] = mapped_column(String(16), default="generated")
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    active_symbol: Mapped[str | None] = mapped_column(String(32))
+    active_symbols: Mapped[list] = mapped_column(JSON, default=list)
+    active_portfolio_id: Mapped[int | None] = mapped_column(ForeignKey("portfolios.id", ondelete="SET NULL"), index=True)
+    page_context: Mapped[str | None] = mapped_column(String(32))
+    model: Mapped[str | None] = mapped_column(String(200))
+    provider: Mapped[str | None] = mapped_column(String(64))
+    response_mode: Mapped[str] = mapped_column(String(16), default="standard")
+    web_access_mode: Mapped[str] = mapped_column(String(24), default="off")
+    system_prompt_version: Mapped[str] = mapped_column(String(32), default="v1")
+    summary: Mapped[str | None] = mapped_column(Text)
+    summary_status: Mapped[str] = mapped_column(String(16), default="none")
+    summary_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    current_summary_snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_conversation_summary_snapshots.id", ondelete="SET NULL"),
+        index=True,
+    )
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    completed_message_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AIMessage(Base):
+    __tablename__ = "ai_messages"
+    __table_args__ = (
+        CheckConstraint("role IN ('user','assistant')", name="ck_ai_messages_role"),
+        CheckConstraint("status IN ('pending','streaming','completed','partial','failed','cancelled')", name="ck_ai_messages_status"),
+        Index("ix_ai_messages_conversation_created", "conversation_id", "created_at", "id"),
+        Index("ix_ai_messages_user_conversation", "user_id", "conversation_id"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("ai_conversations.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text, default="")
+    content_format: Mapped[str] = mapped_column(String(16), default="markdown")
+    content_schema_version: Mapped[int | None] = mapped_column(Integer)
+    content_parts: Mapped[dict | None] = mapped_column(JSON)
+    parent_message_id: Mapped[int | None] = mapped_column(ForeignKey("ai_messages.id", ondelete="SET NULL"), index=True)
+    reply_to_message_id: Mapped[int | None] = mapped_column(ForeignKey("ai_messages.id", ondelete="SET NULL"))
+    regenerated_from_message_id: Mapped[int | None] = mapped_column(ForeignKey("ai_messages.id", ondelete="SET NULL"), index=True)
+    generation_index: Mapped[int] = mapped_column(Integer, default=1)
+    provider: Mapped[str | None] = mapped_column(String(64))
+    model: Mapped[str | None] = mapped_column(String(200))
+    provider_response_id: Mapped[str | None] = mapped_column(String(256))
+    system_prompt_version: Mapped[str] = mapped_column(String(32), default="v1")
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    tool_call_count: Mapped[int] = mapped_column(Integer, default=0)
+    citation_count: Mapped[int] = mapped_column(Integer, default=0)
+    web_access_mode: Mapped[str] = mapped_column(String(24), default="off")
+    external_search_call_count: Mapped[int] = mapped_column(Integer, default=0)
+    deep_search_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("external_search_runs.id", ondelete="SET NULL"), index=True
+    )
+    external_search_cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 6))
+    summary_snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_conversation_summary_snapshots.id", ondelete="SET NULL"),
+        index=True,
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message_safe: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deep_search_run: Mapped["ExternalSearchRun | None"] = relationship(
+        foreign_keys=[deep_search_run_id], post_update=True
+    )
+
+
+class AIMessageCitation(Base):
+    __tablename__ = "ai_message_citations"
+    __table_args__ = (
+        UniqueConstraint("message_id", "citation_key", name="uq_ai_citations_message_key"),
+        UniqueConstraint("message_id", "source_id", name="uq_ai_citations_message_source"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("ai_messages.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("ai_conversations.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    citation_key: Mapped[str] = mapped_column(String(16))
+    source_id: Mapped[str] = mapped_column(String(256))
+    source_type: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(300))
+    symbol: Mapped[str | None] = mapped_column(String(32))
+    provider: Mapped[str | None] = mapped_column(String(64))
+    authority: Mapped[str | None] = mapped_column(String(128))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locator: Mapped[str | None] = mapped_column(String(500))
+    url: Mapped[str | None] = mapped_column(String(2000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AIToolCallRecord(Base):
+    __tablename__ = "ai_tool_call_records"
+    __table_args__ = (
+        UniqueConstraint("assistant_message_id", "tool_call_id", name="uq_ai_tool_calls_message_call"),
+        Index("ix_ai_tool_calls_conversation_created", "conversation_id", "created_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("ai_conversations.id", ondelete="CASCADE"), index=True)
+    assistant_message_id: Mapped[int] = mapped_column(ForeignKey("ai_messages.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    tool_call_id: Mapped[str] = mapped_column(String(256))
+    tool_name: Mapped[str] = mapped_column(String(64))
+    tool_version: Mapped[str | None] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32))
+    result_mode: Mapped[str | None] = mapped_column(String(16))
+    normalized_arguments: Mapped[dict] = mapped_column(JSON, default=dict)
+    arguments_hash: Mapped[str | None] = mapped_column(String(64))
+    summary: Mapped[str | None] = mapped_column(String(500))
+    warning_codes: Mapped[list] = mapped_column(JSON, default=list)
+    source_ids: Mapped[list] = mapped_column(JSON, default=list)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    truncated: Mapped[bool] = mapped_column(Boolean, default=False)
+    original_item_count: Mapped[int | None] = mapped_column(Integer)
+    returned_item_count: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    retryable: Mapped[bool] = mapped_column(Boolean, default=False)
+    reused: Mapped[bool] = mapped_column(Boolean, default=False)
+    external_provider: Mapped[str | None] = mapped_column(String(32))
+    external_request_id: Mapped[str | None] = mapped_column(String(256))
+    external_run_id: Mapped[str | None] = mapped_column(String(64))
+    cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 6))
+    cost_estimated: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AIConversationSummarySnapshot(Base):
+    __tablename__ = "ai_conversation_summary_snapshots"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','completed','failed','superseded')",
+            name="ck_ai_conversation_summary_snapshots_status",
+        ),
+        UniqueConstraint("conversation_id", "version", name="uq_ai_summary_snapshot_version"),
+        Index(
+            "ix_ai_summary_snapshots_conversation_status",
+            "conversation_id",
+            "status",
+            "version",
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_conversations.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    from_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_messages.id", ondelete="SET NULL")
+    )
+    through_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_messages.id", ondelete="SET NULL"), index=True
+    )
+    source_message_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_character_count: Mapped[int] = mapped_column(Integer, default=0)
+    summary_text: Mapped[str | None] = mapped_column(Text)
+    structured_summary: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), default=dict
+    )
+    provider: Mapped[str | None] = mapped_column(String(64))
+    model: Mapped[str | None] = mapped_column(String(200))
+    prompt_version: Mapped[str] = mapped_column(String(32), default="1")
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message_safe: Mapped[str | None] = mapped_column(String(500))
+
+
+class AIUserMemoryPreference(Base):
+    __tablename__ = "ai_user_memory_preferences"
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    use_in_context: Mapped[bool] = mapped_column(Boolean, default=True)
+    candidate_extraction_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AIUserMemory(Base):
+    __tablename__ = "ai_user_memories"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('proposed','active','rejected','stale','expired','archived','deleted')",
+            name="ck_ai_user_memories_status",
+        ),
+        CheckConstraint(
+            "scope IN ('global','portfolio','symbol','project','page_context')",
+            name="ck_ai_user_memories_scope",
+        ),
+        Index("ix_ai_user_memories_user_status", "user_id", "status"),
+        Index(
+            "ix_ai_user_memories_user_scope",
+            "user_id",
+            "scope",
+            "scope_key",
+            "status",
+        ),
+        Index(
+            "ix_ai_user_memories_signature",
+            "user_id",
+            "memory_type",
+            "scope",
+            "scope_key",
+            "normalized_content_hash",
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    memory_type: Mapped[str] = mapped_column(String(40), index=True)
+    scope: Mapped[str] = mapped_column(String(24), default="global")
+    scope_key: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(16), default="proposed")
+    title: Mapped[str | None] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(Text)
+    structured_value: Mapped[dict | list | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql")
+    )
+    origin: Mapped[str] = mapped_column(String(32))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    importance: Mapped[int] = mapped_column(Integer, default=50)
+    normalized_content_hash: Mapped[str] = mapped_column(String(64))
+    source_conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_conversations.id", ondelete="SET NULL"), index=True
+    )
+    source_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_messages.id", ondelete="SET NULL"), index=True
+    )
+    source_decision_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_investment_decisions.id", ondelete="SET NULL"), index=True
+    )
+    effective_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    stale_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    last_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    supersedes_memory_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_user_memories.id", ondelete="SET NULL"), index=True
+    )
+    conflict_group: Mapped[str | None] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AIMemoryEvent(Base):
+    __tablename__ = "ai_memory_events"
+    __table_args__ = (
+        Index("ix_ai_memory_events_memory_created", "memory_id", "created_at"),
+        Index("ix_ai_memory_events_user_created", "user_id", "created_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    memory_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_user_memories.id", ondelete="CASCADE"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(24))
+    before_value: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql")
+    )
+    after_value: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql")
+    )
+    conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_conversations.id", ondelete="SET NULL")
+    )
+    message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_messages.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AIInvestmentDecision(Base):
+    __tablename__ = "ai_investment_decisions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','active','executed','partially_executed','cancelled','invalidated','closed','archived')",
+            name="ck_ai_investment_decisions_status",
+        ),
+        Index("ix_ai_investment_decisions_user_status", "user_id", "status"),
+        Index(
+            "ix_ai_investment_decisions_user_symbol",
+            "user_id",
+            "primary_symbol",
+            "status",
+        ),
+        Index(
+            "ix_ai_investment_decisions_user_review",
+            "user_id",
+            "target_review_at",
+            "status",
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(240))
+    decision_type: Mapped[str] = mapped_column(String(24), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="draft")
+    primary_symbol: Mapped[str | None] = mapped_column(String(32), index=True)
+    symbols: Mapped[list] = mapped_column(JSON, default=list)
+    portfolio_id: Mapped[int | None] = mapped_column(
+        ForeignKey("portfolios.id", ondelete="SET NULL"), index=True
+    )
+    decision_date: Mapped[date] = mapped_column(Date)
+    time_horizon: Mapped[str] = mapped_column(String(24), default="unspecified")
+    target_review_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    action: Mapped[str] = mapped_column(Text)
+    position_intent: Mapped[str | None] = mapped_column(String(64))
+    target_weight: Mapped[float | None] = mapped_column(Numeric(9, 6))
+    target_quantity: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    target_price_min: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    target_price_max: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    thesis: Mapped[list] = mapped_column(JSON, default=list)
+    catalysts: Mapped[list] = mapped_column(JSON, default=list)
+    risks: Mapped[list] = mapped_column(JSON, default=list)
+    invalidation_conditions: Mapped[list] = mapped_column(JSON, default=list)
+    assumptions: Mapped[list] = mapped_column(JSON, default=list)
+    open_questions: Mapped[list] = mapped_column(JSON, default=list)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    priority: Mapped[int] = mapped_column(Integer, default=50)
+    source_conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_conversations.id", ondelete="SET NULL"), index=True
+    )
+    source_user_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_messages.id", ondelete="SET NULL")
+    )
+    source_assistant_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_messages.id", ondelete="SET NULL")
+    )
+    executed_trade_id: Mapped[int | None] = mapped_column(
+        ForeignKey("trade_transactions.id", ondelete="SET NULL"), index=True
+    )
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AIInvestmentDecisionEvidence(Base):
+    __tablename__ = "ai_investment_decision_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "decision_id", "source_id", name="uq_ai_decision_evidence_source"
+        ),
+        Index("ix_ai_decision_evidence_decision_created", "decision_id", "created_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    decision_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_investment_decisions.id", ondelete="CASCADE"), index=True
+    )
+    source_id: Mapped[str] = mapped_column(String(256))
+    source_type: Mapped[str] = mapped_column(String(64))
+    origin: Mapped[str] = mapped_column(String(24))
+    title: Mapped[str] = mapped_column(String(300))
+    symbol: Mapped[str | None] = mapped_column(String(32))
+    provider: Mapped[str | None] = mapped_column(String(64))
+    authority: Mapped[str | None] = mapped_column(String(128))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    url: Mapped[str | None] = mapped_column(String(2000))
+    locator: Mapped[str | None] = mapped_column(String(500))
+    evidence_summary: Mapped[str] = mapped_column(String(1000))
+    evidence_role: Mapped[str] = mapped_column(String(24), default="context")
+    freshness_status: Mapped[str] = mapped_column(String(16), default="unknown")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AIInvestmentDecisionReview(Base):
+    __tablename__ = "ai_investment_decision_reviews"
+    __table_args__ = (
+        Index("ix_ai_decision_reviews_decision_reviewed", "decision_id", "reviewed_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    decision_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_investment_decisions.id", ondelete="CASCADE"), index=True
+    )
+    review_type: Mapped[str] = mapped_column(String(24), default="manual")
+    status: Mapped[str] = mapped_column(String(16), default="draft")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    data_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    thesis_status: Mapped[str] = mapped_column(String(24), default="uncertain")
+    invalidation_status: Mapped[str] = mapped_column(String(24), default="unknown")
+    execution_status: Mapped[str | None] = mapped_column(String(32))
+    what_changed: Mapped[str] = mapped_column(Text, default="")
+    supporting_changes: Mapped[list] = mapped_column(JSON, default=list)
+    contradicting_changes: Mapped[list] = mapped_column(JSON, default=list)
+    lessons: Mapped[list] = mapped_column(JSON, default=list)
+    next_action: Mapped[str | None] = mapped_column(Text)
+    linked_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_messages.id", ondelete="SET NULL")
+    )
+    linked_conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_conversations.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AIMessageMemoryUsage(Base):
+    __tablename__ = "ai_message_memory_usage"
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id", "memory_id", "usage_type", name="uq_ai_message_memory_usage"
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_messages.id", ondelete="CASCADE"), index=True
+    )
+    memory_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_user_memories.id", ondelete="CASCADE"), index=True
+    )
+    usage_type: Mapped[str] = mapped_column(String(24), default="context")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AIMessageDecisionUsage(Base):
+    __tablename__ = "ai_message_decision_usage"
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id", "decision_id", name="uq_ai_message_decision_usage"
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_messages.id", ondelete="CASCADE"), index=True
+    )
+    decision_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_investment_decisions.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ExternalSearchRun(Base):
+    __tablename__ = "external_search_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','queued','running','completed','failed','cancelled')",
+            name="ck_external_search_runs_status",
+        ),
+        UniqueConstraint("provider", "provider_run_id", name="uq_external_search_runs_provider_id"),
+        UniqueConstraint("idempotency_key", name="uq_external_search_runs_idempotency_key"),
+        Index("ix_external_search_runs_user_status", "user_id", "status"),
+        Index("ix_external_search_runs_conversation_created", "conversation_id", "created_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    public_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(64))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("ai_conversations.id", ondelete="CASCADE"), index=True)
+    user_message_id: Mapped[int | None] = mapped_column(ForeignKey("ai_messages.id", ondelete="SET NULL"), index=True)
+    assistant_message_id: Mapped[int | None] = mapped_column(ForeignKey("ai_messages.id", ondelete="SET NULL"), index=True)
+    provider: Mapped[str] = mapped_column(String(32), default="exa")
+    provider_run_id: Mapped[str | None] = mapped_column(String(256))
+    mode: Mapped[str] = mapped_column(String(24))
+    effort: Mapped[str] = mapped_column(String(16))
+    query_hash: Mapped[str] = mapped_column(String(64))
+    query_preview_safe: Mapped[str | None] = mapped_column(String(240))
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    termination_reason: Mapped[str | None] = mapped_column(String(32))
+    output_text: Mapped[str | None] = mapped_column(Text)
+    output_structured: Mapped[dict | list | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql")
+    )
+    grounding: Mapped[list] = mapped_column(JSON, default=list)
+    usage: Mapped[dict] = mapped_column(JSON, default=dict)
+    cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 6))
+    cost_estimated: Mapped[bool] = mapped_column(Boolean, default=True)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message_safe: Mapped[str | None] = mapped_column(String(500))
+    last_event_id: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ExternalSearchRunEvent(Base):
+    __tablename__ = "external_search_run_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "provider_event_id", name="uq_external_search_run_events_provider"),
+        Index("ix_external_search_run_events_run_created", "run_id", "created_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("external_search_runs.id", ondelete="CASCADE"), index=True)
+    provider_event_id: Mapped[str | None] = mapped_column(String(128))
+    event_type: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str | None] = mapped_column(String(16))
+    safe_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Portfolio(Base):
     """一个用户的持仓组合。当前每个用户自动拥有一个默认组合；模型保留多组合扩展空间。"""
     __tablename__ = "portfolios"
@@ -1126,6 +1777,7 @@ class TradeTransaction(Base):
     __tablename__ = "trade_transactions"
     __table_args__ = (
         Index("ix_trade_transactions_portfolio_symbol", "portfolio_id", "symbol"),
+        UniqueConstraint("source_log_id", "source_log_row_index", name="uq_trade_transactions_journal_row"),
         CheckConstraint("quantity >= 0", name="ck_trade_transactions_quantity"),
         CheckConstraint("price >= 0", name="ck_trade_transactions_price"),
         CheckConstraint("fees >= 0", name="ck_trade_transactions_fees"),
@@ -1143,6 +1795,8 @@ class TradeTransaction(Base):
     account: Mapped[str | None] = mapped_column(String(80))
     note: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(24), default="manual")  # manual / journal / import
+    source_log_id: Mapped[int | None] = mapped_column(ForeignKey("trade_logs.id", ondelete="CASCADE"), index=True)
+    source_log_row_index: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

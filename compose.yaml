@@ -82,7 +82,7 @@ services:
     depends_on:
       - frontend
     environment:
-      SITE_DOMAIN: ${SITE_DOMAIN:-localhost}
+      SITE_DOMAINS: ${SITE_DOMAINS:-${SITE_DOMAIN:-localhost}}
       AUTH_USER: ${AUTH_USER:-admin}
       AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH}
     ports:

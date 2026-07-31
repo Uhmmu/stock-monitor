@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class WatchlistCreate(BaseModel):
@@ -49,6 +49,42 @@ class WatchlistOut(WatchlistCreate):
     display_order: int
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class PriceSnapshotOut(BaseModel):
+    id: int
+    symbol: str
+    exchange: str | None
+    currency: str | None
+    source_type: str
+    provider: str
+    provider_symbol: str | None
+    provider_role: str | None
+    last_price: float
+    open_price: float | None
+    day_high: float | None
+    day_low: float | None
+    previous_close: float | None
+    price_change: float | None
+    price_change_percent: float | None
+    day_volume: int | None
+    average_volume_10d: float | None
+    average_volume_20d: float | None
+    relative_volume_20d: float | None
+    relative_volume_basis: str | None
+    market_timestamp: datetime | None
+    trading_date: date | None
+    market_session: str
+    snapshot_market_session: str
+    timestamp_source: str | None
+    fetched_at: datetime | None
+    persisted_at: datetime | None
+    is_delayed: bool | None
+    delay_seconds: int | None
+    is_stale: bool
+    age_seconds: int | None
+    stale_after_seconds: int
+    age_basis: str
 
 
 class StockGroupCreate(BaseModel):
@@ -123,6 +159,20 @@ class TradeLogTableRow(BaseModel):
     @classmethod
     def normalize_row_ticker(cls, value: str) -> str:
         return value.strip().upper()
+
+    @model_validator(mode="after")
+    def require_executed_trade_values(self):
+        executed = self.direction.strip().lower() in {"买入", "卖出", "buy", "sell"}
+        incomplete = (
+            not self.ticker
+            or self.quantity is None
+            or self.quantity <= 0
+            or self.price is None
+            or self.price <= 0
+        )
+        if executed and incomplete:
+            raise ValueError("买入/卖出必须填写标的、正数数量和正数价格，才能同步到持仓")
+        return self
 
 
 class TradeLogBase(BaseModel):

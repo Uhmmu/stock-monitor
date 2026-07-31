@@ -50,6 +50,7 @@ from app.schemas import (
     GrahamOverride,
     OrderUpdate,
     PeerCreate,
+    PriceSnapshotOut,
     SecurityResolveIn,
     SettingsOut,
     SettingsUpdate,
@@ -70,12 +71,20 @@ from app.services.market_data import fetch_index_quotes, fetch_yf_info_metrics, 
 from app.services.stock_management import normalize_ticker, stock_management_payload, upsert_profile
 from app.services.securities import SecuritySearchUnavailable, provider_symbol, resolve_security, search_securities
 from app.services.llm import summarize_trade_log
+from app.services.portfolio.journal_sync import (
+    delete_trade_log_transactions,
+    sync_trade_log_transactions,
+)
+from app.services.portfolio.transaction_service import get_or_create_default_portfolio
 from app.services.market_calendar import market_status
+from app.services.price_snapshots import (
+    get_latest_persisted_price_snapshot,
+    price_snapshot_out,
+)
 from app.services.technical_chart_context import (
     build_technical_chart_context,
     price_alert_out,
 )
-from app.services.volume_stats import volume_context
 
 public_router = APIRouter(prefix="/api")
 router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
@@ -644,26 +653,36 @@ def dashboard(db: Session = Depends(get_db)):
     items = db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all()
     stocks = []
     for item in items:
-        quote = db.scalar(
-            select(PriceSnapshot).where(PriceSnapshot.ticker == item.ticker).order_by(PriceSnapshot.quote_time.desc()).limit(1)
+        quote = get_latest_persisted_price_snapshot(db, item.ticker)
+        vol = quote.day_volume if quote else None
+        ratio = quote.relative_volume_20d if quote else None
+        label = "放量" if ratio is not None and ratio >= 1.5 else (
+            "缩量" if ratio is not None and ratio <= .7 else ("正常" if ratio is not None else None)
         )
-        vol = quote.volume if quote else None
-        ctx = volume_context(item.ticker, float(vol)) if vol else {"ratio": None, "label": None}
         profile = db.get(CompanyProfile, item.ticker)
         stocks.append(
             {
                 "ticker": item.ticker,
-                "price": quote.price if quote else None,
+                "price": quote.last_price if quote else None,
                 "previous_close": quote.previous_close if quote else None,
-                "updated_at": quote.quote_time if quote else None,
+                "updated_at": (quote.market_timestamp or quote.fetched_at) if quote else None,
                 "volume": vol,
-                "volume_ratio": ctx["ratio"],
-                "volume_label": ctx["label"],
+                "volume_ratio": ratio,
+                "volume_label": label,
                 "company_name": profile.company_name if profile else None,
                 "logo_url": profile.logo_url if profile else None,
             }
         )
     return {"market": market_status(), "stocks": stocks}
+
+
+@router.get("/stocks/{symbol}/price-snapshot/latest", response_model=PriceSnapshotOut)
+def latest_price_snapshot(symbol: str, db: Session = Depends(get_db)):
+    value = _require_watched_ticker(db, symbol)
+    row = get_latest_persisted_price_snapshot(db, value)
+    if row is None:
+        raise HTTPException(404, f"未找到 {value} 的已入库市场价格快照")
+    return price_snapshot_out(row)
 
 
 _INDICES_CACHE_KEY = "indices:quotes"
@@ -1369,6 +1388,9 @@ def create_trade_log(
     _resolve_trade_log_securities(db, payload)
     row = TradeLog(user_id=user.id, **payload.model_dump())
     db.add(row)
+    db.flush()
+    portfolio = get_or_create_default_portfolio(db, user.id)
+    sync_trade_log_transactions(db, portfolio, row)
     db.commit()
     db.refresh(row)
     return _trade_log_out(row)
@@ -1391,6 +1413,8 @@ def update_trade_log(
     row.ai_summary_model = None
     row.ai_summary_input_hash = None
     row.ai_summary_created_at = None
+    portfolio = get_or_create_default_portfolio(db, user.id)
+    sync_trade_log_transactions(db, portfolio, row)
     db.commit()
     db.refresh(row)
     return _trade_log_out(row)
@@ -1405,6 +1429,8 @@ def delete_trade_log(
     row = db.scalar(select(TradeLog).where(TradeLog.id == log_id, TradeLog.user_id == user.id))
     if not row:
         raise HTTPException(404, "未找到交易日志")
+    portfolio = get_or_create_default_portfolio(db, user.id)
+    delete_trade_log_transactions(db, portfolio, row)
     db.delete(row)
     db.commit()
     return Response(status_code=204)

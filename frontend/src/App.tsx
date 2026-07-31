@@ -10,6 +10,9 @@ import { DiscoverySettingsPanel, OpportunityDiscovery } from './OpportunityDisco
 import { SentimentModule } from './Sentiment'
 import { InvestmentCalendar } from './InvestmentCalendar'
 import { OwnershipSection } from './Ownership'
+import { AIChatPage } from './features/ai-chat'
+import { InvestmentDecisionsPage } from './features/ai-memory'
+import { MarketSnapshot } from './MarketSnapshot'
 import {
   TechnicalChart,
   type TechnicalChartEvent,
@@ -172,6 +175,9 @@ function NavIcon({name}:{name:string}) {
     watchlist:<><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></>,
     holdings:<><path d="M3 7h18v13H3z"/><path d="M3 7l3-4h12l3 4"/><path d="M9 11a3 3 0 0 0 6 0"/></>,
     discovery:<><circle cx="12" cy="12" r="8"/><path d="m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9z"/><circle cx="12" cy="12" r="1"/></>,
+    ai:<><path d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 9h8M8 13h5"/></>,
+    memory:<><path d="M8 5a4 4 0 0 1 7-2 4 4 0 0 1 4 4 4 4 0 0 1 1 7 4 4 0 0 1-5 6l-3 2-3-2a4 4 0 0 1-5-6 4 4 0 0 1 1-7 4 4 0 0 1 3-2z"/><path d="M9 9h6M9 13h4"/></>,
+    decisions:<><path d="M5 3h14v18H5z"/><path d="m8 8 2 2 4-4M8 15h8"/></>,
     alerts:<><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></>,
     news:<><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></>,
     sentiment:<><path d="M4 15.5c1.4-1.8 2.8-2.7 4.2-2.7 2.2 0 2.8 3.4 5 3.4 1.5 0 3-1.4 4.8-4.2"/><path d="M4 9c1.1-1.2 2.2-1.8 3.3-1.8 1.8 0 2.5 2.5 4.2 2.5 1.3 0 2.5-.9 3.7-2.7"/><circle cx="19" cy="7" r="2"/><path d="M3 20h18"/></>,
@@ -322,10 +328,12 @@ function TechnicalIndicatorPositions({heatmap}:{heatmap?:HistoricalCausalHeatmap
   </section>
 }
 
-function CompanyProfileSheet({symbol,onClose}:{symbol:string|null;onClose:()=>void}) {
+function CompanyProfileSheet({symbol,onClose,onAskAI}:{symbol:string|null;onClose:()=>void;onAskAI:(symbol:string)=>void}) {
   const profile = useQuery({queryKey:['company-profile',symbol],queryFn:()=>api<CompanyProfile>(`/company-profile/${symbol}`),enabled:!!symbol})
+  const [section,setSection]=useState<'overview'|'market'>('overview')
+  useEffect(()=>setSection('overview'),[symbol])
   const p=profile.data
-  return <Sheet open={symbol!==null} onClose={onClose} title="公司概览">{p?.status==='ready'?<article className="company-profile"><header><ProfileLogo symbol={p.symbol} url={p.logo_url}/><div><p className="eyebrow">FMP CACHED PROFILE</p><h2>{p.company_name||p.symbol} <small>{p.symbol}</small></h2></div></header><dl><div><dt>CEO</dt><dd>{p.ceo||'数据不足'}</dd></div><div><dt>交易所</dt><dd>{p.exchange_full_name||p.exchange||'数据不足'}</dd></div><div><dt>IPO 日期</dt><dd>{p.ipo_date||'数据不足'}</dd></div><div><dt>员工数</dt><dd>{p.employee_count?.toLocaleString()||'数据不足'}</dd></div><div><dt>本地分类</dt><dd>{localizeSector(p.local_classification.sector,'数据不足')} · {localizeIndustry(p.local_classification.industry,'数据不足')}</dd></div><div><dt>资料更新</dt><dd>{p.profile_fetched_at?formatDate(p.profile_fetched_at):'数据不足'}</dd></div></dl>{p.website&&<a href={p.website} target="_blank" rel="noreferrer">访问公司网站 ↗</a>}<section><h3>公司简介</h3><p>{p.description_zh||p.description_en||'公司简介暂不可用。'}</p>{p.description_zh&&p.description_en&&<details><summary>查看英文原文</summary><p>{p.description_en}</p></details>}{p.translation_status==='pending'&&<small>中文简介正在后台翻译，当前展示英文原文。</small>}</section></article>:<div className="empty">{profile.isLoading?'正在读取本地资料…':'公司资料尚未同步，股票其他功能不受影响。'}</div>}</Sheet>
+  return <Sheet open={symbol!==null} onClose={onClose} title="公司概览"><div className="company-profile-tabs"><nav aria-label="公司概览分区"><button className={section==='overview'?'active':''} onClick={()=>setSection('overview')}>总览</button><button className={section==='market'?'active':''} onClick={()=>setSection('market')}>市场快照</button></nav>{section==='overview'?(p?.status==='ready'?<article className="company-profile"><header><ProfileLogo symbol={p.symbol} url={p.logo_url}/><div><p className="eyebrow">FMP CACHED PROFILE</p><h2>{p.company_name||p.symbol} <small>{p.symbol}</small></h2></div></header><div className="company-profile-actions"><button onClick={()=>onAskAI(p.symbol)}>询问 AI <span>→</span></button>{p.website&&<a href={p.website} target="_blank" rel="noreferrer">访问公司网站 ↗</a>}</div><dl><div><dt>CEO</dt><dd>{p.ceo||'数据不足'}</dd></div><div><dt>交易所</dt><dd>{p.exchange_full_name||p.exchange||'数据不足'}</dd></div><div><dt>IPO 日期</dt><dd>{p.ipo_date||'数据不足'}</dd></div><div><dt>员工数</dt><dd>{p.employee_count?.toLocaleString()||'数据不足'}</dd></div><div><dt>本地分类</dt><dd>{localizeSector(p.local_classification.sector,'数据不足')} · {localizeIndustry(p.local_classification.industry,'数据不足')}</dd></div><div><dt>资料更新</dt><dd>{p.profile_fetched_at?formatDate(p.profile_fetched_at):'数据不足'}</dd></div></dl><section><h3>公司简介</h3><p>{p.description_zh||p.description_en||'公司简介暂不可用。'}</p>{p.description_zh&&p.description_en&&<details><summary>查看英文原文</summary><p>{p.description_en}</p></details>}{p.translation_status==='pending'&&<small>中文简介正在后台翻译，当前展示英文原文。</small>}</section></article>:<div className="empty">{profile.isLoading?'正在读取本地资料…':'公司资料尚未同步，股票其他功能不受影响。'}</div>):symbol&&<MarketSnapshot symbol={symbol}/>}</div></Sheet>
 }
 
 function TechnicalAnalysisCenter() {
@@ -392,7 +400,7 @@ export default function App() {
   const [demoMode,setDemoMode] = useState(previewRequested)
   const [authUser,setAuthUser] = useState<{username:string;role:string}|null>(()=>previewRequested?{username:'访客',role:'viewer'}:null)
   const [authLoading,setAuthLoading] = useState(()=>!!(localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')))
-  const [tab,setTab] = useState(()=>new URLSearchParams(window.location.search).get('tab')||'overview')
+  const [tab,setTab] = useState(()=>window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')
   const [mobileNavOpen,setMobileNavOpen] = useState(false)
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
   const [selectedModel,setSelectedModel] = useState<CrossMetric|null>(null)
@@ -428,11 +436,19 @@ export default function App() {
     return ()=>window.removeEventListener('auth:logout',onLogout)
   },[])
 
+  useEffect(()=>{
+    const onPop=()=>setTab(window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')
+    window.addEventListener('popstate',onPop)
+    return ()=>window.removeEventListener('popstate',onPop)
+  },[])
+
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const tabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['sentiment','舆情'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['sentiment','市场舆情'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
+  const tabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['sentiment','舆情'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['sentiment','市场舆情'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
+  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ai'){if(!window.location.pathname.startsWith('/ai'))window.history.pushState({},'', '/ai/new')}else if(key==='decisions')window.history.pushState({},'','/investment-decisions');else if(window.location.pathname.startsWith('/ai')||window.location.pathname.startsWith('/investment-decisions'))window.history.pushState({},'',`/?tab=${key}`)}
+  const askAI=(symbol:string)=>{setSelectedProfileSymbol(null);setActiveTicker(symbol);setTab('ai');window.history.pushState({},'',`/ai/new?symbol=${encodeURIComponent(symbol)}&context=company`);window.dispatchEvent(new PopStateEvent('popstate'))}
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
   const viewIndices = demoMode ? demoIndices : indices.data
   const viewAlerts = demoMode ? demoAlerts : alerts.data
@@ -445,14 +461,14 @@ export default function App() {
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
     <aside className={mobileNavOpen?'mobile-open':''}>
       <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div><div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{groupInvestigations(investigations.data).length}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
-      <nav>{tabs.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>{setTab(key);setMobileNavOpen(false)}} key={key}>{key==='journal'&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
+      <nav>{tabs.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>selectTab(key)} key={key}>{key==='journal'&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
       <div className="account-card"><span className="account-avatar">{authUser.username.slice(0,1)}</span><span><b>{demoMode?'演示空间':authUser.username}</b><small>{demoMode?'本地预览模式':'已安全连接'}</small></span><i className={viewDashboard?.market.is_open?'online':''}/></div>
       <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setDemoMode(false);setToken('');setAuthUser(null)}}>{demoMode?'退出预览':'退出登录'}</button></aside>
     {mobileNavOpen&&<button className="mobile-nav-scrim" onClick={()=>setMobileNavOpen(false)} aria-label="关闭菜单"/>}
-    <main>
-      <header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tabTitle}</h1></div><div className="header-tools"><span className="market-pill"><i className={viewDashboard?.market.is_open?'online':''}/>{viewDashboard?.market.is_open?'市场开放':'市场休市'}</span><div className="clock">{viewDashboard ? formatDate(viewDashboard.market.checked_at) : '等待同步'}</div></div></header>
-      {demoMode&&<div className="preview-banner"><span><b>演示预览</b> 当前展示本地示例行情，所有真实数据仍以服务端为准。</span><button onClick={()=>{setDemoMode(false);setAuthUser(null)}}>连接账户</button></div>}
-      {!demoMode&&(dashboard.error||watchlist.error)&&<div className="error">后端暂不可用，请确认服务已启动。</div>}
+    <main className={tab==='ai'?'ai-main':''}>
+      {tab!=='ai'&&<header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tabTitle}</h1></div><div className="header-tools"><span className="market-pill"><i className={viewDashboard?.market.is_open?'online':''}/>{viewDashboard?.market.is_open?'市场开放':'市场休市'}</span><div className="clock">{viewDashboard ? formatDate(viewDashboard.market.checked_at) : '等待同步'}</div></div></header>}
+      {tab!=='ai'&&demoMode&&<div className="preview-banner"><span><b>演示预览</b> 当前展示本地示例行情，所有真实数据仍以服务端为准。</span><button onClick={()=>{setDemoMode(false);setAuthUser(null)}}>连接账户</button></div>}
+      {tab!=='ai'&&!demoMode&&(dashboard.error||watchlist.error)&&<div className="error">后端暂不可用，请确认服务已启动。</div>}
       <div className="view-stage" key={tab}>
       {tab==='overview'&&<>
         <section className="hero index-hero"><div className="hero-copy"><span className={`badge${viewIndices?.market.is_open?'':' closed'}`}><i/>{viewIndices?.market.is_open?'LIVE MARKET':'MARKET CLOSED'}</span><h2>早上好，{authUser.username}</h2><p>你的市场雷达保持安静。我们只在真正值得注意时打扰你。</p></div><div className="index-row">{(viewIndices?.indices||[{symbol:'^GSPC',name:'标普500'},{symbol:'^IXIC',name:'纳斯达克'},{symbol:'^DJI',name:'道琼斯'}] as IndexQuote[]).map(idx=>{const up=idx.change_percent!=null&&idx.change_percent>=0;return <div className="index-card" key={idx.symbol}><span className="index-name">{idx.name}</span><strong>{idx.price!=null?idx.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}</strong><span className={idx.change_percent==null?'':up?'positive':'negative'}>{idx.change_points==null||idx.change_percent==null?'数据不足':`${up?'+':''}${idx.change_points.toFixed(2)} (${up?'+':''}${idx.change_percent.toFixed(2)}%)`}</span></div>})}</div></section>
@@ -462,6 +478,8 @@ export default function App() {
       </>}
       {tab==='watchlist'&&<StockManagement onWatchlistChanged={()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}}/>}
       {tab==='holdings'&&<PortfolioModule/>}
+      {tab==='ai'&&<AIChatPage enabled={!demoMode}/>}
+      {tab==='decisions'&&<InvestmentDecisionsPage/>}
       {tab==='calendar'&&<InvestmentCalendar/>}
       {tab==='discovery'&&<OpportunityDiscovery/>}
       {tab==='alerts'&&<div className="investigations">{groupInvestigations(investigations.data).map(group=><article key={group.key}><div><span className={`status ${group.status}`}>{group.status}</span><h2>{group.ticker} 异动调查{group.items.length>1&&<em className="group-count"> ×{group.items.length}</em>}</h2><p>{formatDate(group.started_at)} — {formatDate(group.ends_at)}</p></div><strong>{group.news_count}<small> 条新闻线索</small></strong>{group.last_error&&<p className="error">{group.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}
@@ -481,7 +499,7 @@ export default function App() {
     <Sheet open={selectedReport!==null} onClose={()=>setSelectedReport(null)} title={report.data?typeNames[report.data.report_type]||report.data.report_type:'报告'}>
       {report.data?<article className="report-detail sheet-report"><p className="eyebrow">{typeNames[report.data.report_type]} · {report.data.model}</p><h2>{report.data.title}</h2><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{report.data.content}</ReactMarkdown></div><h3>信息来源</h3>{report.data.sources.map((s,i)=><a href={s.url} target="_blank" rel="noreferrer" key={i}>{i+1}. {s.title}</a>)}</article>:<div className="empty">加载中…</div>}
     </Sheet>
-    <CompanyProfileSheet symbol={selectedProfileSymbol} onClose={()=>setSelectedProfileSymbol(null)}/>
+    <CompanyProfileSheet symbol={selectedProfileSymbol} onClose={()=>setSelectedProfileSymbol(null)} onAskAI={askAI}/>
     <Sheet open={selectedModel!==null} onClose={()=>setSelectedModel(null)} title={selectedModel?.label||'指标说明'}>
       {selectedModel&&<article className="model-drawer"><p className="eyebrow">MODEL EXPLAINER · 指标学习</p><h2>{selectedModel.label}</h2><strong>{formatCrossMetric(selectedModel)}</strong>{selectedModel.applicability&&<div className={`applicability ${selectedModel.applicability}`}>适用性：{{medium:'中',low:'低',not_applicable:'不适用'}[selectedModel.applicability]}</div>}{selectedModel.peer_median!=null&&<div className="drawer-peer"><span>同行中位数</span><b>{selectedModel.peer_median.toFixed(2)}{selectedModel.unit==='multiple'?'×':selectedModel.unit==='%'?'%':''}</b><em>{selectedModel.comparison}</em></div>}<p>{selectedModel.explanation}</p>{selectedModel.missing_fields?.length?<div className="missing-data"><b>{selectedModel.status==='not_applicable'?'不适用':'数据不足'}</b><p>{selectedModel.status==='not_applicable'?'该公司类型不使用此模型。':`缺少：${selectedModel.missing_fields.map(fieldLabel).join('、')}`}</p></div>:null}{selectedModel.warnings?.map(warning=><div className="metric-warning" key={warning}>{warning}</div>)}<div className="learn-block"><b>公式 Formula</b><p>{selectedModel.formula}</p></div><div className="learn-block"><b>参考区间 Reference Range</b><p>{selectedModel.recommended_range}</p></div>{selectedModel.note&&<div className="explainer"><b>计算说明</b><p>{selectedModel.note}</p></div>}</article>}
     </Sheet>
@@ -1025,9 +1043,9 @@ function JournalSection({username}:{username:string}) {
   const reset = () => {setEditing(null);setEditorOpen(false);setRowSecurities([null]);setForm({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[]})}
   const save = useMutation({
     mutationFn:()=>editing?patch<TradeLog>(`/trade-logs/${editing.id}`,payload()):post<TradeLog>('/trade-logs',payload()),
-    onSuccess:()=>{reset();client.invalidateQueries({queryKey:['trade-logs']})},
+    onSuccess:()=>{reset();client.invalidateQueries({queryKey:['trade-logs']});client.invalidateQueries({queryKey:['portfolio-summary']});client.invalidateQueries({queryKey:['portfolio-health']});client.invalidateQueries({queryKey:['portfolio-interpretation']});client.invalidateQueries({queryKey:['portfolio-transactions']})},
   })
-  const del = useMutation({mutationFn:(id:number)=>api<unknown>(`/trade-logs/${id}`,{method:'DELETE'}),onSuccess:()=>client.invalidateQueries({queryKey:['trade-logs']})})
+  const del = useMutation({mutationFn:(id:number)=>api<unknown>(`/trade-logs/${id}`,{method:'DELETE'}),onSuccess:()=>{client.invalidateQueries({queryKey:['trade-logs']});client.invalidateQueries({queryKey:['portfolio-summary']});client.invalidateQueries({queryKey:['portfolio-health']});client.invalidateQueries({queryKey:['portfolio-interpretation']});client.invalidateQueries({queryKey:['portfolio-transactions']})}})
   const summarize = useMutation({mutationFn:(id:number)=>post<TradeLog>(`/trade-logs/${id}/summarize`,{}),onSuccess:()=>client.invalidateQueries({queryKey:['trade-logs']})})
   const edit = (log:TradeLog) => {
     setEditing(log)
@@ -1078,7 +1096,7 @@ function JournalSection({username}:{username:string}) {
         <label className="journal-note">简短备注<input value={form.note} onChange={e=>setForm({...form,note:e.target.value})} placeholder="一句话记录当天最重要的交易背景"/></label>
         <label className="journal-note">文字记录<textarea value={form.content} onChange={e=>setForm({...form,content:e.target.value})} placeholder="记录交易计划、执行、情绪、复盘和明天要验证的条件"/></label>
         <div className="journal-table">
-          <div className="journal-table-heading"><div><b>交易明细</b><span>{form.table_rows.length} 张便签</span></div><small>每张便签可以记录一笔交易</small></div>
+          <div className="journal-table-heading"><div><b>交易明细</b><span>{form.table_rows.length} 张便签</span></div><small>买入 / 卖出会按本页日期、数量和价格同步到持仓</small></div>
           {form.table_rows.map((row,index)=><div className="journal-row-note" key={index}>
             <div className="journal-row-top"><label><span>标的</span><SecuritySearchAutocomplete compact value={rowSecurities[index]||null} onSelect={security=>{setRowSecurities(items=>items.map((item,i)=>i===index?security:item));updateRow(index,{ticker:security?.display_symbol||'',security_id:security?.security_id||null})}} placeholder="搜索代码或公司"/></label><label><span>方向</span><select value={row.direction} onChange={e=>updateRow(index,{direction:e.target.value})}><option value="">选择方向</option><option>买入</option><option>卖出</option><option>观望</option><option>挂单</option></select></label><button type="button" className="row-delete" aria-label="删除这笔交易" onClick={()=>removeRow(index)}><TrashIcon/></button></div>
             <div className="journal-row-bottom"><label><span>数量</span><input type="number" inputMode="decimal" min="0" step="any" value={row.quantity??''} onChange={e=>updateRow(index,{quantity:e.target.value===''?null:Number(e.target.value)})} placeholder="0"/></label><label><span>价格</span><input type="number" inputMode="decimal" min="0" step="any" value={row.price??''} onChange={e=>updateRow(index,{price:e.target.value===''?null:Number(e.target.value)})} placeholder="0.00"/></label><label><span>自定义标签</span><input value={row.strategy} onChange={e=>updateRow(index,{strategy:e.target.value})} placeholder="突破 / 试仓"/></label><label><span>其他</span><input value={row.result} onChange={e=>updateRow(index,{result:e.target.value})} placeholder="补充说明"/></label></div>

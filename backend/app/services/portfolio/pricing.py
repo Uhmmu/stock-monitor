@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import HistoricalPrice, PriceSnapshot
+from app.services.price_snapshots import get_latest_persisted_price_snapshot
 
 
 @dataclass(frozen=True)
@@ -27,14 +28,14 @@ class PriceInfo:
 
 def latest_price(db: Session, symbol: str) -> PriceInfo | None:
     value = symbol.upper()
-    snap = db.scalar(
-        select(PriceSnapshot)
-        .where(PriceSnapshot.ticker == value)
-        .order_by(PriceSnapshot.quote_time.desc())
-        .limit(1)
-    )
-    if snap is not None and snap.price:
-        return PriceInfo(price=float(snap.price), source="snapshot", previous_close=snap.previous_close, as_of=snap.quote_time)
+    snap = get_latest_persisted_price_snapshot(db, value)
+    if snap is not None and snap.last_price:
+        return PriceInfo(
+            price=float(snap.last_price),
+            source="snapshot",
+            previous_close=snap.previous_close,
+            as_of=snap.market_timestamp or snap.fetched_at,
+        )
 
     for source in ("fmp", "yahoo"):
         row = db.scalar(
@@ -56,13 +57,24 @@ def price_map(db: Session, symbols: list[str]) -> dict[str, PriceInfo]:
         return {}
     result: dict[str, PriceInfo] = {}
     snapshots = db.scalars(
-        select(PriceSnapshot).where(PriceSnapshot.ticker.in_(wanted))
-        .order_by(PriceSnapshot.ticker, PriceSnapshot.quote_time.desc())
+        select(PriceSnapshot).where(
+            PriceSnapshot.symbol.in_(wanted),
+            PriceSnapshot.source_type == "price_snapshot",
+            PriceSnapshot.last_price > 0,
+        ).order_by(
+            PriceSnapshot.symbol,
+            PriceSnapshot.market_timestamp.desc().nullslast(),
+            PriceSnapshot.fetched_at.desc().nullslast(),
+            PriceSnapshot.persisted_at.desc().nullslast(),
+        )
     ).all()
     for row in snapshots:
-        if row.ticker not in result and row.price:
-            result[row.ticker] = PriceInfo(
-                price=float(row.price), source="snapshot", previous_close=row.previous_close, as_of=row.quote_time,
+        if row.symbol not in result and row.last_price:
+            result[row.symbol] = PriceInfo(
+                price=float(row.last_price),
+                source="snapshot",
+                previous_close=row.previous_close,
+                as_of=row.market_timestamp or row.fetched_at,
             )
     unresolved = wanted - result.keys()
     for source in ("fmp", "yahoo"):

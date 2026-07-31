@@ -141,6 +141,26 @@ def fetch_basic_metrics(ticker: str) -> dict:
     return {}
 
 
+def fetch_quote(ticker: str) -> dict:
+    """Finnhub /quote fallback used by the unified persisted price pipeline."""
+    settings = get_settings()
+    if not settings.finnhub_api_key:
+        raise RuntimeError("Finnhub API key is unavailable")
+    query = urlencode({"symbol": ticker.upper()})
+    request = Request(
+        f"https://finnhub.io/api/v1/quote?{query}",
+        headers={
+            "X-Finnhub-Token": settings.finnhub_api_key,
+            "User-Agent": "stock-monitor/2.0",
+        },
+    )
+    with urlopen(request, timeout=_REQUEST_TIMEOUT) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError("Finnhub quote response was invalid")
+    return payload
+
+
 def fetch_recommendations(ticker: str) -> list[dict]:
     """分析师买/持/卖评级分布（按期倒序）。"""
     payload = _run(_call_tool("finnhub_stock_estimates",

@@ -1,12 +1,12 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 import logging
 
 from celery import Celery
 from celery.schedules import crontab
 from sqlalchemy import delete, or_, select
-from sqlalchemy.exc import IntegrityError
 
 import hashlib
+import asyncio
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -22,7 +22,6 @@ from app.models import (
     InvestigationStatus,
     InvestmentCalendarSyncRun,
     NewsItem,
-    PriceSnapshot,
     PortfolioPosition,
     QuarterlyFinancial,
     Report,
@@ -34,7 +33,6 @@ from app.models import (
     SecFinancialPeriod,
     SecInsiderTrade,
     TrackedFigure,
-    User,
     ValuationSnapshot,
     WatchlistItem,
     WeeklyNewsArchive,
@@ -46,8 +44,13 @@ from app.services.sec_edgar import fetch_filings
 from app.services.market_context import build_market_context
 from app.services.llm import curate_daily_news, curate_weekly_news, generate_analysis, summarize_news
 from app.services.llm import explain_cross_model
-from app.services.market_calendar import market_status
-from app.services.market_data import fetch_earnings_events, fetch_quotes, fetch_yf_financial_statements, fetch_yf_quarterly
+from app.services.market_calendar import market_data_collection_status, market_status
+from app.services.market_data import fetch_earnings_events, fetch_yf_financial_statements, fetch_yf_quarterly
+from app.services.price_snapshots import (
+    collect_price_snapshot,
+    get_latest_persisted_price_snapshot,
+    persist_price_snapshot,
+)
 from app.services.marketaux import fetch_marketaux_market_news, fetch_marketaux_news
 # Legacy FMP news records remain readable, but FMP is no longer scheduled as a
 # news source: the provider is reserved for profile and EOD history endpoints.
@@ -104,6 +107,27 @@ celery_app.conf.beat_schedule = {
     "sync-congress-trades": {"task": "app.tasks.celery_app.sync_congress_trades", "schedule": 21600},
     "sync-tracked-figures": {"task": "app.tasks.celery_app.sync_tracked_figures", "schedule": 43200},
 }
+
+
+@celery_app.task(
+    name="app.tasks.celery_app.summarize_ai_conversation",
+    soft_time_limit=75,
+    time_limit=90,
+)
+def summarize_ai_conversation(snapshot_id: int):
+    """Generate one idempotent incremental conversation summary snapshot."""
+    from app.ai_memory.summaries import ConversationSummaryService
+
+    with SessionLocal() as db:
+        row = asyncio.run(ConversationSummaryService(db).process(snapshot_id))
+        if row is None:
+            return {"status": "missing", "snapshot_id": snapshot_id}
+        return {
+            "status": row.status,
+            "snapshot_id": row.id,
+            "version": row.version,
+            "error_code": row.error_code,
+        }
 if settings.fmp_sync_enabled and settings.fmp_api_key.strip():
     celery_app.conf.beat_schedule["sync-fmp-history"] = {
         # 23:30 UTC on US trading weekdays, after the regular close in both DST modes.
@@ -188,29 +212,39 @@ def _save_report(db, key: str, ticker: str | None, report_type: ReportType, titl
 
 @celery_app.task(name="app.tasks.celery_app.poll_market", autoretry_for=(ConnectionError, TimeoutError), retry_backoff=True, max_retries=3)
 def poll_market():
-    if not market_status()["is_open"]:
+    collection = market_data_collection_status()
+    if not collection["is_collecting"]:
         return {"skipped": "market_closed"}
     with SessionLocal() as db:
         items = db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all()
         watched_tickers = {item.ticker for item in items}
         peer_tickers = set(referenced_tickers(db))
-        quotes = fetch_quotes(sorted(watched_tickers | peer_tickers))
         by_ticker = {item.ticker: item for item in items}
-        for quote in quotes:
-            snapshot = PriceSnapshot(**quote.__dict__)
-            db.add(snapshot)
+        stored = 0
+        failed: list[str] = []
+        for ticker in sorted(watched_tickers | peer_tickers):
             try:
-                db.flush()
-            except IntegrityError:
-                db.rollback()
+                snapshot, created = persist_price_snapshot(
+                    db, collect_price_snapshot(db, ticker)
+                )
+            except Exception:
+                logger.warning("price_snapshot_sync_failed symbol=%s", ticker, exc_info=True)
+                failed.append(ticker)
                 continue
-            watched = by_ticker.get(quote.ticker)
+            if not created:
+                continue
+            stored += 1
+            watched = by_ticker.get(snapshot.symbol)
             if watched and watched.alert_enabled:
                 evaluate_quote(db, watched, snapshot)
             if watched:
                 evaluate_user_price_alerts(db, snapshot)
         db.commit()
-        return {"quotes": len(quotes)}
+        return {
+            "quotes": stored,
+            "failed": failed,
+            "market_session": collection["market_session"],
+        }
 
 
 def _collect_investigation_news(db, investigation: Investigation, now: datetime):
@@ -881,12 +915,10 @@ def _sync_ticker_valuation(db, ticker: str, explain: bool = True) -> bool:
              "revenue": row.revenue, "free_cash_flow": row.free_cash_flow}
             for row in quarters
         ]
-    latest_quote = db.scalar(
-        select(PriceSnapshot).where(PriceSnapshot.ticker == ticker)
-        .order_by(PriceSnapshot.quote_time.desc()).limit(1)
-    )
-    quote_input = ({"price": latest_quote.price, "source": latest_quote.source,
-                    "as_of": latest_quote.quote_time.isoformat()} if latest_quote else None)
+    latest_quote = get_latest_persisted_price_snapshot(db, ticker)
+    quote_input = ({"price": latest_quote.last_price, "source": latest_quote.provider,
+                    "as_of": (latest_quote.market_timestamp or latest_quote.fetched_at).isoformat()
+                    if latest_quote.market_timestamp or latest_quote.fetched_at else None} if latest_quote else None)
     try:
         finnhub_metrics = fetch_basic_metrics(finnhub_ticker) if finnhub_ticker else {}
     except Exception as exc:
@@ -949,12 +981,32 @@ def sync_peer_valuation_data(ticker: str):
     value = ticker.upper()
     with SessionLocal() as db:
         financials_ok = _sync_ticker_financials(db, value)
-        quotes = fetch_quotes([value])
-        for quote in quotes:
-            db.add(PriceSnapshot(**quote.__dict__))
+        quotes = 0
+        try:
+            _, created = persist_price_snapshot(db, collect_price_snapshot(db, value))
+            quotes = int(created)
+        except Exception:
+            logger.warning("peer_price_snapshot_sync_failed symbol=%s", value, exc_info=True)
         valuation_ok = _sync_ticker_valuation(db, value, explain=False)
         db.commit()
-        return {"ticker": value, "financials": financials_ok, "valuation": valuation_ok, "quotes": len(quotes)}
+        return {"ticker": value, "financials": financials_ok, "valuation": valuation_ok, "quotes": quotes}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_ticker_price_snapshot")
+def sync_ticker_price_snapshot(ticker: str):
+    """Explicit refresh action; readers never call an upstream quote provider."""
+    value = ticker.upper()
+    with SessionLocal() as db:
+        snapshot, created = persist_price_snapshot(
+            db, collect_price_snapshot(db, value)
+        )
+        db.commit()
+        return {
+            "ticker": value,
+            "snapshot_id": snapshot.id,
+            "provider": snapshot.provider,
+            "created": created,
+        }
 
 
 @celery_app.task(name="app.tasks.celery_app.sync_ticker_full")
@@ -966,6 +1018,7 @@ def sync_ticker_full(ticker: str):
     sync_ticker_sec_all.delay(value)
     sync_ticker_congress.delay(value)
     sync_ticker_valuation.delay(value)
+    sync_ticker_price_snapshot.delay(value)
     poll_news.delay(value)
     sync_fmp_symbol.delay(value)  # FMP 优先，其失败时内部回退 yahoo，并生成技术分析
     return {"ticker": value, "status": "queued_full_sync"}
@@ -1417,7 +1470,7 @@ def _sync_13f(db, force: bool = False) -> dict:
 
     幂等：若最新季度持仓已入库且非强制，则跳过下载（13F 季度才更新，避免每天重下 90MB）。
     """
-    from app.services.sec_13f import collect_13f_holdings, latest_dataset_url
+    from app.services.sec_13f import collect_13f_holdings
 
     tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
     if not tickers:

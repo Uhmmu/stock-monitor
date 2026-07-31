@@ -64,6 +64,8 @@ def _event_key(ticker: str, moment: datetime) -> str:
 
 
 def evaluate_quote(db: Session, item: WatchlistItem, current: PriceSnapshot) -> list[PriceAlert]:
+    if current.market_timestamp is None:
+        return []
     runtime = _runtime_settings(db)
     thresholds = {
         "20m": item.threshold_20m or runtime["threshold_20m"],
@@ -71,7 +73,7 @@ def evaluate_quote(db: Session, item: WatchlistItem, current: PriceSnapshot) -> 
         "day": item.threshold_day or runtime["threshold_day"],
     }
     # 一天一家公司只允许一个异动提醒/调查：当日已有则直接跳过后续任何阈值触发。
-    day_start, day_end = _market_day_bounds(current.quote_time)
+    day_start, day_end = _market_day_bounds(current.market_timestamp)
     existing_today = db.scalar(
         select(PriceAlert.id).where(
             PriceAlert.ticker == item.ticker,
@@ -85,9 +87,9 @@ def evaluate_quote(db: Session, item: WatchlistItem, current: PriceSnapshot) -> 
     candidates: list[tuple[str, float]] = []
     for period, delta in PERIODS.items():
         baseline = db.scalar(
-            select(PriceSnapshot.price)
-            .where(PriceSnapshot.ticker == item.ticker, PriceSnapshot.quote_time <= current.quote_time - delta)
-            .order_by(PriceSnapshot.quote_time.desc())
+            select(PriceSnapshot.last_price)
+            .where(PriceSnapshot.symbol == item.ticker, PriceSnapshot.market_timestamp <= current.market_timestamp - delta)
+            .order_by(PriceSnapshot.market_timestamp.desc())
             .limit(1)
         )
         if baseline:
@@ -97,15 +99,15 @@ def evaluate_quote(db: Session, item: WatchlistItem, current: PriceSnapshot) -> 
 
     # 在所有越过阈值的周期里，取涨跌幅绝对值最大的作为当日代表异动。
     triggered = [
-        (period, baseline, _change(current.price, baseline))
+        (period, baseline, _change(current.last_price, baseline))
         for period, baseline in candidates
-        if abs(_change(current.price, baseline)) >= thresholds[period]
+        if abs(_change(current.last_price, baseline)) >= thresholds[period]
     ]
     if not triggered:
         return []
     period, baseline, change = max(triggered, key=lambda row: abs(row[2]))
 
-    key = _event_key(item.ticker, current.quote_time)
+    key = _event_key(item.ticker, current.market_timestamp)
     if db.scalar(select(PriceAlert.id).where(PriceAlert.event_key == key)):
         return []
     alert = PriceAlert(
@@ -113,9 +115,9 @@ def evaluate_quote(db: Session, item: WatchlistItem, current: PriceSnapshot) -> 
         ticker=item.ticker,
         period=period,
         baseline_price=baseline,
-        current_price=current.price,
+        current_price=current.last_price,
         change_percent=change,
-        triggered_at=current.quote_time,
+        triggered_at=current.market_timestamp,
     )
     db.add(alert)
     db.flush()
@@ -123,9 +125,9 @@ def evaluate_quote(db: Session, item: WatchlistItem, current: PriceSnapshot) -> 
         Investigation(
             alert_id=alert.id,
             ticker=item.ticker,
-            started_at=current.quote_time,
-            ends_at=current.quote_time + timedelta(minutes=runtime["investigation_duration_minutes"]),
-            next_search_at=current.quote_time,
+            started_at=current.market_timestamp,
+            ends_at=current.market_timestamp + timedelta(minutes=runtime["investigation_duration_minutes"]),
+            next_search_at=current.market_timestamp,
             status=InvestigationStatus.active,
         )
     )
@@ -136,9 +138,11 @@ def evaluate_user_price_alerts(
     db: Session, current: PriceSnapshot
 ) -> list[PriceAlert]:
     """Evaluate user-owned chart target lines using the already-polled quote."""
+    if current.market_timestamp is None:
+        return []
     rows = db.scalars(
         select(UserPriceAlert).where(
-            UserPriceAlert.ticker == current.ticker,
+            UserPriceAlert.ticker == current.symbol,
             UserPriceAlert.enabled.is_(True),
             UserPriceAlert.triggered_at.is_(None),
         )
@@ -149,9 +153,9 @@ def evaluate_user_price_alerts(
     triggered: list[PriceAlert] = []
     for target in rows:
         crossed = (
-            current.price >= target.target_price
+            current.last_price >= target.target_price
             if target.direction == "above"
-            else current.price <= target.target_price
+            else current.last_price <= target.target_price
         )
         if not crossed:
             continue
@@ -161,12 +165,12 @@ def evaluate_user_price_alerts(
         )
         alert = existing or PriceAlert(
             event_key=event_key,
-            ticker=current.ticker,
+            ticker=current.symbol,
             period="price_target",
             baseline_price=target.target_price,
-            current_price=current.price,
-            change_percent=_change(current.price, target.target_price),
-            triggered_at=current.quote_time,
+            current_price=current.last_price,
+            change_percent=_change(current.last_price, target.target_price),
+            triggered_at=current.market_timestamp,
         )
         if existing is None:
             db.add(alert)
@@ -174,18 +178,18 @@ def evaluate_user_price_alerts(
             db.add(
                 Investigation(
                     alert_id=alert.id,
-                    ticker=current.ticker,
-                    started_at=current.quote_time,
-                    ends_at=current.quote_time
+                    ticker=current.symbol,
+                    started_at=current.market_timestamp,
+                    ends_at=current.market_timestamp
                     + timedelta(
                         minutes=runtime["investigation_duration_minutes"]
                     ),
-                    next_search_at=current.quote_time,
+                    next_search_at=current.market_timestamp,
                     status=InvestigationStatus.active,
                 )
             )
         target.enabled = False
-        target.triggered_at = current.quote_time
+        target.triggered_at = current.market_timestamp
         target.triggered_price_alert_id = alert.id
         triggered.append(alert)
     return triggered

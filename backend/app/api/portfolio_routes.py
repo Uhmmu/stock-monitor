@@ -45,13 +45,18 @@ from app.services.portfolio import (
     update_strategy_profile,
     update_transaction,
 )
+from app.services.portfolio.journal_sync import reconcile_user_trade_logs
 from app.services.securities import resolve_security
 
 router = APIRouter(prefix="/api/portfolio", dependencies=[Depends(get_current_user)])
 
 
 def _portfolio(db: Session, user: User):
-    return get_or_create_default_portfolio(db, user.id)
+    portfolio = get_or_create_default_portfolio(db, user.id)
+    if reconcile_user_trade_logs(db, portfolio):
+        db.commit()
+        db.refresh(portfolio)
+    return portfolio
 
 
 @router.get("/summary")

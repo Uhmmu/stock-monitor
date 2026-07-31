@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import PeerExclusion, PeerRelation, PriceSnapshot, StockGroup, StockProfile, ValuationSnapshot, WatchlistItem
+from app.services.price_snapshots import get_latest_persisted_price_snapshot
 
 
 def normalize_ticker(value: str) -> str:
@@ -114,7 +115,7 @@ def stock_management_payload(db: Session) -> dict:
             snapshot_profiles[ticker] = snapshot.payload
     quotes: dict[str, PriceSnapshot] = {}
     for ticker in tickers:
-        quote = db.scalar(select(PriceSnapshot).where(PriceSnapshot.ticker == ticker).order_by(PriceSnapshot.quote_time.desc()).limit(1))
+        quote = get_latest_persisted_price_snapshot(db, ticker)
         if quote:
             quotes[ticker] = quote
 
@@ -122,7 +123,15 @@ def stock_management_payload(db: Session) -> dict:
         profile, quote, item = profiles.get(ticker), quotes.get(ticker), watched.get(ticker)
         snapshot = snapshot_profiles.get(ticker, {})
         classification = snapshot.get("classification", {})
-        change = ((quote.price / quote.previous_close - 1) * 100) if quote and quote.previous_close else None
+        change = (
+            quote.price_change_percent
+            if quote and quote.price_change_percent is not None
+            else (
+                (quote.last_price / quote.previous_close - 1) * 100
+                if quote and quote.previous_close
+                else None
+            )
+        )
         return {
             "ticker": ticker,
             "company_name": profile.company_name if profile else snapshot.get("company"),
@@ -134,7 +143,7 @@ def stock_management_payload(db: Session) -> dict:
             "is_peer_referenced": ticker in references,
             "peer_referenced_by": sorted(set(references.get(ticker, []))),
             "stock_type": kind,
-            "price": quote.price if quote else None,
+            "price": quote.last_price if quote else None,
             "change_percent": round(change, 2) if change is not None else None,
             "alert_enabled": item.alert_enabled if item else False,
             "threshold_20m": item.threshold_20m if item else None,
