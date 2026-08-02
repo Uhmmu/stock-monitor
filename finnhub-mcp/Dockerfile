@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
-    && pip install --no-cache-dir "git+https://github.com/cfdude/mcp-finnhub.git@b7a2651b88efa7807b8d2486f0a736f51fd33332" \
+    && pip install --no-cache-dir "mcp==1.28.1" "git+https://github.com/cfdude/mcp-finnhub.git@b7a2651b88efa7807b8d2486f0a736f51fd33332" \
     && apt-get purge -y --auto-remove git \
     && rm -rf /var/lib/apt/lists/*
 
