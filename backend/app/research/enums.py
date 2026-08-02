@@ -63,6 +63,7 @@ class SourceType(StrEnum):
     peer_relation = "peer_relation"
     portfolio_analysis = "portfolio_analysis"
     market_context = "market_context"
+    us_macro = "us_macro"
     congress_trade = "congress_trade"
     tracked_figure = "tracked_figure"
     figure_position = "figure_position"

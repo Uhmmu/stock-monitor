@@ -219,4 +219,18 @@ def build_market_context(ticker: str, finnhub_symbol: str | None = None) -> str:
         _insider_trades(ticker),
         _institutional_holdings(ticker),
     ]
+    try:
+        from app.services.macro.context import build_latest_us_macro_context
+        macro = build_latest_us_macro_context()
+        if macro.get("growth", {}).get("real_gdp_yoy") is not None:
+            blocks.append(
+                "美国宏观背景（Alpha Vantage 持久化序列）："
+                f"实际GDP同比 {macro['growth'].get('real_gdp_yoy')}（观察 {macro['growth'].get('observation_date')}），"
+                f"CPI同比 {macro['inflation'].get('cpi_yoy')}（观察 {macro['inflation'].get('observation_date')}），"
+                f"失业率 {macro['labor'].get('unemployment_rate')}（观察 {macro['labor'].get('observation_date')}），"
+                f"10Y-2Y {macro['rates'].get('spread_10y_2y')}（曲线 {macro['rates'].get('curve_state')}）。"
+                "各指标观察日期不同，未接入市场一致预期；不得据此直接生成买卖结论。"
+            )
+    except Exception:
+        pass
     return "\n\n# 市场与基本面数据\n" + "\n".join(f"- {b}" for b in blocks)
