@@ -14,6 +14,7 @@ from app.models import Portfolio, Security, TradeTransaction
 
 from .position_builder import rebuild_symbol_position
 from .schemas import ManualPositionIn, TransactionIn
+from .investment_ledger import assert_manual_write_allowed
 
 
 def get_or_create_default_portfolio(db: Session, user_id: int) -> Portfolio:
@@ -50,6 +51,7 @@ def _resolve_security_id(db: Session, symbol: str, security_id: int | None) -> i
 
 
 def create_transaction(db: Session, portfolio: Portfolio, payload: TransactionIn) -> TradeTransaction:
+    assert_manual_write_allowed(db, portfolio, payload.symbol)
     security_id = _resolve_security_id(db, payload.symbol, payload.security_id)
     txn = TradeTransaction(
         portfolio_id=portfolio.id,
@@ -64,6 +66,9 @@ def create_transaction(db: Session, portfolio: Portfolio, payload: TransactionIn
         account=payload.account,
         note=payload.note,
         source="manual",
+        source_type="manual",
+        authority_source="manual",
+        authority_status="active",
     )
     db.add(txn)
     db.flush()
@@ -94,6 +99,9 @@ def create_manual_position(db: Session, portfolio: Portfolio, payload: ManualPos
 def update_transaction(
     db: Session, portfolio: Portfolio, txn: TradeTransaction, payload: TransactionIn
 ) -> TradeTransaction:
+    if txn.authority_status != "active" or txn.authority_source == "ibkr_flex":
+        raise ValueError("该交易来自 IBKR 或已被 IBKR 账本替代，券商事实不可在项目内修改。")
+    assert_manual_write_allowed(db, portfolio, payload.symbol)
     old_symbol = txn.symbol
     txn.security_id = _resolve_security_id(db, payload.symbol, payload.security_id)
     txn.symbol = payload.symbol
@@ -116,6 +124,8 @@ def update_transaction(
 
 
 def delete_transaction(db: Session, portfolio: Portfolio, txn: TradeTransaction) -> None:
+    if txn.authority_status != "active" or txn.authority_source == "ibkr_flex":
+        raise ValueError("该交易来自 IBKR 或已被 IBKR 账本替代，券商事实不可在项目内删除。")
     symbol = txn.symbol
     db.delete(txn)
     db.flush()
@@ -124,7 +134,10 @@ def delete_transaction(db: Session, portfolio: Portfolio, txn: TradeTransaction)
 
 
 def list_transactions(db: Session, portfolio: Portfolio, symbol: str | None = None) -> list[TradeTransaction]:
-    stmt = select(TradeTransaction).where(TradeTransaction.portfolio_id == portfolio.id)
+    stmt = select(TradeTransaction).where(
+        TradeTransaction.portfolio_id == portfolio.id,
+        TradeTransaction.authority_status == "active",
+    )
     if symbol:
         stmt = stmt.where(TradeTransaction.symbol == symbol.upper())
     stmt = stmt.order_by(TradeTransaction.trade_date.desc(), TradeTransaction.id.desc())

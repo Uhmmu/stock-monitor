@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class WatchlistCreate(BaseModel):
@@ -160,21 +160,6 @@ class TradeLogTableRow(BaseModel):
     def normalize_row_ticker(cls, value: str) -> str:
         return value.strip().upper()
 
-    @model_validator(mode="after")
-    def require_executed_trade_values(self):
-        executed = self.direction.strip().lower() in {"买入", "卖出", "buy", "sell"}
-        incomplete = (
-            not self.ticker
-            or self.quantity is None
-            or self.quantity <= 0
-            or self.price is None
-            or self.price <= 0
-        )
-        if executed and incomplete:
-            raise ValueError("买入/卖出必须填写标的、正数数量和正数价格，才能同步到持仓")
-        return self
-
-
 class TradeLogBase(BaseModel):
     trade_date: date
     ticker: str | None = Field(default=None, max_length=16)
@@ -216,5 +201,10 @@ class TradeLogOut(TradeLogBase):
     ai_summary: str | None
     ai_summary_model: str | None
     ai_summary_created_at: datetime | None
+    status: str
+    source_type: str
+    objective_facts: dict
+    ibkr_sync_run_id: int | None
+    ibkr_position_id: int | None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fmtHealthScore, fmtMoney, fmtNum, fmtPercent } from './Portfolio'
+import { chartPoints, fmtHealthScore, fmtMoney, fmtNum, fmtPercent } from './Portfolio'
 import { findSavedScenarioRun, type ScenarioHistoryRun } from './PortfolioScenarios'
 import { latestFreshAnalysis, requestsMatch, type PortfolioAnalysisRun } from './PortfolioAnalysisCache'
 
@@ -48,6 +48,19 @@ describe('fmtHealthScore', () => {
 
   it('rounds a score for compact display', () => {
     expect(fmtHealthScore(74.6)).toBe('75')
+  })
+})
+
+describe('portfolio ledger chart', () => {
+  it('keeps an empty state when fewer than two real points exist', () => {
+    expect(chartPoints([null, 100, null])).toBe('')
+  })
+
+  it('does not replace a missing account value with zero', () => {
+    const points = chartPoints([100, null, 120], 100, 50)
+    expect(points.split(' ')).toHaveLength(2)
+    expect(points).toContain('0.0,50.0')
+    expect(points).toContain('100.0,0.0')
   })
 })
 

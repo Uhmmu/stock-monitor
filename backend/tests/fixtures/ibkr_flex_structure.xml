@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse queryName="redacted" type="AF">
+  <FlexStatements count="1">
+    <FlexStatement accountId="DU000000" fromDate="20260701" toDate="20260731" period="July 2026" whenGenerated="20260801;120000">
+      <OpenPositions><OpenPosition accountId="DU000000" assetCategory="STK" conid="10001" symbol="EXAMPLE" description="Example Corp" currency="USD" listingExchange="NASDAQ" position="12.5" costBasisPrice="10.125" costBasisMoney="126.5625" markPrice="11.25" positionValue="140.625" fifoPnlUnrealized="14.0625" fxRateToBase="1" reportDate="20260731"/></OpenPositions>
+      <Trades><Trade accountId="DU000000" assetCategory="STK" conid="10001" symbol="EXAMPLE" currency="USD" tradeID="T1" transactionID="TX1" buySell="BUY" quantity="12.5" tradePrice="10.125" tradeMoney="126.5625" ibCommission="-1.00" tradeDate="20260701" dateTime="20260701;093000"/></Trades>
+      <Orders><Order accountId="DU000000" conid="10001" symbol="EXAMPLE" currency="USD" ibOrderID="O1" buySell="BUY" quantity="12.5" orderType="LMT" orderTime="20260701;092900"/></Orders>
+      <StatementOfFunds><StatementOfFundsLine accountId="DU000000" transactionID="TX1" activityCode="BUY" symbol="EXAMPLE" currency="USD" amount="-127.5625" balance="1000.00" date="20260701"/></StatementOfFunds>
+      <ChangeInDividendAccruals><ChangeInDividendAccrual accountId="DU000000" actionID="D1" conid="10001" symbol="EXAMPLE" currency="USD" grossAmount="5.00" tax="-1.50" netAmount="3.50" payDate="20260715"/></ChangeInDividendAccruals>
+      <HistoricalFxRates><ConversionRate fromCurrency="JPY" toCurrency="USD" reportDate="20260731" rate="0.006712345678"/></HistoricalFxRates>
+      <UnexpectedSection><UnexpectedRecord foo="bar" amount="1.25"/></UnexpectedSection>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>

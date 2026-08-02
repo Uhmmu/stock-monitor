@@ -71,11 +71,6 @@ from app.services.market_data import fetch_index_quotes, fetch_yf_info_metrics, 
 from app.services.stock_management import normalize_ticker, stock_management_payload, upsert_profile
 from app.services.securities import SecuritySearchUnavailable, provider_symbol, resolve_security, search_securities
 from app.services.llm import summarize_trade_log
-from app.services.portfolio.journal_sync import (
-    delete_trade_log_transactions,
-    sync_trade_log_transactions,
-)
-from app.services.portfolio.transaction_service import get_or_create_default_portfolio
 from app.services.market_calendar import market_status
 from app.services.price_snapshots import (
     get_latest_persisted_price_snapshot,
@@ -1323,6 +1318,11 @@ def _trade_log_out(row: TradeLog) -> dict:
         "ai_summary": row.ai_summary,
         "ai_summary_model": row.ai_summary_model,
         "ai_summary_created_at": row.ai_summary_created_at,
+        "status": row.status,
+        "source_type": row.source_type,
+        "objective_facts": row.objective_facts or {},
+        "ibkr_sync_run_id": row.ibkr_sync_run_id,
+        "ibkr_position_id": row.ibkr_position_id,
         "created_at": row.created_at,
     }
 
@@ -1389,8 +1389,6 @@ def create_trade_log(
     row = TradeLog(user_id=user.id, **payload.model_dump())
     db.add(row)
     db.flush()
-    portfolio = get_or_create_default_portfolio(db, user.id)
-    sync_trade_log_transactions(db, portfolio, row)
     db.commit()
     db.refresh(row)
     return _trade_log_out(row)
@@ -1406,15 +1404,21 @@ def update_trade_log(
     row = db.scalar(select(TradeLog).where(TradeLog.id == log_id, TradeLog.user_id == user.id))
     if not row:
         raise HTTPException(404, "未找到交易日志")
-    _resolve_trade_log_securities(db, payload)
-    for key, value in payload.model_dump().items():
-        setattr(row, key, value)
+    if row.source_type == "ibkr_sync":
+        # Broker facts are an immutable evidence snapshot. A journal edit only
+        # completes the user's subjective review and attachments.
+        for key in ("note", "content", "photo_urls"):
+            setattr(row, key, getattr(payload, key))
+    else:
+        _resolve_trade_log_securities(db, payload)
+        for key, value in payload.model_dump().items():
+            setattr(row, key, value)
+    if row.status == "draft":
+        row.status = "published"
     row.ai_summary = None
     row.ai_summary_model = None
     row.ai_summary_input_hash = None
     row.ai_summary_created_at = None
-    portfolio = get_or_create_default_portfolio(db, user.id)
-    sync_trade_log_transactions(db, portfolio, row)
     db.commit()
     db.refresh(row)
     return _trade_log_out(row)
@@ -1429,8 +1433,6 @@ def delete_trade_log(
     row = db.scalar(select(TradeLog).where(TradeLog.id == log_id, TradeLog.user_id == user.id))
     if not row:
         raise HTTPException(404, "未找到交易日志")
-    portfolio = get_or_create_default_portfolio(db, user.id)
-    delete_trade_log_transactions(db, portfolio, row)
     db.delete(row)
     db.commit()
     return Response(status_code=204)

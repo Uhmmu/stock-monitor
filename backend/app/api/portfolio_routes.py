@@ -7,14 +7,14 @@ transaction, never a position row directly (Section 4/5).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import UTC, date, datetime, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.database import get_db
-from datetime import UTC, datetime
-
 from app.models import PortfolioPosition, User
 from app.services.portfolio import (
     ManualPositionIn,
@@ -27,6 +27,9 @@ from app.services.portfolio import (
     TransactionIn,
     TransactionOut,
     build_health,
+    build_ledger_overview,
+    build_ledger_position_detail,
+    completed_trades,
     build_benchmark_comparison,
     build_personalized_interpretation,
     build_position_detail,
@@ -39,29 +42,53 @@ from app.services.portfolio import (
     get_or_create_strategy_profile,
     get_transaction,
     list_transactions,
+    open_lots,
+    performance_series,
     profile_catalog,
     rebuild_all_positions,
     reset_strategy_profile,
+    return_attribution,
+    transaction_events,
     update_strategy_profile,
     update_transaction,
 )
-from app.services.portfolio.journal_sync import reconcile_user_trade_logs
 from app.services.securities import resolve_security
 
 router = APIRouter(prefix="/api/portfolio", dependencies=[Depends(get_current_user)])
 
 
 def _portfolio(db: Session, user: User):
-    portfolio = get_or_create_default_portfolio(db, user.id)
-    if reconcile_user_trade_logs(db, portfolio):
-        db.commit()
-        db.refresh(portfolio)
-    return portfolio
+    return get_or_create_default_portfolio(db, user.id)
 
 
 @router.get("/summary")
 def portfolio_summary(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return build_summary(db, _portfolio(db, user))
+    return build_ledger_overview(db, _portfolio(db, user))
+
+
+def _range_start(value: str) -> date | None:
+    today = datetime.now(UTC).date()
+    return {
+        "1M": today - timedelta(days=31), "3M": today - timedelta(days=93),
+        "6M": today - timedelta(days=186), "YTD": date(today.year, 1, 1),
+        "1Y": today - timedelta(days=366), "ALL": None,
+    }.get(value.upper())
+
+
+@router.get("/performance")
+def portfolio_performance(
+    range: str = Query("1Y", pattern="^(1M|3M|6M|YTD|1Y|ALL)$"),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return performance_series(db, _portfolio(db, user), start=_range_start(range))
+
+
+@router.get("/attribution")
+def portfolio_attribution(
+    start_date: date | None = None, end_date: date | None = None,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return return_attribution(db, _portfolio(db, user), start=start_date, end=end_date)
 
 
 @router.get("/benchmark", response_model=PortfolioBenchmarkResponse)
@@ -93,7 +120,7 @@ def portfolio_positions(user: User = Depends(get_current_user), db: Session = De
 
 @router.get("/positions/{symbol}")
 def position_detail(symbol: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    detail = build_position_detail(db, _portfolio(db, user), symbol)
+    detail = build_ledger_position_detail(db, _portfolio(db, user), symbol)
     if detail is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "未找到该持仓")
     return detail
@@ -150,13 +177,39 @@ def portfolio_interpretation(user: User = Depends(get_current_user), db: Session
     return build_personalized_interpretation(health, profile)
 
 
-@router.get("/transactions", response_model=list[TransactionOut])
+@router.get("/transactions")
 def transactions_list(
     symbol: str | None = None,
+    event_type: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    account: str | None = None,
+    currency: str | None = None,
+    include_superseded: bool = False,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return list_transactions(db, _portfolio(db, user), symbol)
+    return transaction_events(
+        db, _portfolio(db, user), symbol=symbol, event_type=event_type,
+        start=start_date, end=end_date, account=account, currency=currency,
+        include_superseded=include_superseded,
+    )
+
+
+@router.get("/completed-trades")
+def portfolio_completed_trades(
+    symbol: str | None = None,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return completed_trades(db, _portfolio(db, user), symbol=symbol)
+
+
+@router.get("/open-lots")
+def portfolio_open_lots(
+    symbol: str | None = None,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return open_lots(db, _portfolio(db, user), symbol=symbol)
 
 
 @router.post("/positions", response_model=TransactionOut, status_code=status.HTTP_201_CREATED)
@@ -180,11 +233,15 @@ def manual_position(
     symbol = security.yahoo_symbol or security.finnhub_symbol
     if not symbol:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "该证券暂无可用行情数据源")
-    txn = create_manual_position(
-        db,
-        _portfolio(db, user),
-        payload.model_copy(update={"security_id": security.id, "symbol": symbol}),
-    )
+    try:
+        txn = create_manual_position(
+            db,
+            _portfolio(db, user),
+            payload.model_copy(update={"security_id": security.id, "symbol": symbol}),
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     from app.tasks.celery_app import sync_technical_analysis
 
     sync_technical_analysis.delay(symbol)
@@ -197,7 +254,11 @@ def transaction_create(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return create_transaction(db, _portfolio(db, user), payload)
+    try:
+        return create_transaction(db, _portfolio(db, user), payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
 @router.patch("/transactions/{txn_id}", response_model=TransactionOut)
@@ -211,7 +272,11 @@ def transaction_update(
     txn = get_transaction(db, portfolio, txn_id)
     if txn is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "未找到该交易记录")
-    return update_transaction(db, portfolio, txn, payload)
+    try:
+        return update_transaction(db, portfolio, txn, payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
 @router.delete("/transactions/{txn_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -224,7 +289,11 @@ def transaction_delete(
     txn = get_transaction(db, portfolio, txn_id)
     if txn is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "未找到该交易记录")
-    delete_transaction(db, portfolio, txn)
+    try:
+        delete_transaction(db, portfolio, txn)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
 @router.post("/rebuild")

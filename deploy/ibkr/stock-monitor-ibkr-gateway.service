@@ -1,0 +1,26 @@
+[Unit]
+Description=Stock Monitor IBKR Client Portal Gateway (read-only integration test)
+After=network-online.target xray.service stock-monitor-ibkr-network.service stock-monitor-ibkr-namespace-relays.service
+Wants=network-online.target
+Requires=xray.service stock-monitor-ibkr-network.service stock-monitor-ibkr-namespace-relays.service
+
+[Service]
+Type=simple
+User=stock-monitor
+Group=stock-monitor
+WorkingDirectory=/opt/stock-monitor/ibkr/clientportal.gw
+ExecStart=/opt/stock-monitor/ibkr/start-client-portal-gateway.sh
+Environment="IBKR_PROXY_HOST=169.254.250.1"
+Environment="IBKR_PROXYCHAINS_CONFIG=/opt/stock-monitor/ibkr/proxychains-netns.conf"
+Environment="JAVA_TOOL_OPTIONS=-DsocksProxyHost=169.254.250.1 -DsocksProxyPort=10808 -Djava.net.useSystemProxies=false"
+NetworkNamespacePath=/run/netns/stock-monitor-ibkr
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/stock-monitor/ibkr/clientportal.gw
+
+[Install]
+WantedBy=multi-user.target

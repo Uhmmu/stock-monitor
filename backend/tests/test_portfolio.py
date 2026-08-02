@@ -23,12 +23,13 @@ from app.models import (
     User,
     ValuationSnapshot,
 )
-from app.services.portfolio.lot_matcher import rebuild_symbol
-from app.services.portfolio.journal_sync import (
-    delete_trade_log_transactions,
-    reconcile_user_trade_logs,
-    sync_trade_log_transactions,
+from app.integrations.ibkr.db_models import (
+    IbkrFlexRecord,
+    IbkrFlexSyncRun,
+    IbkrPortfolioAuthorityAudit,
 )
+from app.services.portfolio.lot_matcher import rebuild_symbol
+from app.services.portfolio.journal_drafts import create_ibkr_journal_drafts
 from app.services.portfolio.performance import build_summary
 from app.services.portfolio.benchmark import build_benchmark_comparison
 from app.services.portfolio.portfolio_health import build_health
@@ -58,9 +59,12 @@ TABLES = [
     User.__table__,
     PortfolioStrategyProfile.__table__,
     Portfolio.__table__,
+    IbkrFlexSyncRun.__table__,
+    IbkrFlexRecord.__table__,
     TradeLog.__table__,
     TradeTransaction.__table__,
     PortfolioPosition.__table__,
+    IbkrPortfolioAuthorityAudit.__table__,
     PortfolioPositionLot.__table__,
     Security.__table__,
     StockProfile.__table__,
@@ -265,98 +269,61 @@ def test_manual_position_rejects_unsupported_currency():
         ManualPositionIn(symbol="AAPL", price=100.0, quantity=10, trade_date=date(2026, 1, 1), currency="XXX")
 
 
-# ── trading journal → portfolio transactions ─────────────────────────────
+# ── IBKR position changes → trading journal drafts ───────────────────────
 
-def test_journal_buy_and_sell_rebuild_position_from_entered_values(db, portfolio):
+def test_ibkr_position_change_creates_idempotent_prefilled_journal_draft(db, portfolio):
     security = Security(
         display_symbol="AAPL", yahoo_symbol="AAPL", display_name="Apple",
         currency="USD", mapping_method="test",
     )
     db.add(security)
     db.flush()
-    log = TradeLog(
-        user_id=portfolio.user_id,
-        trade_date=date(2026, 1, 5),
-        table_rows=[
-            {"security_id": security.id, "ticker": "AAPL", "direction": "买入", "quantity": 12, "price": 100, "fee": 2},
-            {"security_id": security.id, "ticker": "AAPL", "direction": "卖出", "quantity": 5, "price": 125, "fee": 1},
-        ],
-        photo_urls=[],
+    run = IbkrFlexSyncRun(
+        user_id=portfolio.user_id, account_id="DU1", report_to_date=date(2026, 1, 5),
+        status="completed", parser_version="test", source_hash="draft-test",
     )
-    db.add(log)
+    db.add(run)
+    db.flush()
+    position = PortfolioPosition(
+        portfolio_id=portfolio.id, security_id=security.id, symbol="AAPL", total_quantity=12,
+        average_cost=100, total_cost=1200, currency="USD", authority_source="ibkr_flex",
+        ibkr_sync_run_id=run.id, ibkr_market_price=125, ibkr_market_value=1500,
+        ibkr_unrealized_pnl=300, ibkr_fx_rate_to_base=1, ibkr_report_date=date(2026, 1, 5),
+    )
+    db.add(position)
+    db.flush()
+    trade = IbkrFlexRecord(
+        sync_run_id=run.id, section="trades", source_id="t1", source_index=0,
+        account_id="DU1", symbol="AAPL", currency="USD", report_date=date(2026, 1, 5),
+        occurred_at=datetime(2026, 1, 5, 15, tzinfo=UTC), quantity=12, price=100,
+        raw_payload={"buySell": "BUY", "ibCommission": "2.5"},
+    )
+    db.add_all([trade, IbkrPortfolioAuthorityAudit(
+        user_id=portfolio.user_id, portfolio_position_id=position.id, sync_run_id=run.id,
+        conflict_type="quantity", previous_source="manual", previous_value="0",
+        authoritative_value="12", application_status="applied", details={},
+    )])
     db.flush()
 
-    assert sync_trade_log_transactions(db, portfolio, log) is True
-    db.commit()
-
-    txns = db.query(TradeTransaction).filter_by(portfolio_id=portfolio.id).order_by(TradeTransaction.id).all()
-    assert [(txn.transaction_type, txn.quantity, txn.price, txn.trade_date) for txn in txns] == [
-        ("buy", 12, 100, date(2026, 1, 5)),
-        ("sell", 5, 125, date(2026, 1, 5)),
-    ]
-    assert all(txn.source == "journal" and txn.source_log_id == log.id for txn in txns)
-    assert [txn.source_log_row_index for txn in txns] == [0, 1]
-    position = db.query(PortfolioPosition).filter_by(portfolio_id=portfolio.id, symbol="AAPL").one()
-    assert position.total_quantity == 7
-    assert position.average_cost == pytest.approx((1200 + 2) / 12)
-    assert position.total_cost == pytest.approx(7 * ((1200 + 2) / 12))
-    assert position.last_transaction_at == date(2026, 1, 5)
+    assert create_ibkr_journal_drafts(db, user_id=portfolio.user_id, sync_run_id=run.id)["created"] == 1
+    assert create_ibkr_journal_drafts(db, user_id=portfolio.user_id, sync_run_id=run.id)["reused"] == 1
+    log = db.query(TradeLog).one()
+    assert log.status == "draft"
+    assert log.source_type == "ibkr_sync"
+    assert log.content is None
+    assert log.quantity == 12
+    assert log.price == 100
+    assert log.table_rows[0]["fee"] == 2.5
+    assert log.objective_facts["quantity_before"] == 0
+    assert log.objective_facts["quantity_after"] == 12
+    assert db.query(TradeTransaction).count() == 0
 
 
-def test_journal_edit_and_delete_reconcile_existing_position(db, portfolio):
-    log = TradeLog(
-        user_id=portfolio.user_id,
-        trade_date=date(2026, 1, 1),
-        table_rows=[{"ticker": "MSFT", "direction": "买入", "quantity": 10, "price": 200}],
-        photo_urls=[],
+def test_incomplete_executed_journal_row_is_allowed_without_holdings_sync():
+    row = TradeLogTableRow(
+        ticker="AAPL", direction="买入", quantity=None, price=100
     )
-    db.add(log)
-    db.flush()
-    sync_trade_log_transactions(db, portfolio, log)
-    db.commit()
-
-    log.trade_date = date(2026, 1, 3)
-    log.table_rows = [{"ticker": "MSFT", "direction": "买入", "quantity": 4, "price": 220}]
-    assert sync_trade_log_transactions(db, portfolio, log) is True
-    db.commit()
-    assert db.query(TradeTransaction).filter_by(portfolio_id=portfolio.id).count() == 1
-    position = db.query(PortfolioPosition).filter_by(portfolio_id=portfolio.id, symbol="MSFT").one()
-    assert position.total_quantity == 4
-    assert position.average_cost == 220
-    assert position.last_transaction_at == date(2026, 1, 3)
-
-    assert delete_trade_log_transactions(db, portfolio, log) is True
-    db.delete(log)
-    db.commit()
-    assert db.query(TradeTransaction).filter_by(portfolio_id=portfolio.id).count() == 0
-    assert db.query(PortfolioPosition).filter_by(portfolio_id=portfolio.id, symbol="MSFT").first() is None
-
-
-def test_reconcile_backfills_existing_logs_and_ignores_non_executed_rows(db, portfolio):
-    db.add(TradeLog(
-        user_id=portfolio.user_id,
-        trade_date=date(2026, 2, 1),
-        table_rows=[
-            {"ticker": "NVDA", "direction": "观望", "quantity": 3, "price": 100},
-            {"ticker": "NVDA", "direction": "买入", "quantity": 2, "price": 110},
-        ],
-        photo_urls=[],
-    ))
-    db.commit()
-
-    assert reconcile_user_trade_logs(db, portfolio) is True
-    db.commit()
-    txn = db.query(TradeTransaction).filter_by(portfolio_id=portfolio.id).one()
-    assert txn.transaction_type == "buy"
-    assert txn.quantity == 2
-    assert reconcile_user_trade_logs(db, portfolio) is False
-
-
-def test_executed_journal_row_requires_ticker_quantity_and_price():
-    with pytest.raises(Exception, match="买入/卖出必须填写"):
-        TradeLogTableRow(ticker="AAPL", direction="买入", quantity=None, price=100)
-    row = TradeLogTableRow(ticker="AAPL", direction="观望", quantity=None, price=None)
-    assert row.direction == "观望"
+    assert row.quantity is None
 
 
 # ── performance.build_summary ─────────────────────────────────────────────

@@ -96,6 +96,40 @@ class Settings(BaseSettings):
     adanos_api_base_url: str = "https://api.adanos.org"
     adanos_request_timeout_seconds: float = 5.0
 
+    # Isolated, administrator-only, read-only IBKR integration test module.
+    # Flex traffic is fail-closed through the loopback Xray/VLESS SOCKS5 proxy.
+    ibkr_cp_enabled: bool = False
+    ibkr_cp_base_url: str = "https://127.0.0.1:5000/v1/api"
+    ibkr_cp_login_url: str = "https://localhost:5000"
+    ibkr_cp_verify_ssl: bool = False
+    ibkr_cp_connect_timeout_seconds: float = 5.0
+    ibkr_cp_read_timeout_seconds: float = 30.0
+    ibkr_username_hint: str = ""
+    ibkr_credential_encryption_key: str = ""
+    ibkr_login_browser_executable: str = "/usr/bin/chromium"
+    ibkr_login_timeout_seconds: float = 150.0
+    ibkr_flex_enabled: bool = False
+    ibkr_flex_token: str = ""
+    ibkr_flex_query_id: str = ""
+    ibkr_flex_base_url: str = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
+    ibkr_flex_timeout_seconds: float = 60.0
+    ibkr_proxy_url: str = "socks5h://127.0.0.1:10808"
+
+    # Server-only Alpha Vantage economic time-series integration.  The
+    # provider is deliberately opt-in: missing credentials must not prevent
+    # the rest of stock-monitor from starting.
+    alpha_vantage_enabled: bool = False
+    alpha_vantage_api_key: str = ""
+    alpha_vantage_base_url: str = "https://www.alphavantage.co/query"
+    alpha_vantage_daily_request_limit: int = 25
+    alpha_vantage_reserved_requests: int = 3
+    alpha_vantage_request_interval_seconds: float = 15.0
+    alpha_vantage_timeout_seconds: float = 30.0
+    alpha_vantage_max_retries: int = 3
+    alpha_vantage_macro_sync_enabled: bool = True
+    alpha_vantage_macro_sync_hour_utc: int = 8
+    alpha_vantage_macro_history_refresh_days: int = 7
+
     # Read-only AI Tool Adapter layer. These limits are additionally clamped by
     # hard constants in app.ai_tools and never grant access to model providers.
     ai_tools_enabled: bool = True

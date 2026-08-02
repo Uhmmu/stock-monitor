@@ -13,6 +13,10 @@ import { OwnershipSection } from './Ownership'
 import { AIChatPage } from './features/ai-chat'
 import { InvestmentDecisionsPage } from './features/ai-memory'
 import { MarketSnapshot } from './MarketSnapshot'
+import { IbkrIntegrationTest } from './IbkrIntegrationTest'
+import { IbkrAccount } from './IbkrAccount'
+import { MacroDataSourcePanel, MacroFundamentals } from './MacroFundamentals'
+import './macro.css'
 import {
   TechnicalChart,
   type TechnicalChartEvent,
@@ -72,7 +76,7 @@ type Position = {ticker:string|null;asset_name:string;category:string;value:numb
 type FigureDetail = {slug:string;display_name:string;kind:string;photo_url:string|null;note:string|null;is_seed:boolean;positions:Position[];positions_are_percent:boolean;trades:CongressTradeRow[];moves:{buys:string[];sells:string[]}|null}
 type FilerHit = {filer_id:string;full_name:string;chamber:string|null;branch:string|null;party:string|null;state:string|null;trade_count:number|null}
 type TradeLogRow = {security_id?:number|null;ticker:string;direction:string;quantity:number|null;price:number|null;fee:number|null;strategy:string;result:string}
-type TradeLog = {id:number;trade_date:string;ticker:string|null;direction:string|null;quantity:number|null;price:number|null;note:string|null;content:string|null;table_rows:TradeLogRow[];photo_urls:string[];ai_summary:string|null;ai_summary_model:string|null;ai_summary_created_at:string|null;created_at:string}
+type TradeLog = {id:number;trade_date:string;ticker:string|null;direction:string|null;quantity:number|null;price:number|null;note:string|null;content:string|null;table_rows:TradeLogRow[];photo_urls:string[];ai_summary:string|null;ai_summary_model:string|null;ai_summary_created_at:string|null;status:'draft'|'published';source_type:'manual'|'ibkr_sync';objective_facts:Record<string,unknown>;ibkr_sync_run_id:number|null;ibkr_position_id:number|null;created_at:string}
 
 const formatPrice = (value:number|null) => value == null ? '等待行情' : `$${value.toFixed(2)}`
 const formatDate = (value:string) => new Date(value).toLocaleString('zh-CN')
@@ -191,6 +195,8 @@ function NavIcon({name}:{name:string}) {
     reports:<><path d="M5 3h14v18H5z"/><path d="M9 8h6M9 12h6M9 16h4"/></>,
     journal:<><path d="M5 4h14v16H5z"/><path d="M9 4v16M12 8h4M12 12h4"/></>,
     settings:<><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></>,
+    ibkr:<><path d="M4 7h16v12H4z"/><path d="M8 7V4h8v3M8 12h8M8 15h5"/><path d="M17 11v5"/></>,
+    'ibkr-test':<><path d="M4 7h16v12H4z"/><path d="M8 7V4h8v3M8 12h8M8 15h5"/><path d="M17 11v5"/></>,
   }
   return <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
 }
@@ -400,7 +406,7 @@ export default function App() {
   const [demoMode,setDemoMode] = useState(previewRequested)
   const [authUser,setAuthUser] = useState<{username:string;role:string}|null>(()=>previewRequested?{username:'访客',role:'viewer'}:null)
   const [authLoading,setAuthLoading] = useState(()=>!!(localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')))
-  const [tab,setTab] = useState(()=>window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')
+  const [tab,setTab] = useState(()=>window.location.pathname.startsWith('/admin/integrations/ibkr')?'ibkr-test':window.location.pathname==='/ibkr'?'ibkr':window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')
   const [mobileNavOpen,setMobileNavOpen] = useState(false)
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
   const [selectedModel,setSelectedModel] = useState<CrossMetric|null>(null)
@@ -437,7 +443,7 @@ export default function App() {
   },[])
 
   useEffect(()=>{
-    const onPop=()=>setTab(window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')
+    const onPop=()=>setTab(window.location.pathname.startsWith('/admin/integrations/ibkr')?'ibkr-test':window.location.pathname==='/ibkr'?'ibkr':window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')
     window.addEventListener('popstate',onPop)
     return ()=>window.removeEventListener('popstate',onPop)
   },[])
@@ -445,9 +451,9 @@ export default function App() {
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const tabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['sentiment','舆情'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['sentiment','市场舆情'],['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置']].find(x=>x[0]===tab)?.[1]
-  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ai'){if(!window.location.pathname.startsWith('/ai'))window.history.pushState({},'', '/ai/new')}else if(key==='decisions')window.history.pushState({},'','/investment-decisions');else if(window.location.pathname.startsWith('/ai')||window.location.pathname.startsWith('/investment-decisions'))window.history.pushState({},'',`/?tab=${key}`)}
+  const tabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['sentiment','舆情'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['sentiment','市场舆情'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
+  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ibkr-test')window.history.pushState({},'','/admin/integrations/ibkr');else if(key==='ibkr')window.history.pushState({},'','/ibkr');else if(key==='ai'){if(!window.location.pathname.startsWith('/ai'))window.history.pushState({},'', '/ai/new')}else if(key==='decisions')window.history.pushState({},'','/investment-decisions');else if(window.location.pathname.startsWith('/ai')||window.location.pathname.startsWith('/investment-decisions')||window.location.pathname.startsWith('/admin/integrations/ibkr')||window.location.pathname==='/ibkr')window.history.pushState({},'',`/?tab=${key}`)}
   const askAI=(symbol:string)=>{setSelectedProfileSymbol(null);setActiveTicker(symbol);setTab('ai');window.history.pushState({},'',`/ai/new?symbol=${encodeURIComponent(symbol)}&context=company`);window.dispatchEvent(new PopStateEvent('popstate'))}
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
   const viewIndices = demoMode ? demoIndices : indices.data
@@ -478,6 +484,7 @@ export default function App() {
       </>}
       {tab==='watchlist'&&<StockManagement onWatchlistChanged={()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}}/>}
       {tab==='holdings'&&<PortfolioModule/>}
+      {tab==='ibkr'&&<IbkrAccount/>}
       {tab==='ai'&&<AIChatPage enabled={!demoMode}/>}
       {tab==='decisions'&&<InvestmentDecisionsPage/>}
       {tab==='calendar'&&<InvestmentCalendar/>}
@@ -487,13 +494,15 @@ export default function App() {
       {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='sentiment'&&<SentimentModule ticker={activeTicker||watchlist.data?.[0]?.ticker||''} selector={<SnapshotTickerBar section="sentiment" tickers={watchlist.data?.map(w=>w.ticker)||[]} current={activeTicker||watchlist.data?.[0]?.ticker||''} onSelect={setActiveTicker}/>}/>}
       {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
+      {tab==='macro'&&<MacroFundamentals isAdmin={authUser.role==='admin'}/>}
       {tab==='financials'&&<FinancialStatementsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onStatementMetric={setSelectedStatementMetric} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='crossmodel'&&<CrossModelCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onMetric={setSelectedModel} onWeight={setSelectedWeight} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='technical'&&<TechnicalAnalysisCenter/>}
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='congress'&&<CongressCenter/>}
       {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
-      {tab==='settings'&&<>{settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}<DiscoverySettingsPanel/>{authUser.role==='admin'&&<AdminPanel/>}</> }
+      {tab==='settings'&&<>{settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}<MacroDataSourcePanel isAdmin={authUser.role==='admin'}/><DiscoverySettingsPanel/>{authUser.role==='admin'&&<AdminPanel/>}</> }
+      {tab==='ibkr-test'&&authUser.role==='admin'&&<IbkrIntegrationTest/>}
       </div>
     </main>
     <Sheet open={selectedReport!==null} onClose={()=>setSelectedReport(null)} title={report.data?typeNames[report.data.report_type]||report.data.report_type:'报告'}>
@@ -1074,34 +1083,42 @@ function JournalSection({username}:{username:string}) {
   }
   const beginNew = () => {setEditing(null);setRowSecurities([null]);setForm({trade_date:today,ticker:'',direction:'',quantity:'',price:'',note:'',content:'',table_rows:[emptyTradeRow()],photo_urls:[]});setEditorOpen(true)}
   const removeRow = (index:number) => {setForm(f=>({...f,table_rows:f.table_rows.length>1?f.table_rows.filter((_,i)=>i!==index):[emptyTradeRow()]}));setRowSecurities(items=>items.length>1?items.filter((_,i)=>i!==index):[null])}
+  const drafts=logs.data?.filter(log=>log.status==='draft')||[]
+  const published=logs.data?.filter(log=>log.status!=='draft')||[]
+  const renderLog = (log:TradeLog) => <article className={`journal-card ${log.status==='draft'?'journal-draft':''}`} key={log.id}>
+    <div className="journal-card-head"><div><b>{log.trade_date}</b><span>{[log.ticker,log.direction].filter(Boolean).join(' · ')||'未填写标的'}</span>{log.status==='draft'&&<em className="journal-status">待写复盘</em>}</div><small>{log.source_type==='ibkr_sync'?'IBKR 自动草稿':formatDate(log.created_at)}</small></div>
+    {log.source_type==='ibkr_sync'&&<div className="journal-broker-facts"><b>券商事实已填好</b><span>仓位 {String(log.objective_facts.quantity_before??'—')} → {String(log.objective_facts.quantity_after??'—')}</span><span>成交点位 {log.price==null?'—':`${log.price} ${String(log.objective_facts.currency||'')}`}</span><span>费率/汇率 {log.objective_facts.fx_rate_to_base==null?'—':String(log.objective_facts.fx_rate_to_base)}</span><span>手续费 {log.objective_facts.commission==null?'—':String(log.objective_facts.commission)}</span></div>}
+    {log.note&&<p>{log.note}</p>}
+    {log.content&&<p className="journal-content">{log.content}</p>}
+    {log.table_rows.length>0&&<div className="journal-mini-table">{log.table_rows.map((row,i)=><span key={i}>{row.ticker||'—'} {row.direction||''} {row.quantity??'—'} @ {row.price??'—'}{row.fee!=null?` · 费用 ${row.fee}`:''}</span>)}</div>}
+    {log.photo_urls.length>0&&<div className="photo-strip">{log.photo_urls.map((src,i)=><img src={src} alt={`交易截图 ${i+1}`} key={i}/>)}</div>}
+    {log.ai_summary&&<div className="ai-summary"><span className="ai-tag">AI · {log.ai_summary_model}</span><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{log.ai_summary}</ReactMarkdown></div>}
+    <div className="journal-card-actions"><button onClick={()=>summarize.mutate(log.id)} disabled={summarize.isPending||log.status==='draft'}>{summarize.isPending?'处理中…':'AI 优化总结'}</button><button onClick={()=>edit(log)}>{log.status==='draft'?'填写复盘':'编辑'}</button><button className="danger" aria-label="删除日志" onClick={()=>del.mutate(log.id)}><TrashIcon/></button></div>
+  </article>
   return <div className="journal">
       <div className="journal-list">
         <div className="section-title journal-list-title"><div><p>TRADING JOURNAL</p><h2>我的日志</h2></div><div className="journal-list-actions"><span>{logs.data?.length||0} 条</span><button className="journal-new-btn" onClick={beginNew}><span>＋</span> 新建日志</button></div></div>
-        {logs.data?.map(log=><article className="journal-card" key={log.id}>
-          <div className="journal-card-head"><div><b>{log.trade_date}</b><span>{[log.ticker,log.direction].filter(Boolean).join(' · ')||'未填写标的'}</span></div><small>{formatDate(log.created_at)}</small></div>
-          {log.note&&<p>{log.note}</p>}
-          {log.content&&<p className="journal-content">{log.content}</p>}
-          {log.table_rows.length>0&&<div className="journal-mini-table">{log.table_rows.map((row,i)=><span key={i}>{row.ticker||'—'} {row.direction||''} {row.quantity??'—'} @ {row.price??'—'}</span>)}</div>}
-          {log.photo_urls.length>0&&<div className="photo-strip">{log.photo_urls.map((src,i)=><img src={src} alt={`交易截图 ${i+1}`} key={i}/>)}</div>}
-          {log.ai_summary&&<div className="ai-summary"><span className="ai-tag">AI · {log.ai_summary_model}</span><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{log.ai_summary}</ReactMarkdown></div>}
-          <div className="journal-card-actions"><button onClick={()=>summarize.mutate(log.id)} disabled={summarize.isPending}>{summarize.isPending?'处理中…':'AI 优化总结'}</button><button onClick={()=>edit(log)}>编辑</button><button className="danger" aria-label="删除日志" onClick={()=>del.mutate(log.id)}><TrashIcon/></button></div>
-        </article>)}
+        {drafts.length>0&&<div className="journal-subheading"><div><b>待写区</b><span>IBKR 仓位变化已自动填入客观事实</span></div><em>{drafts.length}</em></div>}
+        {drafts.map(renderLog)}
+        {published.length>0&&drafts.length>0&&<div className="journal-subheading"><div><b>已完成</b><span>你的交易复盘</span></div><em>{published.length}</em></div>}
+        {published.map(renderLog)}
         {logs.isLoading&&<div className="empty">加载交易日志中…</div>}
         {!logs.isLoading&&!logs.data?.length&&<div className="empty">还没有日志。每天收盘后写一条，数据只对当前登录用户可见。</div>}
       </div>
     <Sheet open={editorOpen} onClose={reset} title={editing?'编辑交易日志':'新建交易日志'}>
       <form className="journal-editor" onSubmit={event=>{event.preventDefault();save.mutate()}}>
         <div className="journal-editor-intro"><div><p className="eyebrow">{editing?'EDIT ENTRY':'NEW ENTRY'}</p><h2>{editing?'编辑交易日志':'把这次交易留下来'}</h2></div><span>当前用户：{username}</span></div>
-        <label className="journal-date-field">日期<input type="date" value={form.trade_date} onChange={e=>setForm({...form,trade_date:e.target.value})} required/></label>
+        <label className="journal-date-field">日期<input type="date" value={form.trade_date} onChange={e=>setForm({...form,trade_date:e.target.value})} required disabled={editing?.source_type==='ibkr_sync'}/></label>
         <label className="journal-note">简短备注<input value={form.note} onChange={e=>setForm({...form,note:e.target.value})} placeholder="一句话记录当天最重要的交易背景"/></label>
         <label className="journal-note">文字记录<textarea value={form.content} onChange={e=>setForm({...form,content:e.target.value})} placeholder="记录交易计划、执行、情绪、复盘和明天要验证的条件"/></label>
-        <div className="journal-table">
-          <div className="journal-table-heading"><div><b>交易明细</b><span>{form.table_rows.length} 张便签</span></div><small>买入 / 卖出会按本页日期、数量和价格同步到持仓</small></div>
+        {editing?.source_type==='ibkr_sync'&&<div className="journal-objective-note"><b>以下为 IBKR 只读事实</b><span>成交、费用、汇率和仓位变化不会被日志编辑覆盖，也不会反向修改持仓。</span></div>}
+        <div className={`journal-table ${editing?.source_type==='ibkr_sync'?'journal-table-readonly':''}`}>
+          <div className="journal-table-heading"><div><b>交易明细</b><span>{form.table_rows.length} 张便签</span></div><small>{editing?.source_type==='ibkr_sync'?'来自 IBKR，不可编辑':'仅用于复盘，不会修改持仓'}</small></div>
           {form.table_rows.map((row,index)=><div className="journal-row-note" key={index}>
             <div className="journal-row-top"><label><span>标的</span><SecuritySearchAutocomplete compact value={rowSecurities[index]||null} onSelect={security=>{setRowSecurities(items=>items.map((item,i)=>i===index?security:item));updateRow(index,{ticker:security?.display_symbol||'',security_id:security?.security_id||null})}} placeholder="搜索代码或公司"/></label><label><span>方向</span><select value={row.direction} onChange={e=>updateRow(index,{direction:e.target.value})}><option value="">选择方向</option><option>买入</option><option>卖出</option><option>观望</option><option>挂单</option></select></label><button type="button" className="row-delete" aria-label="删除这笔交易" onClick={()=>removeRow(index)}><TrashIcon/></button></div>
             <div className="journal-row-bottom"><label><span>数量</span><input type="number" inputMode="decimal" min="0" step="any" value={row.quantity??''} onChange={e=>updateRow(index,{quantity:e.target.value===''?null:Number(e.target.value)})} placeholder="0"/></label><label><span>价格</span><input type="number" inputMode="decimal" min="0" step="any" value={row.price??''} onChange={e=>updateRow(index,{price:e.target.value===''?null:Number(e.target.value)})} placeholder="0.00"/></label><label><span>自定义标签</span><input value={row.strategy} onChange={e=>updateRow(index,{strategy:e.target.value})} placeholder="突破 / 试仓"/></label><label><span>其他</span><input value={row.result} onChange={e=>updateRow(index,{result:e.target.value})} placeholder="补充说明"/></label></div>
           </div>)}
-          <button type="button" className="add-note-btn" onClick={()=>{setForm(f=>({...f,table_rows:[...f.table_rows,emptyTradeRow()]}));setRowSecurities(items=>[...items,null])}}><span>＋</span> 添加交易便签</button>
+          {editing?.source_type!=='ibkr_sync'&&<button type="button" className="add-note-btn" onClick={()=>{setForm(f=>({...f,table_rows:[...f.table_rows,emptyTradeRow()]}));setRowSecurities(items=>[...items,null])}}><span>＋</span> 添加交易便签</button>}
         </div>
         <div className="photo-uploader"><label>照片<input type="file" accept="image/*" multiple onChange={e=>addPhotos(e.target.files)}/></label><div className="photo-grid">{form.photo_urls.map((src,index)=><div className="photo-thumb" key={index}><img src={src} alt={`交易截图 ${index+1}`}/><button type="button" onClick={()=>setForm(f=>({...f,photo_urls:f.photo_urls.filter((_,i)=>i!==index)}))}>移除</button></div>)}</div></div>
         {save.error&&<p className="error">{save.error.message}</p>}

@@ -32,6 +32,7 @@ def rebuild_symbol_position(db: Session, portfolio_id: int, symbol: str) -> Port
             select(TradeTransaction).where(
                 TradeTransaction.portfolio_id == portfolio_id,
                 TradeTransaction.symbol == value,
+                TradeTransaction.authority_status == "active",
             )
         ).all()
     )
@@ -56,7 +57,7 @@ def rebuild_symbol_position(db: Session, portfolio_id: int, symbol: str) -> Port
 
     # Closed positions remain represented by their transactions, not by an empty
     # derived holding row.
-    if result.total_quantity <= 0:
+    if result.total_quantity <= 0 and not (existing is not None and existing.authority_source == "ibkr_flex"):
         if existing is not None:
             db.delete(existing)
         return None
@@ -66,10 +67,11 @@ def rebuild_symbol_position(db: Session, portfolio_id: int, symbol: str) -> Port
         db.add(existing)
 
     existing.security_id = security_id
-    existing.total_quantity = result.total_quantity
-    existing.average_cost = result.average_cost
-    existing.total_cost = result.total_cost
-    existing.currency = result.currency
+    if existing.authority_source != "ibkr_flex":
+        existing.total_quantity = result.total_quantity
+        existing.average_cost = result.average_cost
+        existing.total_cost = result.total_cost
+        existing.currency = result.currency
     existing.last_transaction_at = result.last_transaction_at
 
     for lot in result.lots:
@@ -96,7 +98,10 @@ def rebuild_all_positions(db: Session, portfolio_id: int) -> list[PortfolioPosit
     symbols = list(
         db.scalars(
             select(TradeTransaction.symbol)
-            .where(TradeTransaction.portfolio_id == portfolio_id)
+            .where(
+                TradeTransaction.portfolio_id == portfolio_id,
+                TradeTransaction.authority_status == "active",
+            )
             .distinct()
         ).all()
     )

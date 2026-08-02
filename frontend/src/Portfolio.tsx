@@ -29,8 +29,24 @@ type PositionView = {
   base_currency_market_value:number|null
   base_currency_total_cost:number|null
   base_currency_unrealized_pnl:number|null
+  base_currency_realized_pnl:number|null
+  base_currency_dividend_income:number|null
+  base_currency_fees:number|null
+  base_currency_taxes:number|null
+  base_currency_total_pnl:number|null
   valuation_available:boolean
   portfolio_weight:number|null
+  authority_source?:string
+  realized_pnl:number
+  dividend_income:number
+  fees:number
+  taxes:number
+  fees_and_taxes:number
+  total_pnl:number
+  total_return_pct:number|null
+  holding_days:number|null
+  first_trade_at:string|null
+  data_completeness:string
 }
 type PortfolioSummary = {
   portfolio_id:number
@@ -41,6 +57,25 @@ type PortfolioSummary = {
   total_cost:number
   total_unrealized_pnl:number
   total_unrealized_pnl_percent:number|null
+  net_asset_value:number|null
+  invested_market_value:number
+  cash:number
+  net_contributions:number|null
+  investment_pnl:number|null
+  simple_cumulative_return:number|null
+  latest_daily_return:number|null
+  month_return:number|null
+  year_return:number|null
+  time_weighted_return:number|null
+  realized_pnl:number
+  dividend_income:number
+  fees:number
+  taxes:number
+  max_drawdown:number|null
+  latest_sync_at:string|null
+  account_data_source:string
+  market_price_source:string
+  data_completeness:number
   has_unpriced_positions:boolean
   has_unconverted_positions:boolean
   fx_conversion_used:boolean
@@ -177,6 +212,7 @@ type PortfolioHealth = {
     buckets:HealthSectorBucket[]
     unclassified_weight?:number
   }
+  account_analytics:{fact_type:string;historical_performance_is_not_forecast:boolean;time_weighted_return:number|null;max_drawdown:number|null;realized_pnl:number|null;unrealized_pnl:number|null;dividend_income:number|null;fees_and_taxes:number;cash_weight:number;largest_positive_contributor:{symbol:string;total_pnl:number}|null;largest_negative_contributor:{symbol:string;total_pnl:number}|null;data_completeness:number;source:string}
 }
 type StrategyProfile = {
   strategy_type:string
@@ -206,18 +242,38 @@ type PersonalizedInterpretation = {
   unavailable_dimensions:string[]
 }
 type TransactionRow = {
-  id:number
-  symbol:string
-  transaction_type:string
-  quantity:number
-  price:number
-  fees:number
+  event_id:string
+  symbol:string|null
+  event_type:string
+  occurred_at:string|null
+  quantity:number|null
+  price:number|null
+  commission:number
+  tax:number
+  gross_amount:number|null
+  realized_pnl:number|null
   currency:string
-  trade_date:string
   account:string|null
   note:string|null
-  source:string
+  source_type:string
+  authority_source:string
+  authority_status:string
+  is_authoritative:boolean
+  is_editable:boolean
 }
+type PerformancePoint = {date:string;nav:number|null;net_contributions:number|null;investment_value:number|null;daily_return:number|null;cumulative_return:number|null;drawdown:number|null;benchmark_return:number|null;data_completeness:number}
+type PerformanceSeries = {items:PerformancePoint[];source:string|null;calculation_method:string;data_completeness:number;warnings:string[];latest_sync_at:string|null}
+type PositionLedgerDetail = {
+  summary:PositionView
+  performance_curve:{date:string;market_value:number|null;cumulative_investment:number|null;cumulative_pnl:number|null;return_pct:number|null;data_completeness:number}[]
+  timeline:TransactionRow[]
+  open_lots:{lot_id:string;opened_at:string|null;quantity:number|null;cost_basis:number|null;cost_per_share:number|null;unrealized_pnl:number|null;status:string;matching_method:string;source_type:string}[]
+  completed_trades:{id:number;opened_at:string|null;closed_at:string|null;quantity:number|null;average_entry_price:number|null;average_exit_price:number|null;gross_pnl:number|null;commissions:number|null;taxes:number|null;net_pnl:number|null;return_pct:number|null;holding_days:number|null;matching_method:string;source_type:string;warnings:string[]}[]
+  data_sources:{account_facts:string;market_prices:string;derived:string}
+  latest_sync_at:string|null
+}
+type CompletedTrade = PositionLedgerDetail['completed_trades'][number]&{symbol:string|null;account:string|null;is_authoritative:boolean}
+type OpenLot = PositionLedgerDetail['open_lots'][number]&{symbol:string|null;account:string|null;currency:string;is_authoritative:boolean}
 type PortfolioBenchmark = {
   start_date:string|null
   portfolio_return_percent:number|null
@@ -229,9 +285,10 @@ type PortfolioBenchmark = {
 
 export const fmtMoney = (value:number|null, currency='USD') => value==null?'数据不足':`${currency==='USD'?'$':currency+' '}${value.toLocaleString('zh-CN',{maximumFractionDigits:2,minimumFractionDigits:2})}`
 export const fmtPercent = (value:number|null) => value==null?'—':`${value>=0?'+':''}${value.toFixed(2)}%`
+const fmtRatio = (value:number|null) => value==null?'—':fmtPercent(value*100)
 export const fmtNum = (value:number, digits=4) => value.toLocaleString('zh-CN',{maximumFractionDigits:digits})
 export const fmtHealthScore = (value:number|null) => value==null?'数据不足':Math.round(value).toString()
-const typeLabel:Record<string,string> = {buy:'买入',sell:'卖出',dividend:'股息',fee:'费用',deposit:'转入现金',withdrawal:'转出现金',split:'拆股',transfer_in:'转入',transfer_out:'转出'}
+const typeLabel:Record<string,string> = {buy:'买入',sell:'卖出',dividend:'股息',fee:'费用',commission:'手续费',withholding_tax:'预扣税',broker_fee:'券商费用',margin_interest:'融资利息',interest_income:'利息收入',fx_conversion:'外汇转换',deposit:'转入现金',withdrawal:'转出现金',split:'拆股',transfer_in:'转入',transfer_out:'转出'}
 const trendLabel:Record<string,string> = {uptrend:'上升趋势',downtrend:'下降趋势',range:'区间震荡',unknown:'趋势不明'}
 const volLabel:Record<string,string> = {expanding:'波动扩大',contracting:'波动收窄',normal:'波动正常',unknown:'数据不足'}
 type PortfolioTab = 'overview'|'positions'|'technical'|'health'|'stress'|'scenario'|'monte-carlo'|'optimization'|'history'
@@ -249,14 +306,21 @@ export function PortfolioModule() {
   const [entryForm,setEntryForm] = useState(emptyManualForm(today))
   const [detailSymbol,setDetailSymbol] = useState<string|null>(null)
   const [strategyOpen,setStrategyOpen] = useState(false)
+  const [performanceRange,setPerformanceRange] = useState('1Y')
+  const [historyType,setHistoryType] = useState('all')
+  const [historyView,setHistoryView] = useState<'activity'|'completed'|'lots'>('activity')
 
   const summary = useQuery({queryKey:['portfolio-summary'],queryFn:()=>api<PortfolioSummary>('/portfolio/summary'),staleTime:30_000})
   const strategy = useQuery({queryKey:['portfolio-strategy-profile'],queryFn:()=>api<StrategyProfileResponse>('/portfolio/strategy-profile'),staleTime:60_000})
   const benchmark = useQuery({queryKey:['portfolio-benchmark'],queryFn:()=>api<PortfolioBenchmark>('/portfolio/benchmark'),enabled:subtab==='overview',staleTime:15*60_000,refetchInterval:15*60_000})
+  const performance = useQuery({queryKey:['portfolio-performance',performanceRange],queryFn:()=>api<PerformanceSeries>(`/portfolio/performance?range=${performanceRange}`),enabled:subtab==='overview',staleTime:30_000})
   const health = useQuery({queryKey:['portfolio-health'],queryFn:()=>api<PortfolioHealth>('/portfolio/health'),enabled:subtab==='health',staleTime:60_000})
   const interpretation = useQuery({queryKey:['portfolio-interpretation'],queryFn:()=>api<PersonalizedInterpretation>('/portfolio/interpretation'),enabled:subtab==='health',staleTime:60_000})
-  const transactions = useQuery({queryKey:['portfolio-transactions'],queryFn:()=>api<TransactionRow[]>('/portfolio/transactions'),enabled:subtab==='history'})
+  const transactions = useQuery({queryKey:['portfolio-transactions',historyType],queryFn:()=>api<TransactionRow[]>(`/portfolio/transactions${historyType==='all'?'':`?event_type=${historyType}`}`),enabled:subtab==='history'&&historyView==='activity'})
+  const completedTrades = useQuery({queryKey:['portfolio-completed-trades'],queryFn:()=>api<CompletedTrade[]>('/portfolio/completed-trades'),enabled:subtab==='history'&&historyView==='completed'})
+  const openLots = useQuery({queryKey:['portfolio-open-lots'],queryFn:()=>api<OpenLot[]>('/portfolio/open-lots'),enabled:subtab==='history'&&historyView==='lots'})
   const detail = useQuery({queryKey:['portfolio-technical',detailSymbol],queryFn:()=>api<PositionTechnical>(`/portfolio/positions/${detailSymbol}/technical`),enabled:!!detailSymbol})
+  const ledgerDetail = useQuery({queryKey:['portfolio-position-ledger',detailSymbol],queryFn:()=>api<PositionLedgerDetail>(`/portfolio/positions/${detailSymbol}`),enabled:!!detailSymbol})
 
   const resetEntry = () => {setEntryOpen(false);setEntrySecurity(null);setEntryForm(emptyManualForm(today))}
   const createEntry = useMutation({
@@ -318,7 +382,7 @@ export function PortfolioModule() {
   })
 
   const s = summary.data
-  const subtabs:[PortfolioTab,string][] = [['overview','持仓概览'],['health','风险体检'],['stress','压力测试'],['scenario','情景分析'],['monte-carlo','蒙特卡洛'],['optimization','组合优化'],['history','历史记录']]
+  const subtabs:[PortfolioTab,string][] = [['overview','组合中心'],['health','风险体检'],['stress','压力测试'],['scenario','情景分析'],['monte-carlo','蒙特卡洛'],['optimization','组合优化'],['history','交易历史']]
   const openTab = (key:PortfolioTab) => {
     if(key==='technical'&&!detailSymbol&&s?.positions[0]) setDetailSymbol(s.positions[0].symbol)
     setSubtab(key)
@@ -327,7 +391,10 @@ export function PortfolioModule() {
     setDetailSymbol(symbol)
     setSubtab('technical')
   }
-  const technicalContent = <div className="portfolio-technical">
+  const technicalContent = <div className="portfolio-position-center">
+    {detailSymbol&&ledgerDetail.isLoading&&<div className="empty">正在读取账户持仓事实…</div>}
+    {detailSymbol&&ledgerDetail.data&&<PositionAccountPanel data={ledgerDetail.data}/>}
+    <div className="portfolio-technical">
     <div className="portfolio-technical-list">{s?.positions.map(p=><button key={p.symbol} className={detailSymbol===p.symbol?'active':''} onClick={()=>setDetailSymbol(p.symbol)}>
       <b>{p.symbol}</b><span>{p.price_available?fmtMoney(p.current_price,p.currency):'数据不足'}</span>
     </button>)}{!s?.positions.length&&<div className="empty">还没有持仓可供技术分析。</div>}</div>
@@ -335,6 +402,7 @@ export function PortfolioModule() {
       {!detailSymbol&&<div className="empty">选择一个持仓查看技术位置。</div>}
       {detailSymbol&&detail.isLoading&&<div className="empty">正在读取技术位置…</div>}
       {detailSymbol&&detail.data&&<PositionTechnicalPanel data={detail.data}/>}
+    </div>
     </div>
   </div>
   const healthContent = <PortfolioHealthView health={health.data} loading={health.isLoading} currency={s?.base_currency||'USD'} interpretation={interpretation.data} interpretationLoading={interpretation.isLoading}/>
@@ -355,22 +423,28 @@ export function PortfolioModule() {
     {subtab==='overview'&&<div className="portfolio-overview">
       {summary.isLoading&&<div className="empty">正在读取持仓数据…</div>}
       {!summary.isLoading&&s&&<>
-        <div className="metric-card-row portfolio-metrics">
-          <div className="metric-card portfolio-value-card"><span>折算后持仓市值</span><strong>{fmtMoney(s.total_market_value,s.base_currency)}</strong><small>{s.fx_conversion_used?`已按 Yahoo 汇率折算为 ${s.base_currency}`:`以 ${s.base_currency} 计价`}</small>{(s.has_unpriced_positions||s.has_unconverted_positions)&&<small className="portfolio-gap-hint">部分持仓暂未计入汇总</small>}</div>
-          <div className="metric-card portfolio-pnl-card"><span>浮动盈亏</span><strong className={((s.total_unrealized_pnl)||0)>=0?'positive':'negative'}>{fmtMoney(s.total_unrealized_pnl,s.base_currency)}</strong><small>{fmtPercent(s.total_unrealized_pnl_percent)}</small></div>
-          <div className="metric-card portfolio-count-card"><span>持仓数量</span><strong>{s.position_count}</strong><small>{s.priced_count} 个已折算</small></div>
+        <section className="portfolio-account-source"><span>账户数据：{s.account_data_source==='ibkr_flex'?'IBKR':'手动账本'}</span><span>市场价格：项目行情系统</span><span>最近同步：{s.latest_sync_at?new Date(s.latest_sync_at).toLocaleString('zh-CN'):'尚未同步'}</span></section>
+        <div className="metric-card-row portfolio-metrics ledger-metrics">
+          <div className="metric-card portfolio-value-card"><span>组合净值</span><strong>{fmtMoney(s.net_asset_value,s.base_currency)}</strong><small>持仓 {fmtMoney(s.invested_market_value,s.base_currency)} · 现金 {fmtMoney(s.cash,s.base_currency)}</small>{(s.has_unpriced_positions||s.has_unconverted_positions)&&<small className="portfolio-gap-hint">部分持仓暂未计入汇总</small>}</div>
+          <div className="metric-card"><span>累计投资收益</span><strong className={(s.investment_pnl||0)>=0?'positive':'negative'}>{fmtMoney(s.investment_pnl,s.base_currency)}</strong><small>简单累计收益率 {fmtRatio(s.simple_cumulative_return)}</small></div>
+          <div className="metric-card"><span>时间加权收益率</span><strong className={(s.time_weighted_return||0)>=0?'positive':'negative'}>{fmtRatio(s.time_weighted_return)}</strong><small>今日 {fmtRatio(s.latest_daily_return)} · 本月 {fmtRatio(s.month_return)} · 年内 {fmtRatio(s.year_return)}</small></div>
+          <div className="metric-card"><span>盈亏构成</span><strong>{fmtMoney(s.realized_pnl+s.total_unrealized_pnl+s.dividend_income-s.fees-s.taxes,s.base_currency)}</strong><small>已实现 {fmtMoney(s.realized_pnl,s.base_currency)} · 未实现 {fmtMoney(s.total_unrealized_pnl,s.base_currency)}</small></div>
+          <div className="metric-card"><span>股息与费用</span><strong>{fmtMoney(s.dividend_income-s.fees-s.taxes,s.base_currency)}</strong><small>股息 {fmtMoney(s.dividend_income,s.base_currency)} · 费用税费 {fmtMoney(s.fees+s.taxes,s.base_currency)}</small></div>
+          <div className="metric-card"><span>最大回撤</span><strong className="negative">{fmtRatio(s.max_drawdown)}</strong><small>现金流调整后账户曲线</small></div>
         </div>
+        <PortfolioPerformanceChart data={performance.data} loading={performance.isLoading} error={performance.isError} range={performanceRange} onRange={setPerformanceRange}/>
+        <ReturnAttributionPreview positions={s.positions} currency={s.base_currency}/>
         <PortfolioBenchmarkSection data={benchmark.data} loading={benchmark.isLoading} saving={saveBenchmark.isPending} error={saveBenchmark.error} onSave={payload=>saveBenchmark.mutate(payload)}/>
         <div className="table portfolio-table">
-          <div className="table-head portfolio-row"><span>代码</span><span>数量</span><span>成本价</span><span>现价</span><span>市值</span><span>浮动盈亏</span><span>占比</span></div>
+          <div className="table-head portfolio-row"><span>证券</span><span>市值</span><span>权重</span><span>平均成本</span><span>未实现盈亏</span><span>总收益</span><span>来源</span></div>
           {s.positions.map(p=><button key={p.symbol} className="table-row portfolio-row" onClick={()=>openTechnical(p.symbol)}>
             <span className="toggle">{p.symbol}</span>
-            <span data-label="数量">{fmtNum(p.total_quantity)}</span>
-            <span data-label="成本价">{fmtMoney(p.average_cost,p.currency)}</span>
-            <span data-label="现价">{p.price_available?fmtMoney(p.current_price,p.currency):'数据不足'}</span>
             <span data-label="本币市值">{p.price_available?fmtMoney(p.market_value,p.currency):'数据不足'}</span>
-            <span data-label="浮动盈亏" className={(p.unrealized_pnl||0)>=0?'positive':'negative'}>{p.price_available?`${fmtMoney(p.unrealized_pnl,p.currency)} (${fmtPercent(p.unrealized_pnl_percent)})`:'数据不足'}</span>
             <span data-label={`${s.base_currency} 占比`}>{p.portfolio_weight==null?'—':`${p.portfolio_weight.toFixed(1)}%`}</span>
+            <span data-label="平均成本">{fmtMoney(p.average_cost,p.currency)}<small>{fmtNum(p.total_quantity)} 股</small></span>
+            <span data-label="浮动盈亏" className={(p.unrealized_pnl||0)>=0?'positive':'negative'}>{p.price_available?`${fmtMoney(p.unrealized_pnl,p.currency)} (${fmtPercent(p.unrealized_pnl_percent)})`:'数据不足'}</span>
+            <span data-label="总收益" className={(p.total_pnl||0)>=0?'positive':'negative'}>{fmtMoney(p.total_pnl,p.currency)} ({fmtPercent(p.total_return_pct)})</span>
+            <span data-label="账户来源">{p.authority_source==='ibkr_flex'?'IBKR':'手动'}<small>{p.data_completeness==='complete'?'完整':'部分数据'}</small></span>
           </button>)}
           {!s.positions.length&&<div className="empty">还没有持仓，点击右上角添加第一笔买入记录。</div>}
         </div>
@@ -404,21 +478,25 @@ export function PortfolioModule() {
 
     {subtab==='history'&&<div className="portfolio-transactions">
       <PortfolioAnalysisHistory/>
-      <div className="portfolio-health-heading"><div><small>TRANSACTIONS</small><h3>交易记录</h3></div></div>
+      <div className="portfolio-health-heading"><div><small>UNIFIED LEDGER</small><h3>全局交易历史</h3></div><span>成交是投资事实；IBKR 记录只读</span></div>
+      <div className="position-ledger-tabs global-ledger-tabs">{([['activity','成交与现金活动'],['completed','完整交易闭环'],['lots','当前开放批次']] as const).map(([key,label])=><button key={key} className={historyView===key?'active':''} onClick={()=>setHistoryView(key)}>{label}</button>)}</div>
+      {historyView==='activity'&&<><div className="ledger-filters">{[['all','全部活动'],['buy','买入'],['sell','卖出'],['dividend','股息'],['deposit','入金'],['withdrawal','出金'],['commission','手续费'],['withholding_tax','税费']] .map(([key,label])=><button key={key} className={historyType===key?'active':''} onClick={()=>setHistoryType(key)}>{label}</button>)}</div>
       <div className="table portfolio-txn-table">
-        <div className="table-head portfolio-txn-row"><span>日期</span><span>代码</span><span>类型</span><span>数量</span><span>价格</span><span>手续费</span><span>账户</span><span></span></div>
-        {transactions.data?.map(t=><div key={t.id} className="table-row portfolio-txn-row">
-          <span className="txn-date" data-label="日期">{t.trade_date}</span>
-          <span className="txn-symbol" data-label="代码">{t.symbol}</span>
-          <span className="txn-type" data-label="类型">{typeLabel[t.transaction_type]||t.transaction_type}</span>
-          <span data-label="数量">{fmtNum(t.quantity)}</span>
+        <div className="table-head portfolio-txn-row"><span>时间</span><span>代码</span><span>事件</span><span>数量</span><span>价格</span><span>费用 / 税</span><span>来源</span><span></span></div>
+        {transactions.data?.map(t=><div key={t.event_id} className="table-row portfolio-txn-row">
+          <span className="txn-date" data-label="时间">{t.occurred_at?new Date(t.occurred_at).toLocaleString('zh-CN'):'—'}</span>
+          <span className="txn-symbol" data-label="代码">{t.symbol||'账户'}</span>
+          <span className="txn-type" data-label="事件">{typeLabel[t.event_type]||t.event_type}</span>
+          <span data-label="数量">{t.quantity==null?'—':fmtNum(t.quantity)}</span>
           <span data-label="价格">{fmtMoney(t.price,t.currency)}</span>
-          <span data-label="手续费">{fmtMoney(t.fees,t.currency)}</span>
-          <span data-label="账户">{t.account||'—'}</span>
-          <button className="danger" onClick={()=>deleteTxn.mutate(t.id)}>删除</button>
+          <span data-label="费用 / 税">{fmtMoney(t.commission+t.tax,t.currency)}</span>
+          <span data-label="来源">{t.authority_source==='ibkr_flex'?'IBKR · 只读':'手动账本'}</span>
+          {t.is_editable?<button className="danger" onClick={()=>deleteTxn.mutate(Number(t.event_id.split(':')[1]))}>删除</button>:<small className="ledger-readonly">券商事实</small>}
         </div>)}
         {!transactions.isLoading&&!transactions.data?.length&&<div className="empty">还没有交易记录。</div>}
-      </div>
+      </div></>}
+      {historyView==='completed'&&<div className="position-ledger-list global-ledger-list">{completedTrades.data?.map(row=><article key={row.id}><b>{row.symbol||'—'}</b><span>{row.opened_at?new Date(row.opened_at).toLocaleDateString('zh-CN'):'—'} → {row.closed_at?new Date(row.closed_at).toLocaleDateString('zh-CN'):'—'}</span><span>{fmtNum(row.quantity||0)} 股 · 持有 {row.holding_days??'—'} 天</span><span>{fmtMoney(row.average_entry_price)} → {fmtMoney(row.average_exit_price)}</span><strong className={(row.net_pnl||0)>=0?'positive':'negative'}>{fmtMoney(row.net_pnl)} · {fmtRatio(row.return_pct)}</strong></article>)}{!completedTrades.isLoading&&!completedTrades.data?.length&&<div className="empty">暂无已完成交易闭环。</div>}</div>}
+      {historyView==='lots'&&<div className="position-ledger-list global-ledger-list">{openLots.data?.map(row=><article key={row.lot_id}><b>{row.symbol||'—'}</b><span>{row.opened_at?String(row.opened_at):'日期不足'}</span><span>{fmtNum(row.quantity||0)} 股</span><span>成本 {fmtMoney(row.cost_basis,row.currency)}</span><strong>{row.source_type==='ibkr_flex'?'IBKR 批次':'手动批次'}</strong></article>)}{!openLots.isLoading&&!openLots.data?.length&&<div className="empty">暂无开放成本批次。</div>}</div>}
     </div>}
 
     <Sheet open={entryOpen} onClose={resetEntry} title="手动添加持仓">
@@ -448,6 +526,86 @@ export function PortfolioModule() {
       />
     </Sheet>
   </div>
+}
+
+export function chartPoints(values:(number|null)[],width=720,height=190) {
+  const present=values.filter((value):value is number=>value!=null)
+  if(present.length<2)return ''
+  const min=Math.min(...present),max=Math.max(...present),span=max-min||1
+  return values.map((value,index)=>value==null?'':`${(index/Math.max(1,values.length-1)*width).toFixed(1)},${(height-(value-min)/span*height).toFixed(1)}`).filter(Boolean).join(' ')
+}
+
+function chartPointsDomain(values:(number|null)[],min:number,max:number,width=720,height=190) {
+  if(!Number.isFinite(min)||!Number.isFinite(max))return ''
+  const span=max-min||1
+  return values.map((value,index)=>value==null?'':`${(index/Math.max(1,values.length-1)*width).toFixed(1)},${(height-(value-min)/span*height).toFixed(1)}`).filter(Boolean).join(' ')
+}
+
+function PortfolioPerformanceChart({data,loading,error,range,onRange}:{data:PerformanceSeries|undefined;loading:boolean;error:boolean;range:string;onRange:(value:string)=>void}) {
+  const points=data?.items||[]
+  const [mode,setMode]=useState<'return'|'assets'>('return')
+  const assetValues=points.flatMap(row=>[row.nav,row.net_contributions]).filter((value):value is number=>value!=null)
+  const assetMin=Math.min(...assetValues),assetMax=Math.max(...assetValues)
+  return <section className="ledger-chart-card">
+    <div className="portfolio-health-heading"><div><small>ACCOUNT PERFORMANCE</small><h3>组合收益曲线</h3></div><div className="ledger-range">{['1M','3M','6M','YTD','1Y','ALL'].map(value=><button key={value} className={range===value?'active':''} onClick={()=>onRange(value)}>{value}</button>)}</div></div>
+    <div className="ledger-mode" role="group" aria-label="收益曲线显示方式"><button className={mode==='return'?'active':''} onClick={()=>setMode('return')}>收益率</button><button className={mode==='assets'?'active':''} onClick={()=>setMode('assets')}>账户资产</button></div>
+    {loading&&<div className="empty">正在读取账户绩效…</div>}
+    {error&&<div className="error">收益曲线暂时无法读取。</div>}
+    {!loading&&!error&&points.length<2&&<div className="empty">账户历史绩效数据不足；不会用当前持仓倒推过去收益。</div>}
+    {points.length>=2&&<>
+      <div className="ledger-chart-legend">{mode==='return'?<><span className="nav">累计收益率</span><span className="drawdown">距历史高点的回撤</span></>:<><span className="nav">账户净资产</span><span className="capital">累计净入金</span></>}</div>
+      {mode==='return'?<svg className="ledger-equity-chart" viewBox="0 0 720 220" role="img" aria-label="累计收益率与历史高点回撤曲线">
+        <line x1="0" y1="145" x2="720" y2="145" className="axis"/>
+        <polyline points={chartPoints(points.map(row=>row.cumulative_return),720,135)} className="nav-line"/>
+        <polyline points={chartPoints(points.map(row=>row.drawdown),720,55)} transform="translate(0 160)" className="drawdown-line"/>
+      </svg>:<svg className="ledger-equity-chart" viewBox="0 0 720 190" role="img" aria-label="账户净资产与累计净入金曲线">
+        <line x1="0" y1="170" x2="720" y2="170" className="axis"/>
+        <polyline points={chartPointsDomain(points.map(row=>row.nav),assetMin,assetMax,720,165)} className="nav-line"/>
+        <polyline points={chartPointsDomain(points.map(row=>row.net_contributions),assetMin,assetMax,720,165)} className="capital-line"/>
+      </svg>}
+      {mode==='return'&&<p className="drawdown-explainer"><b>回撤是什么？</b> 当前累计收益相对此前最高点的跌幅；例如 −12% 表示账户从历史峰值回落了 12%，不是当天亏损 12%。回到或超过前高时，回撤归零。</p>}
+      <footer><span>{points[0].date}</span><span>现金流调整时间加权收益 · 完整度 {Math.round((data?.data_completeness||0)*100)}%</span><span>{points.at(-1)?.date}</span></footer>
+      {!!data?.warnings.length&&<p className="portfolio-gap-hint">{data.warnings.join('；')}</p>}
+    </>}
+  </section>
+}
+
+function ReturnAttributionPreview({positions,currency}:{positions:PositionView[];currency:string}) {
+  const rows=positions.filter(row=>row.base_currency_total_pnl!=null).sort((a,b)=>Math.abs(b.base_currency_total_pnl!)-Math.abs(a.base_currency_total_pnl!)).slice(0,6)
+  const maximum=Math.max(...rows.map(row=>Math.abs(row.base_currency_total_pnl!)),1)
+  return <section className="ledger-attribution">
+    <div className="portfolio-health-heading"><div><small>RETURN ATTRIBUTION</small><h3>持仓收益贡献</h3></div><span>已实现 + 未实现 + 股息 − 费用税费</span></div>
+    {rows.map(row=><div key={row.symbol}><b>{row.symbol}</b><i><span className={row.base_currency_total_pnl!>=0?'positive-bar':'negative-bar'} style={{width:`${Math.abs(row.base_currency_total_pnl!)/maximum*100}%`}}/></i><strong className={row.base_currency_total_pnl!>=0?'positive':'negative'}>{fmtMoney(row.base_currency_total_pnl,currency)}</strong></div>)}
+    {positions.some(row=>row.base_currency_total_pnl==null)&&<p className="portfolio-gap-hint">汇率不可用的持仓未参与贡献排序，不会按 1:1 猜算。</p>}
+    {!rows.length&&<div className="empty">暂无可归因的持仓数据。</div>}
+  </section>
+}
+
+function PositionAccountPanel({data}:{data:PositionLedgerDetail}) {
+  const s=data.summary
+  const [section,setSection]=useState<'timeline'|'lots'|'completed'>('timeline')
+  const [chartMode,setChartMode]=useState<'return'|'assets'>('return')
+  const assetValues=data.performance_curve.flatMap(row=>[row.market_value,row.cumulative_investment]).filter((value):value is number=>value!=null)
+  const assetMin=Math.min(...assetValues),assetMax=Math.max(...assetValues)
+  return <section className="position-account-panel">
+    <div className="portfolio-health-heading"><div><small>MY POSITION</small><h3>{s.symbol} · 我的持仓</h3></div><span>{s.authority_source==='ibkr_flex'?'IBKR 账户事实':'手动账本'} · 行情由项目系统提供</span></div>
+    <div className="position-account-summary">
+      <div><span>当前市值</span><strong>{fmtMoney(s.market_value,s.currency)}</strong><small>{fmtNum(s.total_quantity)} 股 · 权重 {s.portfolio_weight?.toFixed(1)||'—'}%</small></div>
+      <div><span>平均成本</span><strong>{fmtMoney(s.average_cost,s.currency)}</strong><small>当前价 {fmtMoney(s.current_price,s.currency)}</small></div>
+      <div><span>未实现盈亏</span><strong className={(s.unrealized_pnl||0)>=0?'positive':'negative'}>{fmtMoney(s.unrealized_pnl,s.currency)}</strong><small>{fmtPercent(s.unrealized_pnl_percent)}</small></div>
+      <div><span>总收益</span><strong className={s.total_pnl>=0?'positive':'negative'}>{fmtMoney(s.total_pnl,s.currency)}</strong><small>{fmtPercent(s.total_return_pct)}</small></div>
+      <div><span>已实现 / 股息</span><strong>{fmtMoney(s.realized_pnl+s.dividend_income,s.currency)}</strong><small>费用税费 {fmtMoney(s.fees_and_taxes,s.currency)}</small></div>
+      <div><span>持有时间</span><strong>{s.holding_days==null?'数据不足':`${s.holding_days} 天`}</strong><small>最近交易 {s.last_transaction_at||'—'}</small></div>
+    </div>
+    <div className="position-personal-chart">
+      <div className="position-chart-heading"><h4>个人持仓收益</h4><div className="ledger-mode"><button className={chartMode==='return'?'active':''} onClick={()=>setChartMode('return')}>收益率</button><button className={chartMode==='assets'?'active':''} onClick={()=>setChartMode('assets')}>仓位资产</button></div></div>
+      {data.performance_curve.length>=2?<svg viewBox="0 0 720 150" role="img" aria-label={`${s.symbol} ${chartMode==='return'?'收益率':'仓位资产'}曲线`}>{chartMode==='return'?<polyline points={chartPoints(data.performance_curve.map(row=>row.return_pct),720,130)} className="nav-line"/>:<><polyline points={chartPointsDomain(data.performance_curve.map(row=>row.market_value),assetMin,assetMax,720,130)} className="nav-line"/><polyline points={chartPointsDomain(data.performance_curve.map(row=>row.cumulative_investment),assetMin,assetMax,720,130)} className="capital-line"/></>}</svg>:<div className="empty">单证券每日历史数据不足。</div>}
+    </div>
+    <div className="position-ledger-tabs">{([['timeline','交易时间线'],['lots','成本批次'],['completed','已完成交易']] as const).map(([key,label])=><button key={key} className={section===key?'active':''} onClick={()=>setSection(key)}>{label}</button>)}</div>
+    {section==='timeline'&&<div className="position-timeline">{data.timeline.map(row=><article key={row.event_id}><i/><div><b>{typeLabel[row.event_type]||row.event_type}</b><span>{row.occurred_at?new Date(row.occurred_at).toLocaleString('zh-CN'):'—'} · {row.authority_source==='ibkr_flex'?'IBKR 成交事实':'手动记录'}</span></div><strong>{row.quantity==null?'':`${fmtNum(row.quantity)} × `}{fmtMoney(row.price,row.currency)}</strong></article>)}{!data.timeline.length&&<div className="empty">暂无交易时间线。</div>}</div>}
+    {section==='lots'&&<div className="position-ledger-list">{data.open_lots.map(row=><article key={row.lot_id}><b>{row.opened_at||'日期不足'}</b><span>{row.quantity==null?'—':fmtNum(row.quantity)} 股</span><span>批次成本 {fmtMoney(row.cost_basis,s.currency)}</span><span>{row.matching_method}</span></article>)}{!data.open_lots.length&&<div className="empty">暂无开放成本批次。</div>}</div>}
+    {section==='completed'&&<div className="position-ledger-list">{data.completed_trades.map(row=><article key={row.id}><b>{row.closed_at?new Date(row.closed_at).toLocaleDateString('zh-CN'):'—'}</b><span>{fmtNum(row.quantity||0)} 股</span><span>{fmtMoney(row.average_entry_price,s.currency)} → {fmtMoney(row.average_exit_price,s.currency)}</span><strong className={(row.net_pnl||0)>=0?'positive':'negative'}>{fmtMoney(row.net_pnl,s.currency)}</strong></article>)}{!data.completed_trades.length&&<div className="empty">暂无已完成交易。</div>}</div>}
+  </section>
 }
 
 function PortfolioBenchmarkSection({data,loading,saving,error,onSave}:{
@@ -643,6 +801,18 @@ function PortfolioHealthView({health,loading,currency,interpretation,interpretat
       </>:<div className="empty">{health.concentration.reason}</div>}
     </section>
 
+    {health.account_analytics&&<section className="health-section">
+      <div className="portfolio-health-heading"><div><small>账户历史事实</small><h3>真实绩效与交易结果</h3></div><span>历史表现不代表未来风险</span></div>
+      <div className="health-stat-line">
+        <div><span>时间加权收益</span><strong>{fmtRatio(health.account_analytics.time_weighted_return)}</strong></div>
+        <div><span>最大回撤</span><strong className="negative">{fmtRatio(health.account_analytics.max_drawdown)}</strong></div>
+        <div><span>已实现盈亏</span><strong>{fmtMoney(health.account_analytics.realized_pnl,currency)}</strong></div>
+        <div><span>费用税费拖累</span><strong>{fmtMoney(health.account_analytics.fees_and_taxes,currency)}</strong></div>
+        <div><span>现金占比</span><strong>{health.account_analytics.cash_weight.toFixed(1)}%</strong></div>
+      </div>
+      <p className="health-quiet">收益贡献、成本、现金与回撤来自账户事实和项目派生层；它们只用于描述已经发生的结果，不参与原有基本面、估值与 SEC 客观评分。</p>
+    </section>}
+
     <section className="health-section">
       <div className="portfolio-health-heading"><div><small>规则结论</small><h3>规则化总结</h3></div><span>基于当前持仓</span></div>
       {findings.length?<div className="health-findings">{findings.map(row=><article key={row.id} className={`finding-${row.severity}`}>
@@ -654,7 +824,7 @@ function PortfolioHealthView({health,loading,currency,interpretation,interpretat
     <div className="health-coverage" aria-label="数据覆盖率">
       {coverageLabels.map(([key,label])=>{const item=health.coverage[key];return <div key={key} className={`coverage-${item.status}`}><span>{label}</span><strong>{item.covered_weight.toFixed(0)}%</strong><small>{freshnessLabel[item.freshness]}</small></div>})}
     </div>
-    <p className="health-disclaimer">仅审视当前持仓结构与已有分析数据，不评价历史交易表现，也不构成投资建议。</p>
+    <p className="health-disclaimer">客观评分审视当前持仓结构；账户历史区块单独描述已经发生的表现，两者不会混为预测，也不构成投资建议。</p>
   </div>
 }
 

@@ -5,11 +5,19 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import User
-from app.services.portfolio.performance import build_summary
+from app.services.portfolio.investment_ledger import (
+    overview as ledger_overview,
+    performance_series as ledger_performance,
+    position_detail as ledger_position_detail,
+    position_summaries as ledger_positions,
+    return_attribution as ledger_attribution,
+    transaction_events as ledger_transactions,
+)
 from app.services.portfolio.portfolio_health import build_health
 from app.services.price_snapshots import (
     get_latest_persisted_price_snapshot,
@@ -81,7 +89,7 @@ class ResearchGateway:
 
     def portfolio_summary(self, portfolio_id: int | None = None):
         portfolio = self._portfolio(portfolio_id)
-        summary = build_summary(self.db, portfolio, cached_fx_only=True)
+        summary = ledger_overview(self.db, portfolio, cached_fx_only=True)
         profile = self.repo.strategy_profile(self.user.id)
         positions = summary.pop("positions")
         maximum = max(positions, key=lambda x: x.get("portfolio_weight") or -1, default=None)
@@ -108,7 +116,7 @@ class ResearchGateway:
             raise ResearchError(ResearchErrorCode.invalid_parameter, "unsupported position sort", field="sort", status_code=422)
         portfolio = self._portfolio(portfolio_id); offset, limit = page_window(page, page_size)
         rows, total = self.repo.positions(portfolio.id, offset, limit, sort)
-        summary_map = {item["symbol"]: item for item in build_summary(self.db, portfolio, cached_fx_only=True)["positions"]}
+        summary_map = {item["symbol"]: item for item in ledger_positions(self.db, portfolio, cached_fx_only=True)}
         data = [summary_map.get(row.symbol, {"symbol": row.symbol, "total_quantity": row.total_quantity,
                 "average_cost": row.average_cost, "total_cost": row.total_cost, "currency": row.currency}) for row in rows]
         sources = [source(SourceType.portfolio_position, f"{portfolio.id}:{r.symbol}", f"{r.symbol} portfolio position", symbol=r.symbol, authority=SourceAuthority.user, retrieved_at=r.updated_at, locator=f"research://portfolio/{portfolio.id}/positions/{r.symbol}") for r in rows]
@@ -119,20 +127,59 @@ class ResearchGateway:
         symbol = normalize_symbol(symbol); portfolio = self._portfolio(portfolio_id)
         row = self.repo.position(portfolio.id, symbol)
         if not row: raise ResearchError(ResearchErrorCode.not_found, "portfolio position was not found", status_code=404)
-        view = next((x for x in build_summary(self.db, portfolio, cached_fx_only=True)["positions"] if x["symbol"] == symbol), None) or {}
-        view["open_lot_count"] = self.repo.position_lot_count(portfolio.id, symbol)
+        view = ledger_position_detail(self.db, portfolio, symbol) or {}
+        view["open_lot_count"] = len(view.get("open_lots", []))
         return self.response(view, sources=[source(SourceType.portfolio_position, f"{portfolio.id}:{symbol}", f"{symbol} portfolio position", symbol=symbol, authority=SourceAuthority.user, retrieved_at=row.updated_at, locator=f"research://portfolio/{portfolio.id}/positions/{symbol}")],
                              freshness=calculate_freshness("portfolio_position", row.updated_at, "persisted position and cached quote"), symbol=symbol)
 
     def trades(self, portfolio_id: int | None, symbol: str | None, start: date | None, end: date | None, page: int, page_size: int):
         validate_date_range(start, end); portfolio = self._portfolio(portfolio_id); offset, limit = page_window(page, page_size)
         symbol = normalize_symbol(symbol) if symbol else None
-        rows, total = self.repo.trades(portfolio.id, symbol, start, end, offset, limit)
-        data = [{"trade_id": r.id, "symbol": r.symbol, "transaction_type": r.transaction_type, "quantity_shares": r.quantity,
-                 "price_per_share": r.price, "fees": r.fees, "currency": r.currency, "trade_date": r.trade_date,
-                 "account": r.account, "note": r.note, "source": r.source, "created_at": r.created_at} for r in rows]
-        sources = [source(SourceType.trade_transaction, r.id, f"{r.transaction_type} {r.symbol}", symbol=r.symbol, provider=r.source, authority=SourceAuthority.user, published_at=r.trade_date, retrieved_at=r.updated_at, locator=f"research://portfolio/{portfolio.id}/trades/{r.id}") for r in rows]
-        return self.response(data, sources=sources, freshness=calculate_freshness("portfolio_position", max((r.updated_at for r in rows), default=None), "latest authoritative trade transaction"), symbol=symbol, page=page, page_size=page_size, total=total)
+        all_rows = ledger_transactions(self.db, portfolio, symbol=symbol, start=start, end=end)
+        rows, total = all_rows[offset:offset + limit], len(all_rows)
+        sources = [source(
+            SourceType.trade_transaction, row["event_id"], f"{row['event_type']} {row.get('symbol') or ''}",
+            symbol=row.get("symbol"), provider=row["source_type"],
+            authority=SourceAuthority.primary if row["authority_source"] == "ibkr_flex" else SourceAuthority.user,
+            published_at=row.get("occurred_at"), locator=f"research://portfolio/{portfolio.id}/ledger/{row['event_id']}",
+        ) for row in rows]
+        as_of = ledger_overview(self.db, portfolio, cached_fx_only=True).get("latest_sync_at") or portfolio.updated_at
+        return self.response(rows, sources=sources, freshness=calculate_freshness(
+            "portfolio_position", as_of, "latest unified authoritative investment ledger"
+        ), symbol=symbol, page=page, page_size=page_size, total=total)
+
+    def portfolio_performance(self, portfolio_id: int | None, start: date | None, end: date | None):
+        portfolio = self._portfolio(portfolio_id)
+        data = ledger_performance(self.db, portfolio, start=start, end=end)
+        as_of = data.get("latest_sync_at")
+        warnings = [ResearchWarning(code="DATA_INCOMPLETE", message=value) for value in data.get("warnings", [])]
+        return self.response(data, sources=[source(
+            SourceType.portfolio, portfolio.id, "IBKR account performance and cash-flow-adjusted returns",
+            provider="IBKR Flex + stock-monitor derived", authority=SourceAuthority.derived,
+            retrieved_at=as_of, locator=f"research://portfolio/{portfolio.id}/performance",
+        )], freshness=calculate_freshness("portfolio_position", as_of, "latest unified ledger performance"), warnings=warnings)
+
+    def portfolio_attribution(self, portfolio_id: int | None, start: date | None, end: date | None):
+        portfolio = self._portfolio(portfolio_id)
+        data = ledger_attribution(self.db, portfolio, start=start, end=end)
+        as_of = data.get("latest_sync_at")
+        return self.response(data, sources=[source(
+            SourceType.portfolio, portfolio.id, "Position return attribution",
+            provider="IBKR facts + stock-monitor derived", authority=SourceAuthority.derived,
+            retrieved_at=as_of, locator=f"research://portfolio/{portfolio.id}/attribution",
+        )], freshness=calculate_freshness("portfolio_position", as_of, "latest ledger attribution"))
+
+    def position_ledger_section(self, symbol: str, portfolio_id: int | None, section: str):
+        symbol = normalize_symbol(symbol); portfolio = self._portfolio(portfolio_id)
+        detail = ledger_position_detail(self.db, portfolio, symbol)
+        if detail is None:
+            raise ResearchError(ResearchErrorCode.not_found, "portfolio position was not found", status_code=404)
+        data = detail if section == "all" else detail.get(section)
+        return self.response(data, sources=[source(
+            SourceType.portfolio_position, f"{portfolio.id}:{symbol}:{section}", f"{symbol} {section}",
+            symbol=symbol, provider="unified investment ledger", authority=SourceAuthority.derived,
+            retrieved_at=detail.get("latest_sync_at"), locator=f"research://portfolio/{portfolio.id}/positions/{symbol}/{section}",
+        )], freshness=calculate_freshness("portfolio_position", detail.get("latest_sync_at"), "latest position ledger"), symbol=symbol)
 
     @staticmethod
     def _news_data(r, detail=False):
@@ -509,15 +556,35 @@ class ResearchGateway:
 
     def market_context(self):
         pair = self.repo.latest_market_context(self.user.id)
+        macro_context = None
+        try:
+            from app.services.macro.context import build_latest_us_macro_context
+            macro_context = build_latest_us_macro_context(self.db)
+        except Exception:
+            # Macro is an optional provider and its migration may be absent on
+            # an older database during a rolling deployment.
+            macro_context = None
+        macro_as_of = None
+        if macro_context and macro_context.get("as_of"):
+            try:
+                macro_as_of = datetime.fromisoformat(str(macro_context["as_of"]).replace("Z", "+00:00"))
+            except ValueError:
+                macro_as_of = None
         if not pair:
-            return self.response({}, freshness=unknown_freshness("no persisted market context"),
+            data = {"us_macro": macro_context} if macro_context else {}
+            sources = [source(SourceType.us_macro, "latest", "Latest persisted US macro context", provider="alpha_vantage", authority=SourceAuthority.derived, retrieved_at=macro_as_of, locator="research://macro/us/latest")] if macro_context else []
+            return self.response(data, sources=sources, freshness=unknown_freshness("no persisted market context"),
                                  warnings=[ResearchWarning(code="DATA_INCOMPLETE", message="No persisted last-good market context is available.")])
         context, run = pair
         data = {"summary": context.summary, "risk_regime": context.risk_regime, "context": _bounded(context.payload),
                 "as_of": run.completed_at or run.requested_at, "source_run_id": run.id}
-        return self.response(data, sources=[source(SourceType.market_context, context.id, "Persisted market context", authority=SourceAuthority.derived,
+        sources = [source(SourceType.market_context, context.id, "Persisted market context", authority=SourceAuthority.derived,
             published_at=run.completed_at or run.requested_at, retrieved_at=run.completed_at or run.requested_at,
-            locator=f"research://market/context/{context.id}")], freshness=calculate_freshness("discovery_run", run.completed_at or run.requested_at, "persisted discovery market context"))
+            locator=f"research://market/context/{context.id}")]
+        if macro_context:
+            data["us_macro"] = macro_context
+            sources.append(source(SourceType.us_macro, "latest", "Latest persisted US macro context", provider="alpha_vantage", authority=SourceAuthority.derived, retrieved_at=macro_as_of, locator="research://macro/us/latest"))
+        return self.response(data, sources=sources, freshness=calculate_freshness("discovery_run", run.completed_at or run.requested_at, "persisted discovery market context"))
 
     @staticmethod
     def _congress_trade(row):

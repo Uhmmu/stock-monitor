@@ -12,6 +12,7 @@ from app.ai_memory.router import router as ai_memory_router
 from app.api.auth_routes import router as auth_router
 from app.api.discovery_routes import router as discovery_router
 from app.api.investment_routes import router as investment_router
+from app.api.macro_routes import admin_router as macro_admin_router, router as macro_router
 from app.api.portfolio_analysis_routes import router as portfolio_analysis_router
 from app.api.portfolio_routes import router as portfolio_router
 from app.api.routes import public_router, router
@@ -27,6 +28,9 @@ from app.external_search.registry import (
 )
 from app.external_search.router import router as external_search_router
 from app.models import User
+from app.integrations.ibkr import formal_router as ibkr_formal_router, router as ibkr_router
+from app.integrations.ibkr.client_portal_client import close_client_portal_client
+from app.integrations.ibkr.flex_client import close_flex_client
 from app.research import router as research_router
 from app.research.exceptions import ResearchError
 from app.research.router import research_audit_middleware, research_error_handler
@@ -55,6 +59,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await deep_search_runtime.shutdown()
+        await close_client_portal_client()
+        await close_flex_client()
         if get_settings().ai_enabled:
             await close_provider_registry()
         if get_settings().exa_enabled:
@@ -72,9 +78,13 @@ app.include_router(portfolio_analysis_router)
 app.include_router(discovery_router)
 app.include_router(sentiment_router)
 app.include_router(investment_router)
+app.include_router(macro_router)
+app.include_router(macro_admin_router)
 app.include_router(research_router)
 app.include_router(ai_tools_router)
 app.include_router(ai_router)
 app.include_router(ai_conversations_router)
 app.include_router(ai_memory_router)
 app.include_router(external_search_router)
+app.include_router(ibkr_router)
+app.include_router(ibkr_formal_router)

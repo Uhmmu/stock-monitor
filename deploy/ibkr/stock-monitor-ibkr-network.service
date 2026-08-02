@@ -1,0 +1,12 @@
+[Unit]
+Description=Prepare isolated network namespace for IBKR Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/stock-monitor/ibkr/setup-network-namespace.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

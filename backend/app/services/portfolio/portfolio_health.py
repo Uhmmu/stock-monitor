@@ -876,13 +876,35 @@ def build_health(db: Session, portfolio: Portfolio) -> dict:
     gross_value = total + cash_value
     sector_buckets = [row for row in concentration.get("sector_weights", []) if row["sector"] != "未分类"]
     unclassified_sector = next((row["weight"] for row in concentration.get("sector_weights", []) if row["sector"] == "未分类"), 0.0)
+    # Account-history evidence is displayed beside the immutable objective
+    # score. Historical performance is context, never silently promoted into a
+    # forecast or into the existing health score.
+    from .investment_ledger import overview as ledger_overview, return_attribution
+    ledger = ledger_overview(db, portfolio, cached_fx_only=True)
+    attribution = return_attribution(db, portfolio)
+    negative = [row for row in attribution.get("items", []) if row.get("total_pnl", 0) < 0]
+    account_analytics = {
+        "fact_type": "account_fact_and_project_derived",
+        "historical_performance_is_not_forecast": True,
+        "time_weighted_return": ledger.get("time_weighted_return"),
+        "max_drawdown": ledger.get("max_drawdown"),
+        "realized_pnl": ledger.get("realized_pnl"),
+        "unrealized_pnl": ledger.get("unrealized_pnl"),
+        "dividend_income": ledger.get("dividend_income"),
+        "fees_and_taxes": (ledger.get("fees") or 0) + (ledger.get("taxes") or 0),
+        "cash_weight": round((ledger.get("cash") or 0) / max(ledger.get("net_asset_value") or 0, 1) * 100, 2),
+        "largest_positive_contributor": attribution.get("items", [None])[0] if attribution.get("items") else None,
+        "largest_negative_contributor": min(negative, key=lambda row: row["total_pnl"], default=None),
+        "data_completeness": ledger.get("data_completeness"),
+        "source": ledger.get("account_data_source"),
+    }
     return {
         "portfolio_id": portfolio.id, "as_of": now,
         "base_currency": portfolio.base_currency,
         "total_market_value": total, "invested_market_value": total,
         "cash_value": round(cash_value, 4),
         "cash_weight": round(cash_value / gross_value * 100, 2) if gross_value > 0 else 0.0,
-        "cash_tracked": False,
+        "cash_tracked": ledger.get("account_data_source") == "ibkr_flex",
         "priced_count": len(priced), "position_count": summary["position_count"],
         "has_unpriced_positions": summary["has_unpriced_positions"] or summary["has_unconverted_positions"],
         "health": health,
@@ -899,4 +921,5 @@ def build_health(db: Session, portfolio: Portfolio) -> dict:
             "buckets": sector_buckets,
             "unclassified_weight": unclassified_sector,
         },
+        "account_analytics": account_analytics,
     }

@@ -1,0 +1,17 @@
+[Unit]
+Description=Stock Monitor IBKR loopback-to-Docker private relays
+After=docker.service xray.service stock-monitor-ibkr-gateway.service
+Requires=docker.service xray.service stock-monitor-ibkr-gateway.service
+
+[Service]
+Type=simple
+ExecStart=/opt/stock-monitor/ibkr/start-docker-relays.sh
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

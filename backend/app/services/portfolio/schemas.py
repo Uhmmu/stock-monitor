@@ -165,6 +165,7 @@ class PortfolioHealthResponse(BaseModel):
     coverage: dict[str, PortfolioCoverageDimension]
     findings: list[PortfolioHealthFinding]
     sector_exposure: dict
+    account_analytics: dict = Field(default_factory=dict)
 
 
 class PortfolioStrategyProfileUpdate(BaseModel):

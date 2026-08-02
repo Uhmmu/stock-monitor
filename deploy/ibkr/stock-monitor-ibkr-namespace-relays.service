@@ -1,0 +1,17 @@
+[Unit]
+Description=IBKR Gateway namespace loopback and SOCKS relays
+After=stock-monitor-ibkr-network.service xray.service
+Requires=stock-monitor-ibkr-network.service xray.service
+
+[Service]
+Type=simple
+ExecStart=/opt/stock-monitor/ibkr/start-network-namespace-relays.sh
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,6 @@
 import enum
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
@@ -61,6 +62,9 @@ class Security(Base):
     currency: Mapped[str | None] = mapped_column(String(8))
     instrument_type: Mapped[str | None] = mapped_column(String(32), index=True)
     isin: Mapped[str | None] = mapped_column(String(32), index=True)
+    ibkr_conid: Mapped[str | None] = mapped_column(String(32), unique=True, index=True)
+    figi: Mapped[str | None] = mapped_column(String(32), index=True)
+    cusip: Mapped[str | None] = mapped_column(String(32), index=True)
     yahoo_symbol: Mapped[str | None] = mapped_column(String(32), index=True)
     finnhub_symbol: Mapped[str | None] = mapped_column(String(32), index=True)
     yahoo_status: Mapped[str] = mapped_column(String(16), default="unknown")
@@ -1805,6 +1809,22 @@ class TradeTransaction(Base):
     account: Mapped[str | None] = mapped_column(String(80))
     note: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(24), default="manual")  # manual / journal / import
+    # Source governance. ``source`` remains for API compatibility; these
+    # explicit fields prevent accounting code from inferring authority from a
+    # note or display label.
+    source_type: Mapped[str] = mapped_column(String(24), default="manual", index=True)
+    authority_source: Mapped[str] = mapped_column(String(24), default="manual", index=True)
+    authority_status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    superseded_by_source: Mapped[str | None] = mapped_column(String(24))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_sync_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ibkr_flex_sync_runs.id", ondelete="SET NULL"), index=True
+    )
+    superseded_by_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ibkr_flex_records.id", ondelete="SET NULL"), index=True
+    )
+    match_confidence: Mapped[float | None] = mapped_column(Float)
+    match_method: Mapped[str | None] = mapped_column(String(48))
     source_log_id: Mapped[int | None] = mapped_column(ForeignKey("trade_logs.id", ondelete="CASCADE"), index=True)
     source_log_row_index: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -1825,6 +1845,16 @@ class PortfolioPosition(Base):
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     currency: Mapped[str] = mapped_column(String(8), default="USD")
     last_transaction_at: Mapped[date | None] = mapped_column(Date)
+    authority_source: Mapped[str] = mapped_column(String(24), default="transactions")
+    ibkr_sync_run_id: Mapped[int | None] = mapped_column(ForeignKey("ibkr_flex_sync_runs.id", ondelete="SET NULL"), index=True)
+    ibkr_conid: Mapped[str | None] = mapped_column(String(32), index=True)
+    ibkr_market_price: Mapped[float | None] = mapped_column(Float)
+    ibkr_market_value: Mapped[float | None] = mapped_column(Float)
+    ibkr_unrealized_pnl: Mapped[float | None] = mapped_column(Float)
+    ibkr_fx_rate_to_base: Mapped[float | None] = mapped_column(Float)
+    ibkr_report_date: Mapped[date | None] = mapped_column(Date)
+    ibkr_details: Mapped[dict] = mapped_column(JSON, default=dict)
+    authority_conflicts: Mapped[list] = mapped_column(JSON, default=list)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
@@ -1849,6 +1879,9 @@ class PortfolioPositionLot(Base):
 
 class TradeLog(Base):
     __tablename__ = 'trade_logs'
+    __table_args__ = (
+        UniqueConstraint("user_id", "ibkr_sync_run_id", "ibkr_position_id", name="uq_trade_logs_ibkr_position_draft"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
     ticker: Mapped[str | None] = mapped_column(String(16), index=True)
@@ -1860,8 +1893,118 @@ class TradeLog(Base):
     content: Mapped[str | None] = mapped_column(Text)
     table_rows: Mapped[list] = mapped_column(JSON, default=list)
     photo_urls: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="published", index=True)
+    source_type: Mapped[str] = mapped_column(String(24), default="manual", index=True)
+    objective_facts: Mapped[dict] = mapped_column(JSON, default=dict)
+    ibkr_sync_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ibkr_flex_sync_runs.id", ondelete="SET NULL"), index=True
+    )
+    ibkr_position_id: Mapped[int | None] = mapped_column(
+        ForeignKey("portfolio_positions.id", ondelete="SET NULL"), index=True
+    )
     ai_summary: Mapped[str | None] = mapped_column(Text)
     ai_summary_model: Mapped[str | None] = mapped_column(String(128))
     ai_summary_input_hash: Mapped[str | None] = mapped_column(String(64))
     ai_summary_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class MacroSeries(Base):
+    """Metadata for a persisted macroeconomic time series.
+
+    Raw Alpha Vantage series are stored here. Derived metrics are calculated
+    from these observations so they can be reproduced whenever the provider
+    revises history, rather than being hand-written latest values.
+    """
+    __tablename__ = "macro_series"
+    __table_args__ = (
+        UniqueConstraint("provider", "series_key", name="uq_macro_series_provider_key"),
+        Index("ix_macro_series_country_category_enabled", "country_code", "category", "enabled"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    series_key: Mapped[str] = mapped_column(String(64), index=True)
+    provider: Mapped[str] = mapped_column(String(32), default="alpha_vantage", index=True)
+    provider_function: Mapped[str] = mapped_column(String(64))
+    provider_parameters_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    country_code: Mapped[str] = mapped_column(String(2), default="US", index=True)
+    display_name_zh: Mapped[str] = mapped_column(String(128))
+    display_name_en: Mapped[str] = mapped_column(String(128))
+    description_zh: Mapped[str] = mapped_column(Text)
+    unit: Mapped[str] = mapped_column(String(32))
+    frequency: Mapped[str] = mapped_column(String(16), index=True)
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    source_name: Mapped[str] = mapped_column(String(128), default="Alpha Vantage")
+    is_derived: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class MacroObservation(Base):
+    """One dated provider observation; observation_date is not fetch time."""
+    __tablename__ = "macro_observations"
+    __table_args__ = (
+        UniqueConstraint("series_id", "observation_date", name="uq_macro_observations_series_date"),
+        Index("ix_macro_observations_series_date_desc", "series_id", "observation_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    series_id: Mapped[int] = mapped_column(ForeignKey("macro_series.id", ondelete="CASCADE"), index=True)
+    observation_date: Mapped[date] = mapped_column(Date, index=True)
+    value: Mapped[Decimal] = mapped_column(Numeric(24, 10), nullable=False)
+    raw_value: Mapped[Decimal | None] = mapped_column(Numeric(24, 10))
+    unit: Mapped[str] = mapped_column(String(32))
+    provider: Mapped[str] = mapped_column(String(32), default="alpha_vantage")
+    source_name: Mapped[str | None] = mapped_column(String(128))
+    is_preliminary: Mapped[bool] = mapped_column(Boolean, default=False)
+    revision_number: Mapped[int] = mapped_column(Integer, default=0)
+    first_fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class MacroSyncRun(Base):
+    __tablename__ = "macro_sync_runs"
+    __table_args__ = (Index("ix_macro_sync_runs_provider_started", "provider", "started_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), default="alpha_vantage", index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(24), default="running", index=True)
+    requested_series_count: Mapped[int] = mapped_column(Integer, default=0)
+    successful_series_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_series_count: Mapped[int] = mapped_column(Integer, default=0)
+    api_requests_used: Mapped[int] = mapped_column(Integer, default=0)
+    inserted_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, default=0)
+    unchanged_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_summary_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    trigger_type: Mapped[str] = mapped_column(String(24), default="scheduled", index=True)
+
+
+class MacroApiUsage(Base):
+    __tablename__ = "macro_api_usage"
+    __table_args__ = (
+        UniqueConstraint("provider", "usage_date_utc", name="uq_macro_api_usage_provider_date"),
+        Index("ix_macro_api_usage_provider_date", "provider", "usage_date_utc"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), default="alpha_vantage")
+    usage_date_utc: Mapped[date] = mapped_column(Date, index=True)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    successful_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    rate_limited_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_request_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# Register integration-owned tables in the same metadata whenever core models
+# are imported (tests, application runtime, and Alembic must see one graph).
+from app.integrations.ibkr import db_models as _ibkr_db_models  # noqa: E402,F401

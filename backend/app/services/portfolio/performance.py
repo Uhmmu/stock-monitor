@@ -2,8 +2,9 @@
 
 Consumes derived `PortfolioPosition` rows and the latest known price to compute
 market value, unrealized PnL, and market-value weights. Never fabricates a price:
-a position with no known price is returned with `price_available=False` and
-excluded from the weighted denominator, so weights stay honest.
+project market snapshots are authoritative; only when they are absent may the
+IBKR report mark be shown as an explicitly stale fallback. A position with no
+known price remains excluded from the weighted denominator.
 """
 from __future__ import annotations
 
@@ -27,10 +28,23 @@ def _position_view(pos: PortfolioPosition, price: PriceInfo | None) -> dict:
         "total_cost": cost_basis,
         "currency": pos.currency,
         "last_transaction_at": pos.last_transaction_at.isoformat() if pos.last_transaction_at else None,
-        "price_available": price is not None,
-        "current_price": price.price if price else None,
-        "price_source": price.source if price else None,
-        "price_as_of": price.as_of.isoformat() if price and price.as_of else None,
+        "authority_source": pos.authority_source,
+        "ibkr_conid": pos.ibkr_conid,
+        "ibkr_market_price": pos.ibkr_market_price,
+        "ibkr_market_value": pos.ibkr_market_value,
+        "ibkr_unrealized_pnl": pos.ibkr_unrealized_pnl,
+        "ibkr_fx_rate_to_base": pos.ibkr_fx_rate_to_base,
+        "ibkr_report_date": pos.ibkr_report_date.isoformat() if pos.ibkr_report_date else None,
+        "ibkr_details": pos.ibkr_details,
+        "authority_conflicts": pos.authority_conflicts,
+        "price_available": price is not None or pos.ibkr_market_price is not None,
+        "project_price_available": price is not None,
+        "current_price": price.price if price else pos.ibkr_market_price,
+        "price_source": price.source if price else ("ibkr_flex_fallback" if pos.ibkr_market_price is not None else None),
+        "price_as_of": price.as_of.isoformat() if price and price.as_of else (pos.ibkr_report_date.isoformat() if pos.ibkr_report_date else None),
+        "price_is_report_fallback": price is None and pos.ibkr_market_price is not None,
+        "quantity_source": "IBKR" if pos.authority_source == "ibkr_flex" else "portfolio_transactions",
+        "average_cost_source": "IBKR" if pos.authority_source == "ibkr_flex" else "portfolio_transactions",
         "market_value": None,
         "unrealized_pnl": None,
         "unrealized_pnl_percent": None,
@@ -42,8 +56,9 @@ def _position_view(pos: PortfolioPosition, price: PriceInfo | None) -> dict:
         "valuation_available": False,
         "portfolio_weight": None,
     }
-    if price is not None:
-        market_value = qty * price.price
+    effective_price = price.price if price is not None else pos.ibkr_market_price
+    if effective_price is not None:
+        market_value = qty * effective_price
         unrealized = market_value - cost_basis
         view["market_value"] = round(market_value, 4)
         view["unrealized_pnl"] = round(unrealized, 4)
@@ -102,6 +117,8 @@ def build_summary(db: Session, portfolio: Portfolio, *, cached_fx_only: bool = F
         "position_count": len(views),
         "priced_count": len(valued),
         "total_market_value": total_market_value,
+        "cash_balance": portfolio.cash_balance,
+        "total_net_liquidation": round(total_market_value + (portfolio.cash_balance or 0.0), 4),
         "total_cost": total_cost,
         "total_unrealized_pnl": total_unrealized,
         "total_unrealized_pnl_percent": (
@@ -130,4 +147,18 @@ def build_position_detail(db: Session, portfolio: Portfolio, symbol: str) -> dic
     view = _position_view(pos, latest_price(db, pos.symbol))
     quote = fx_rate_map(portfolio.base_currency, {view["currency"]}).get(view["currency"])
     _apply_fx(view, quote)
+    if pos.authority_source == "ibkr_flex" and pos.ibkr_sync_run_id:
+        from app.integrations.ibkr.db_models import IbkrFlexRecord
+        rows = db.scalars(select(IbkrFlexRecord).where(
+            IbkrFlexRecord.sync_run_id == pos.ibkr_sync_run_id,
+            IbkrFlexRecord.symbol == pos.symbol,
+            IbkrFlexRecord.section.in_(("trades", "dividends", "fifo_performance", "tax_lots")),
+        ).order_by(IbkrFlexRecord.occurred_at.desc().nullslast(), IbkrFlexRecord.report_date.desc().nullslast()).limit(100)).all()
+        view["ibkr_account_activity"] = [{
+            "id": row.id, "section": row.section, "occurred_at": row.occurred_at,
+            "report_date": row.report_date, "quantity": row.quantity, "price": row.price,
+            "amount": row.amount, "currency": row.currency,
+            "fields": {key: value for key, value in (row.raw_payload or {}).items() if key not in {"accountId", "acctAlias"}},
+            "source": "IBKR Flex",
+        } for row in rows]
     return view
