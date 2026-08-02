@@ -1,9 +1,13 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from app.ai_memory.context import RelevantMemoryRetriever
 from app.ai_memory.schemas import (
     DecisionCreate,
+    DecisionCondition,
+    DecisionResolveRequest,
     EvidenceCreate,
     MemoryCreate,
     ReviewCreate,
@@ -23,6 +27,9 @@ from app.models import (
     AIMemoryEvent,
     AIMessage,
     AIMessageMemoryUsage,
+    AIInvestmentDecision,
+    PortfolioPosition,
+    PriceSnapshot,
     Portfolio,
     User,
 )
@@ -183,6 +190,157 @@ def test_decision_requires_confirmation_and_validates_links(db):
                 action="hold",
             ),
         )
+
+
+def test_decision_numbers_merge_lineage_and_live_price_annotations(db, monkeypatch):
+    user = owner(db, "lineage-owner")
+    service = InvestmentDecisionService(db)
+    first = service.create(
+        user.id,
+        DecisionCreate(
+            title="MSFT 持有",
+            decision_type="hold",
+            symbols=["MSFT"],
+            action="继续持有 MSFT",
+        ),
+    )
+    service.confirm(first.id, user.id)
+    portfolio = Portfolio(user_id=user.id, slug="lineage", name="Lineage")
+    db.add(portfolio)
+    db.flush()
+    db.add(
+        PortfolioPosition(
+            portfolio_id=portfolio.id,
+            symbol="MSFT",
+            total_quantity=10,
+            total_cost=3000,
+            currency="USD",
+        )
+    )
+    db.add(
+        PriceSnapshot(
+            symbol="MSFT",
+            provider="yfinance",
+            last_price=410,
+            source_type="price_snapshot",
+            market_session="regular",
+            fetched_at=datetime.now(UTC),
+        )
+    )
+    db.commit()
+    candidate = DecisionCreate(
+        title="MSFT 减仓",
+        decision_type="reduce",
+        symbols=["MSFT"],
+        action="MSFT 跌破 400 美元时减仓",
+        portfolio_id=portfolio.id,
+        target_weight=0.1,
+        invalidation_conditions=["MSFT 跌至 400 美元或以下"],
+        structured_conditions=[
+            DecisionCondition(
+                category="invalidation",
+                description="MSFT 跌至 400 美元或以下",
+                metric="price",
+                operator="lte",
+                threshold=400,
+                unit="USD",
+            )
+        ],
+    )
+
+    async def fake_merge(*args, **kwargs):
+        return SimpleNamespace(decision=lambda: candidate.model_copy(deep=True))
+
+    monkeypatch.setattr("app.ai_memory.service.merge_decisions", fake_merge)
+    merged = asyncio.run(
+        service.resolve_preview(
+            user.id,
+            DecisionResolveRequest(
+                candidate=candidate,
+                resolution="merge",
+                conflict_ids=[first.id],
+            ),
+        )
+    )
+    assert merged.decision_number == 3
+    assert merged.related_decision_numbers == [1, 2]
+    assert merged.live_context["current_price"] == 410
+    assert merged.live_context["current_weight_percent"] == 100
+    assert merged.live_context["weight_to_target_percent"] == 90
+    condition = merged.live_context["conditions"][0]
+    assert condition["triggered"] is False
+    assert condition["distance"] == -10
+    rows = service.list(user.id).items
+    assert [row.decision_number for row in rows] == [1, 2, 3]
+    assert [row.status for row in rows] == ["archived", "archived", "draft"]
+
+
+def test_decision_preview_summarizes_the_conversation_and_finds_symbol_conflict(db, monkeypatch):
+    user = owner(db, "preview-owner")
+    conversation, first_user = conversation_message(db, user, "先讨论 MSFT 的长期逻辑")
+    first_assistant = AIMessage(
+        conversation_id=conversation.id,
+        user_id=user.id,
+        parent_message_id=first_user.id,
+        role="assistant",
+        status="completed",
+        content="云业务是主要逻辑，但估值偏高。",
+    )
+    second_user = AIMessage(
+        conversation_id=conversation.id,
+        user_id=user.id,
+        role="user",
+        status="completed",
+        content="最终决定在 450 美元以上减仓。",
+    )
+    db.add_all([first_assistant, second_user])
+    db.flush()
+    final_assistant = AIMessage(
+        conversation_id=conversation.id,
+        user_id=user.id,
+        parent_message_id=second_user.id,
+        role="assistant",
+        status="completed",
+        content="结论：MSFT 到 450 美元以上减仓。",
+    )
+    db.add(final_assistant)
+    db.commit()
+    existing = InvestmentDecisionService(db).create(
+        user.id,
+        DecisionCreate(
+            title="MSFT 持有",
+            decision_type="hold",
+            symbols=["MSFT"],
+            action="继续持有",
+        ),
+    )
+    InvestmentDecisionService(db).confirm(existing.id, user.id)
+    captured = {}
+
+    async def fake_extract(messages, *, model=None):
+        captured["messages"] = messages
+        return SimpleNamespace(
+            conversation_summary="从长期持有讨论转为达到目标价后减仓。",
+            decision=lambda: DecisionCreate(
+                title="MSFT 减仓",
+                decision_type="reduce",
+                symbols=["MSFT"],
+                action="MSFT 在 450 美元以上减仓",
+            ),
+        )
+
+    monkeypatch.setattr("app.ai_memory.service.extract_conversation_decision", fake_extract)
+    preview = asyncio.run(
+        InvestmentDecisionService(db).preview_from_message(final_assistant.id, user.id)
+    )
+    assert [row["content"] for row in captured["messages"]] == [
+        first_user.content,
+        first_assistant.content,
+        second_user.content,
+        final_assistant.content,
+    ]
+    assert preview.conversation_summary.startswith("从长期持有")
+    assert [row.decision_number for row in preview.conflicts] == [1]
 
 
 def test_context_usage_only_records_active_memory_and_used_event(db):

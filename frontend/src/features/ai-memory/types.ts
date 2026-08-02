@@ -48,15 +48,20 @@ export type DecisionReview = {
   linked_message_id:number|null;linked_conversation_id:number|null;created_at:string;updated_at:string
 }
 export type InvestmentDecision = {
-  id:number;title:string;decision_type:string;status:string;primary_symbol:string|null;symbols:string[]
+  id:number;decision_number:number;title:string;decision_type:string;status:string;primary_symbol:string|null;symbols:string[]
   portfolio_id:number|null;decision_date:string;time_horizon:string;target_review_at:string|null;review_due:boolean
   action:string;position_intent:string|null;target_weight:number|null;target_quantity:number|null
   target_price_min:number|null;target_price_max:number|null;thesis:string[];catalysts:string[];risks:string[]
-  invalidation_conditions:string[];assumptions:string[];open_questions:string[];confidence:number|null;priority:number
+  invalidation_conditions:string[];assumptions:string[];open_questions:string[];structured_conditions:DecisionCondition[];confidence:number|null;priority:number
   source_conversation_id:number|null;source_user_message_id:number|null;source_assistant_message_id:number|null
+  supersedes_decision_id:number|null;merged_from_ids:number[];resolution_type:string;related_decision_numbers:number[]
   executed_trade_id:number|null;executed_at:string|null;invalidated_at:string|null;closed_at:string|null
-  created_at:string;updated_at:string;evidence:Evidence[];reviews:DecisionReview[]
+  created_at:string;updated_at:string;evidence:Evidence[];reviews:DecisionReview[];live_context:DecisionLiveContext
 }
+export type DecisionCondition={category:'catalyst'|'invalidation';description:string;metric:'price'|'event'|'date'|'other';operator:string;threshold:number|null;unit:string|null;event_date:string|null}
+export type DecisionLiveCondition={description:string;category:string;metric:string;triggered:boolean|null;current_value?:number;threshold?:number;distance?:number;distance_percent?:number;event_date?:string;days_until?:number}
+export type DecisionLiveContext={symbol:string|null;current_price?:number;currency?:string|null;quote_time?:string|null;current_quantity?:number;quantity_to_target?:number;current_weight_percent?:number;target_weight_percent?:number;weight_to_target_percent?:number;conditions:DecisionLiveCondition[];upcoming_events?:{title:string;event_type:string;event_date:string;days_until:number}[]}
+export type DecisionDraftPreview={candidate:Record<string,unknown>&{title:string;decision_type:string;symbols:string[];action:string;thesis:string[];catalysts:string[];risks:string[];invalidation_conditions:string[];assumptions:string[];open_questions:string[]};conflicts:InvestmentDecision[];conversation_summary:string}
 export type DecisionPage = {items:InvestmentDecision[];total:number;limit:number;cursor:string|null}
 export type DecisionFilters = {
   status?:string;symbol?:string;decisionType?:string;search?:string

@@ -1,5 +1,5 @@
 import { api, patch, post } from '../../api'
-import type { DecisionFilters, DecisionPage, DecisionReview, InvestmentDecision, Memory, MemoryDetail, MemoryPage, MemorySettings, MessageMemoryUsage } from './types'
+import type { DecisionDraftPreview, DecisionFilters, DecisionPage, DecisionReview, InvestmentDecision, Memory, MemoryDetail, MemoryPage, MemorySettings, MessageMemoryUsage } from './types'
 
 export const memoryKeys = {
   all:['ai-memories'] as const,
@@ -47,7 +47,8 @@ export function listDecisions(filters:DecisionFilters|string={},conversationId?:
 }
 export function getDecision(id:number) { return api<InvestmentDecision>(`/ai/v1/investment-decisions/${id}`) }
 export function createDecision(body:Record<string,unknown>) { return post<InvestmentDecision>('/ai/v1/investment-decisions',body) }
-export function decisionFromMessage(messageId:number) { return post<InvestmentDecision>(`/ai/v1/messages/${messageId}/investment-decision-draft`,{}) }
+export function decisionFromMessage(messageId:number) { return post<DecisionDraftPreview>(`/ai/v1/messages/${messageId}/investment-decision-draft`,{}) }
+export function resolveDecision(candidate:Record<string,unknown>,resolution:'standalone'|'keep_both'|'replace_existing'|'merge',conflictIds:number[]) { return post<InvestmentDecision>('/ai/v1/investment-decisions/resolve',{candidate,resolution,conflict_ids:conflictIds}) }
 export function updateDecision(id:number,body:Record<string,unknown>) { return patch<InvestmentDecision>(`/ai/v1/investment-decisions/${id}`,body) }
 export function confirmDecision(id:number) { return post<InvestmentDecision>(`/ai/v1/investment-decisions/${id}/confirm`,{}) }
 export function executeDecision(id:number,executionStatus:'executed'|'partially_executed'='executed',tradeId?:number) { return post<InvestmentDecision>(`/ai/v1/investment-decisions/${id}/execute`,{execution_status:executionStatus,trade_id:tradeId??null}) }

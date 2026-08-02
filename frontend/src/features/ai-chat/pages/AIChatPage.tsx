@@ -32,6 +32,7 @@ import {
   AIMemorySettingsPage,
   ChatMemorySuggestions,
   decisionFromMessage,
+  resolveDecision,
   deleteMemory,
   extractMessageMemories,
   getMessageMemoryUsage,
@@ -39,6 +40,7 @@ import {
   listMemoryCandidates,
   memoryKeys,
   updateMemory,
+  type DecisionDraftPreview,
 } from '../../ai-memory'
 
 function routeConversationId(): number | null {
@@ -56,6 +58,7 @@ function navigate(id: number | null, context?: { symbol?: string | null; pageCon
 }
 
 const generatingStates = new Set(['creating_conversation', 'connecting', 'streaming', 'stopping'])
+const apiErrorMessage=(error:unknown,fallback:string)=>{if(!(error instanceof Error))return fallback;try{return JSON.parse(error.message).detail||fallback}catch{return fallback}}
 
 export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
   const client = useQueryClient()
@@ -76,6 +79,7 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
   const [deleting, setDeleting] = useState<Conversation | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [usageMessageId,setUsageMessageId] = useState<number|null>(null)
+  const [decisionPreview,setDecisionPreview] = useState<DecisionDraftPreview|null>(null)
   const [memorySettingsOpen,setMemorySettingsOpen] = useState(() => window.location.pathname.startsWith('/ai-memory'))
 
   useEffect(() => {
@@ -139,7 +143,8 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
   const candidates=useQuery({queryKey:memoryKeys.candidates(conversationId||0),queryFn:()=>listMemoryCandidates(conversationId!),enabled:enabled&&conversationId!=null,refetchInterval:generating?2000:false})
   const decisionDrafts=useQuery({queryKey:['ai-chat-decision-drafts',conversationId],queryFn:()=>listDecisions('draft',conversationId!),enabled:enabled&&conversationId!=null,refetchInterval:generating?2000:false})
   const usage=useQuery({queryKey:['ai-message-memory-usage',usageMessageId],queryFn:()=>getMessageMemoryUsage(usageMessageId!),enabled:usageMessageId!==null,retry:false})
-  const saveDecision=useMutation({mutationFn:(messageId:number)=>decisionFromMessage(messageId),onSuccess:()=>{void client.invalidateQueries({queryKey:['ai-chat-decision-drafts',conversationId]});setToast('已生成决策草稿，请确认后保存')}})
+  const saveDecision=useMutation({mutationFn:(messageId:number)=>decisionFromMessage(messageId),onSuccess:data=>setDecisionPreview(data),onError:error=>setToast(apiErrorMessage(error,'AI 未能提取出可用的投资决策，请稍后重试'))})
+  const finalizeDecision=useMutation({mutationFn:(resolution:'standalone'|'keep_both'|'replace_existing'|'merge')=>resolveDecision(decisionPreview!.candidate,resolution,decisionPreview!.conflicts.map(item=>item.id)),onSuccess:item=>{void client.invalidateQueries({queryKey:['ai-chat-decision-drafts',conversationId]});void client.invalidateQueries({queryKey:memoryKeys.decisions});setDecisionPreview(null);setToast(`已生成决策 #${item.decision_number}，请在投资决策区确认`)},onError:error=>setToast(apiErrorMessage(error,'投资决策保存失败，请稍后重试'))})
   const rememberMessage=useMutation({mutationFn:(messageId:number)=>extractMessageMemories(messageId),onSuccess:data=>{void client.invalidateQueries({queryKey:memoryKeys.candidates(conversationId||0)});setToast(data.items.length?'已生成待确认的记忆候选':'这条消息没有可安全保存的长期记忆')}})
   const manageUsedMemory=useMutation({mutationFn:async({id,action}:{id:number;action:'edit'|'delete'})=>{
     if(action==='delete')return deleteMemory(id)
@@ -310,7 +315,7 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
         activities={stream.activities}
         onCitation={openCitation}
         onRegenerate={regenerate}
-        onSaveDecision={message=>typeof message.id==='number'&&saveDecision.mutate(message.id)}
+        onSaveDecision={message=>typeof message.id==='number'&&!saveDecision.isPending&&saveDecision.mutate(message.id)}
         onShowMemory={message=>typeof message.id==='number'&&setUsageMessageId(message.id)}
         onRemember={message=>typeof message.id==='number'&&rememberMessage.mutate(message.id)}
         activeGeneration={generating ? true : activeGeneration.data?.active ?? null}
@@ -355,6 +360,17 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
         {!usage.data?.summary_snapshot&&!usage.data?.memories.length&&!usage.data?.decisions.length&&<p>本回答未使用已保存的长期记忆或投资决策。</p>}
       </>}</div>
     </ChatDialog>
+    <ChatDialog open={decisionPreview!==null} title="确认投资决策" onClose={()=>!finalizeDecision.isPending&&setDecisionPreview(null)} className="ai-decision-compare-dialog">
+      {decisionPreview&&<div className="ai-decision-compare">
+        <p className="ai-decision-summary"><b>AI 对话总结</b>{decisionPreview.conversation_summary}</p>
+        <div className={decisionPreview.conflicts.length?'has-conflict':''}>
+          <DecisionPreviewCard label="本次对话产生的新决策" item={decisionPreview.candidate}/>
+          {decisionPreview.conflicts.map(item=><DecisionPreviewCard key={item.id} label={`已有决策 #${item.decision_number}`} item={item}/>) }
+        </div>
+        {decisionPreview.conflicts.length>0&&<p className="ai-decision-conflict-note">检测到同一证券已有决策。合并会保留原序号，并创建一个带完整关联关系的新决策；不会覆盖历史记录。</p>}
+        <footer><button onClick={()=>setDecisionPreview(null)} disabled={finalizeDecision.isPending}>撤销</button>{decisionPreview.conflicts.length?<><button onClick={()=>finalizeDecision.mutate('keep_both')} disabled={finalizeDecision.isPending}>两条都保留</button><button onClick={()=>finalizeDecision.mutate('replace_existing')} disabled={finalizeDecision.isPending}>保留最新</button><button className="primary" onClick={()=>finalizeDecision.mutate('merge')} disabled={finalizeDecision.isPending}>{finalizeDecision.isPending?'Luna 正在合并…':'交给 Luna 合并'}</button></>:<button className="primary" onClick={()=>finalizeDecision.mutate('standalone')} disabled={finalizeDecision.isPending}>{finalizeDecision.isPending?'保存中…':'保存为决策草稿'}</button>}</footer>
+      </div>}
+    </ChatDialog>
     <ChatDialog open={rename !== null} title="重命名会话" onClose={() => setRename(null)}>
       <form className="ai-dialog-form" onSubmit={event => { event.preventDefault(); saveRename() }}><label>会话名称<input autoFocus value={renameValue} onChange={event => setRenameValue(event.target.value)} maxLength={200}/></label><div><button type="button" onClick={() => setRename(null)}>取消</button><button type="submit" disabled={!renameValue.trim() || update.isPending}>保存</button></div></form>
     </ChatDialog>
@@ -364,4 +380,9 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
     {aiConfig.data?.web_search && <DeepSearchConfirmDialog mode={confirmIntent?.mode || selectedWebMode} config={aiConfig.data.web_search} open={confirmIntent !== null} onCancel={() => setConfirmIntent(null)} onConfirm={confirmDeepMode}/>} 
     {toast && <div className="ai-chat-toast" role="status">{toast}</div>}
   </div>
+}
+
+function DecisionPreviewCard({label,item}:{label:string;item:any}) {
+  const sections:[string,string][]=[['投资逻辑','thesis'],['催化剂','catalysts'],['风险','risks'],['失效条件','invalidation_conditions'],['关键假设','assumptions'],['待解决问题','open_questions']]
+  return <article className="ai-decision-compare-card"><span>{label}</span><h3>{item.title}</h3><strong>{item.action}</strong><div>{sections.map(([name,key])=><section key={key}><b>{name}</b><p>{(item[key]||[]).join('；')||'数据不足 / 待补充'}</p></section>)}</div></article>
 }

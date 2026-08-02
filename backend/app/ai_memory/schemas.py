@@ -154,6 +154,16 @@ DecisionType = Literal[
 TimeHorizon = Literal["days", "weeks", "months", "years", "long_term", "unspecified"]
 
 
+class DecisionCondition(Schema):
+    category: Literal["catalyst", "invalidation"]
+    description: str = Field(min_length=1, max_length=1000)
+    metric: Literal["price", "event", "date", "other"] = "other"
+    operator: Literal["gte", "lte", "gt", "lt", "on", "unknown"] = "unknown"
+    threshold: Decimal | None = None
+    unit: str | None = Field(None, max_length=24)
+    event_date: date | None = None
+
+
 def _symbol(value: str) -> str:
     try:
         return normalize_symbol(value)
@@ -205,6 +215,7 @@ class DecisionCreate(Schema):
     invalidation_conditions: list[str] = Field(default_factory=list, max_length=30)
     assumptions: list[str] = Field(default_factory=list, max_length=30)
     open_questions: list[str] = Field(default_factory=list, max_length=30)
+    structured_conditions: list[DecisionCondition] = Field(default_factory=list, max_length=30)
     confidence: float | None = Field(None, ge=0, le=1)
     priority: int = Field(50, ge=0, le=100)
     source_conversation_id: int | None = Field(None, gt=0)
@@ -260,6 +271,7 @@ class DecisionPatch(Schema):
     invalidation_conditions: list[str] | None = Field(None, max_length=30)
     assumptions: list[str] | None = Field(None, max_length=30)
     open_questions: list[str] | None = Field(None, max_length=30)
+    structured_conditions: list[DecisionCondition] | None = Field(None, max_length=30)
     confidence: float | None = Field(None, ge=0, le=1)
     priority: int | None = Field(None, ge=0, le=100)
 
@@ -337,6 +349,7 @@ class ReviewOut(Schema):
 
 class DecisionOut(Schema):
     id: int
+    decision_number: int
     title: str
     decision_type: str
     status: str
@@ -359,11 +372,16 @@ class DecisionOut(Schema):
     invalidation_conditions: list[str]
     assumptions: list[str]
     open_questions: list[str]
+    structured_conditions: list[DecisionCondition]
     confidence: float | None
     priority: int
     source_conversation_id: int | None
     source_user_message_id: int | None
     source_assistant_message_id: int | None
+    supersedes_decision_id: int | None
+    merged_from_ids: list[int]
+    resolution_type: str
+    related_decision_numbers: list[int] = Field(default_factory=list)
     executed_trade_id: int | None
     executed_at: datetime | None
     invalidated_at: datetime | None
@@ -372,6 +390,19 @@ class DecisionOut(Schema):
     updated_at: datetime
     evidence: list[EvidenceOut] = Field(default_factory=list)
     reviews: list[ReviewOut] = Field(default_factory=list)
+    live_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class DecisionDraftPreview(Schema):
+    candidate: DecisionCreate
+    conflicts: list[DecisionOut] = Field(default_factory=list)
+    conversation_summary: str
+
+
+class DecisionResolveRequest(Schema):
+    candidate: DecisionCreate
+    resolution: Literal["standalone", "keep_both", "replace_existing", "merge"] = "standalone"
+    conflict_ids: list[int] = Field(default_factory=list, max_length=20)
 
 
 class DecisionPage(Schema):

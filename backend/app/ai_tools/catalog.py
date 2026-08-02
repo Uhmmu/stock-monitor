@@ -60,6 +60,8 @@ class DateArguments(ToolArguments):
     def dates(self):
         if self.start_date and self.end_date and self.start_date > self.end_date: raise ValueError("start_date must not be after end_date")
         return self
+class PortfolioDateArguments(DateArguments):
+    portfolio_id: int | None = Field(None, gt=0)
 class SymbolDateArguments(SymbolArguments):
     start_date: date | None = None; end_date: date | None = None
     @model_validator(mode="after")
@@ -222,12 +224,45 @@ def _filtered(response, data: list[dict], id_field: str, summary: str) -> Adapte
 def dispatch(name: str, args: ToolArguments, gw: ResearchGateway) -> AdapterResult:
     today = datetime.now(UTC).date()
     if name == "list_research_capabilities": return from_research(gw.capabilities(), "Listed the current read-only Research Gateway capabilities.")
-    if name == "get_portfolio_summary": return from_research(gw.portfolio_summary(args.portfolio_id), "Returned the current user's persisted portfolio summary.")
+    if name in {"get_portfolio_summary", "get_portfolio_overview"}: return from_research(gw.portfolio_summary(args.portfolio_id), "Returned the current user's unified authoritative portfolio overview with explicit account and market sources.")
+    if name in {"get_portfolio_performance", "get_portfolio_equity_curve", "get_portfolio_drawdown"}:
+        return from_research(gw.portfolio_performance(args.portfolio_id,args.start_date,args.end_date), "Returned cash-flow-adjusted IBKR account performance; deposits are not counted as investment return.")
+    if name == "get_portfolio_return_attribution":
+        return from_research(gw.portfolio_attribution(args.portfolio_id,args.start_date,args.end_date), "Returned position-level attribution from IBKR facts and project-derived daily performance.")
+    if name in {"get_dividend_history","get_fee_and_tax_summary","get_cash_flow_summary","get_trade_statistics"}:
+        r=gw.trades(args.portfolio_id,None,args.start_date,args.end_date,1,100)
+        rows=list(r.data)
+        if name=="get_dividend_history": data=[row for row in rows if row.get("event_type")=="dividend"]
+        elif name=="get_fee_and_tax_summary":
+            relevant=[row for row in rows if row.get("event_type") in {"commission","withholding_tax","broker_fee","margin_interest"}]
+            by_currency={}
+            for row in relevant:
+                item=by_currency.setdefault(row.get("currency") or "UNKNOWN",{"currency":row.get("currency"),"fees":0.0,"taxes":0.0,"events":0})
+                item["fees"]+=float(row.get("commission") or (abs(row.get("net_amount") or 0) if row.get("event_type")!="withholding_tax" else 0));item["taxes"]+=float(row.get("tax") or (abs(row.get("net_amount") or 0) if row.get("event_type")=="withholding_tax" else 0));item["events"]+=1
+            data=list(by_currency.values())
+        elif name=="get_cash_flow_summary":
+            external=[row for row in rows if row.get("event_type") in {"deposit","withdrawal"}]
+            data={"events":external,"net_by_currency":{currency:sum(float(row.get("net_amount") or 0) for row in external if (row.get("currency") or "UNKNOWN")==currency) for currency in {row.get("currency") or "UNKNOWN" for row in external}}}
+        else:
+            trades=[row for row in rows if row.get("event_type") in {"buy","sell"}]
+            data={"trade_count":len(trades),"buy_count":sum(row.get("event_type")=="buy" for row in trades),"sell_count":sum(row.get("event_type")=="sell" for row in trades),"symbols":sorted({row.get("symbol") for row in trades if row.get("symbol")}),"fees":sum(float(row.get("commission") or 0) for row in trades)}
+        return from_research(r,f"Returned {name.replace('_',' ')} from the unified authoritative ledger.").model_copy(update={"data":data})
+    if name == "get_currency_exposure":
+        r=gw.portfolio_summary(args.portfolio_id); data=r.data
+        positions=gw.portfolio_positions(args.portfolio_id,1,50,"symbol").data
+        grouped={}
+        for row in positions:
+            currency=row.get("currency") or "UNKNOWN";grouped[currency]=grouped.get(currency,0)+float(row.get("base_currency_market_value") or 0)
+        return from_research(r,"Returned current currency exposure using authoritative quantities and project market valuation.").model_copy(update={"data":{"base_currency":data.get("base_currency"),"position_market_value_by_currency":grouped,"cash":data.get("cash"),"source_types":["IBKR fact","project market","project derived"]}})
     if name == "get_portfolio_positions":
         r=gw.portfolio_positions(args.portfolio_id,1,args.limit,args.sort_by); data=[x for x in r.data if not args.symbols or x.get("symbol") in args.symbols]; return from_research(r,_count_summary("portfolio positions",r,len(data))).model_copy(update={"data":data})
     if name == "get_position_detail": return from_research(gw.portfolio_position(args.symbol,args.portfolio_id),f"Returned the persisted portfolio position for {args.symbol}.")
+    if name == "get_position_performance": return from_research(gw.position_ledger_section(args.symbol,args.portfolio_id,"performance_curve"),f"Returned the user's personal investment performance curve for {args.symbol}, not the security price curve.")
+    if name == "get_position_transaction_timeline": return from_research(gw.position_ledger_section(args.symbol,args.portfolio_id,"timeline"),f"Returned the authoritative transaction and dividend timeline for {args.symbol}.")
+    if name == "get_position_open_lots": return from_research(gw.position_ledger_section(args.symbol,args.portfolio_id,"open_lots"),f"Returned open broker tax lots or manual lots for {args.symbol}.")
+    if name == "get_completed_trades": return from_research(gw.position_ledger_section(args.symbol,args.portfolio_id,"completed_trades"),f"Returned completed FIFO round trips for {args.symbol}.")
     if name == "get_trade_history":
-        r=gw.trades(args.portfolio_id,args.symbol,args.start_date or today-timedelta(days=365),args.end_date or today,1,args.limit); data=[x for x in r.data if not args.transaction_type or x.get("transaction_type")==args.transaction_type]; return from_research(r,_count_summary("authoritative trade transactions",r,len(data))).model_copy(update={"data":data})
+        r=gw.trades(args.portfolio_id,args.symbol,args.start_date or today-timedelta(days=365),args.end_date or today,1,args.limit); data=[x for x in r.data if not args.transaction_type or x.get("event_type")==args.transaction_type]; return from_research(r,_count_summary("authoritative trade transactions",r,len(data))).model_copy(update={"data":data})
     if name == "get_portfolio_risk_analysis":
         r=gw.portfolio_analysis(args.portfolio_id,10); return from_research(r,_count_summary("persisted portfolio analysis runs",r))
     if name == "get_company_profile": return from_research(gw.company_profile(args.symbol),f"Returned the persisted company profile for {args.symbol}.")
@@ -408,6 +443,8 @@ class GatewayToolAdapter(BaseToolAdapter):
 TOOL_SPECS: list[tuple[str,str,str,type[ToolArguments],bool,int,int|None,int|None]] = [
     ("list_research_capabilities","system","Research capabilities",ToolArguments,False,600,None,None),
     ("get_portfolio_summary","portfolio","Portfolio summary",PortfolioArguments,True,30,None,None),("get_portfolio_positions","portfolio","Portfolio positions",PortfolioPositionsArguments,True,30,50,None),("get_position_detail","portfolio","Position detail",PositionArguments,True,30,None,None),("get_trade_history","portfolio","Trade history",TradeArguments,True,30,100,3660),("get_portfolio_risk_analysis","portfolio","Portfolio risk analysis",PortfolioArguments,True,30,20,None),
+    ("get_portfolio_overview","portfolio","Unified portfolio overview",PortfolioArguments,True,30,None,None),("get_portfolio_performance","portfolio","Cash-flow-adjusted portfolio performance",PortfolioDateArguments,True,30,100,3660),("get_portfolio_equity_curve","portfolio","Portfolio equity curve",PortfolioDateArguments,True,30,100,3660),("get_portfolio_drawdown","portfolio","Portfolio drawdown",PortfolioDateArguments,True,30,100,3660),("get_portfolio_return_attribution","portfolio","Portfolio return attribution",PortfolioDateArguments,True,30,100,3660),("get_position_performance","portfolio","Personal position performance",PositionArguments,True,30,100,None),("get_position_transaction_timeline","portfolio","Position transaction timeline",PositionArguments,True,30,100,None),("get_position_open_lots","portfolio","Position open lots",PositionArguments,True,30,100,None),("get_completed_trades","portfolio","Completed position trades",PositionArguments,True,30,100,None),
+    ("get_trade_statistics","portfolio","Trade statistics",PortfolioDateArguments,True,30,100,3660),("get_dividend_history","portfolio","Dividend history",PortfolioDateArguments,True,30,100,3660),("get_fee_and_tax_summary","portfolio","Fee and tax summary",PortfolioDateArguments,True,30,100,3660),("get_cash_flow_summary","portfolio","External cash flow summary",PortfolioDateArguments,True,30,100,3660),("get_currency_exposure","portfolio","Currency exposure",PortfolioArguments,True,30,50,None),
     ("get_company_profile","company","Company profile",SymbolArguments,False,600,None,None),("get_company_snapshot","company","Company snapshot",CompanySnapshotArguments,True,30,None,None),("get_company_peers","company","Company peers",PeersArguments,False,600,100,None),
     ("get_latest_price","market","Latest persisted market snapshot",SymbolArguments,False,30,None,None),("get_price_history","market","Price history",PriceHistoryArguments,False,60,100,3660),("compare_price_performance","market","Compare price performance",ComparePriceArguments,False,60,10,3660),("get_market_context","market","Market context",ToolArguments,True,120,None,None),
     ("get_latest_news","news","Latest stored news",NewsArguments,False,120,50,365),("search_news","news","Search stored news",SearchNewsArguments,False,120,50,3650),("get_news_detail","news","News detail",IdArguments,False,120,None,None),("get_news_archives","news","News archives",ArchiveArguments,False,120,50,3660),

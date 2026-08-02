@@ -22,6 +22,9 @@ class BaseToolAdapter(ABC, Generic[ArgsT]):
         import hashlib
         import json
         scope = f"user:{context.user_id}" if self.definition.contains_private_data else "public"
+        if self.definition.contains_private_data and self.definition.domain == "portfolio":
+            from app.integrations.ibkr.propagation import portfolio_generation
+            scope += f":generation:{portfolio_generation(context.user_id)}"
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return f"ai-tool:v1:{scope}:{self.definition.name}:{self.definition.version}:{digest}"
 

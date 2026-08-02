@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import (
     AIConversation,
+    AIConversationSummarySnapshot,
     AIInvestmentDecision,
     AIInvestmentDecisionEvidence,
     AIInvestmentDecisionReview,
@@ -23,6 +24,8 @@ from app.models import (
     AIUserMemory,
     AIUserMemoryPreference,
     Portfolio,
+    PortfolioPosition,
+    InvestmentCalendarEvent,
     TradeTransaction,
 )
 from app.research.security import safe_external_url
@@ -32,9 +35,11 @@ from .enums import MemoryScope, MemoryStatus
 from .metrics import ai_memory_metrics
 from .schemas import (
     DecisionCreate,
+    DecisionDraftPreview,
     DecisionOut,
     DecisionPage,
     DecisionPatch,
+    DecisionResolveRequest,
     EvidenceCreate,
     EvidenceOut,
     ExecuteDecisionRequest,
@@ -49,6 +54,9 @@ from .schemas import (
     ReviewCreate,
     ReviewOut,
 )
+from .decision_extraction import extract_conversation_decision, merge_decisions
+from app.services.price_snapshots import get_latest_persisted_price_snapshot
+from app.services.portfolio.performance import build_summary as build_portfolio_summary
 
 MEMORY_TYPES = {
     "investment_style",
@@ -796,6 +804,7 @@ class DecisionConflict(ValueError):
 class InvestmentDecisionService:
     def __init__(self, db: Session):
         self.db = db
+        self._portfolio_summary_cache: dict[int, dict] = {}
 
     def _enabled(self) -> None:
         if not get_settings().ai_investment_decisions_enabled:
@@ -873,7 +882,25 @@ class InvestmentDecisionService:
             reviews[row.decision_id].append(row)
         return evidence, reviews
 
-    def create(self, user_id: int, body: DecisionCreate) -> DecisionOut:
+    def _next_number(self, user_id: int) -> int:
+        return int(
+            self.db.scalar(
+                select(func.coalesce(func.max(AIInvestmentDecision.decision_number), 0)).where(
+                    AIInvestmentDecision.user_id == user_id
+                )
+            )
+            or 0
+        ) + 1
+
+    def create(
+        self,
+        user_id: int,
+        body: DecisionCreate,
+        *,
+        resolution_type: str = "standalone",
+        supersedes_decision_id: int | None = None,
+        merged_from_ids: list[int] | None = None,
+    ) -> DecisionOut:
         self._enabled()
         self._portfolio(body.portfolio_id, user_id)
         self._message(body.source_user_message_id, user_id)
@@ -887,6 +914,7 @@ class InvestmentDecisionService:
             raise DecisionNotFound("Conversation not found")
         item = AIInvestmentDecision(
             user_id=user_id,
+            decision_number=self._next_number(user_id),
             title=body.title,
             decision_type=body.decision_type,
             status="draft",
@@ -908,11 +936,15 @@ class InvestmentDecisionService:
             invalidation_conditions=body.invalidation_conditions,
             assumptions=body.assumptions,
             open_questions=body.open_questions,
+            structured_conditions=[value.model_dump(mode="json") for value in body.structured_conditions],
             confidence=body.confidence,
             priority=body.priority,
             source_conversation_id=body.source_conversation_id,
             source_user_message_id=body.source_user_message_id,
             source_assistant_message_id=body.source_assistant_message_id,
+            supersedes_decision_id=supersedes_decision_id,
+            merged_from_ids=merged_from_ids or [],
+            resolution_type=resolution_type,
         )
         self.db.add(item)
         self.db.flush()
@@ -1084,13 +1116,13 @@ class InvestmentDecisionService:
             )
         if cursor:
             try:
-                filters.append(AIInvestmentDecision.id < int(cursor))
+                filters.append(AIInvestmentDecision.decision_number > int(cursor))
             except ValueError:
                 raise DecisionConflict("Invalid cursor") from None
         query = (
             select(AIInvestmentDecision)
             .where(*filters)
-            .order_by(AIInvestmentDecision.id.desc())
+            .order_by(AIInvestmentDecision.decision_number.asc())
         )
         python_filter = bool(symbol or review_due is not None)
         rows = list(
@@ -1136,7 +1168,7 @@ class InvestmentDecisionService:
                 )
                 or 0
             )
-        next_cursor = str(rows[limit - 1].id) if len(rows) > limit else None
+        next_cursor = str(rows[limit - 1].decision_number) if len(rows) > limit else None
         rows = rows[:limit]
         if related_evidence is None or related_reviews is None:
             evidence, reviews = self._load_related(
@@ -1144,12 +1176,10 @@ class InvestmentDecisionService:
             )
         else:
             evidence, reviews = related_evidence, related_reviews
-        items = [
-            decision_out(
-                row, evidence=evidence[row.id], reviews=reviews[row.id]
-            )
-            for row in rows
-        ]
+        items = []
+        for row in rows:
+            output = decision_out(row, evidence=evidence[row.id], reviews=reviews[row.id])
+            items.append(self._enrich(output, row, user_id))
         ai_memory_metrics.observe(
             "decision",
             "review_due_count",
@@ -1165,9 +1195,98 @@ class InvestmentDecisionService:
     def detail(self, decision_id: int, user_id: int) -> DecisionOut:
         item = self._decision(decision_id, user_id)
         evidence, reviews = self._load_related([item.id], user_id)
-        return decision_out(
+        output = decision_out(
             item, evidence=evidence[item.id], reviews=reviews[item.id]
         )
+        return self._enrich(output, item, user_id)
+
+    def _enrich(self, output: DecisionOut, item: AIInvestmentDecision, user_id: int) -> DecisionOut:
+        related_ids = list(dict.fromkeys([*(item.merged_from_ids or []), *([item.supersedes_decision_id] if item.supersedes_decision_id else [])]))
+        if related_ids:
+            output.related_decision_numbers = list(
+                self.db.scalars(
+                    select(AIInvestmentDecision.decision_number)
+                    .where(AIInvestmentDecision.id.in_(related_ids), AIInvestmentDecision.user_id == user_id)
+                    .order_by(AIInvestmentDecision.decision_number)
+                )
+            )
+        symbol = item.primary_symbol
+        live: dict[str, Any] = {"symbol": symbol, "conditions": []}
+        quote = get_latest_persisted_price_snapshot(self.db, symbol) if symbol else None
+        if quote:
+            live["current_price"] = quote.last_price
+            live["currency"] = quote.currency
+            live["quote_time"] = (quote.market_timestamp or quote.fetched_at or quote.persisted_at)
+        if symbol:
+            position = self.db.scalar(
+                select(PortfolioPosition)
+                .join(Portfolio, Portfolio.id == PortfolioPosition.portfolio_id)
+                .where(Portfolio.user_id == user_id, PortfolioPosition.symbol == symbol, PortfolioPosition.total_quantity > 0)
+                .order_by(PortfolioPosition.updated_at.desc())
+            )
+            if position:
+                live["current_quantity"] = position.total_quantity
+                if item.target_quantity is not None:
+                    live["quantity_to_target"] = float(position.total_quantity) - float(item.target_quantity)
+                if item.target_weight is not None:
+                    portfolio = self.db.scalar(
+                        select(Portfolio).where(
+                            Portfolio.id == position.portfolio_id,
+                            Portfolio.user_id == user_id,
+                        )
+                    )
+                    if portfolio:
+                        summary = self._portfolio_summary_cache.get(portfolio.id)
+                        if summary is None:
+                            summary = build_portfolio_summary(
+                                self.db, portfolio, cached_fx_only=True
+                            )
+                            self._portfolio_summary_cache[portfolio.id] = summary
+                        position_view = next(
+                            (
+                                value
+                                for value in summary["positions"]
+                                if value["symbol"] == symbol
+                            ),
+                            None,
+                        )
+                        if position_view and position_view["portfolio_weight"] is not None:
+                            current_weight = float(position_view["portfolio_weight"])
+                            target_weight = float(item.target_weight) * 100
+                            live["current_weight_percent"] = current_weight
+                            live["target_weight_percent"] = target_weight
+                            live["weight_to_target_percent"] = current_weight - target_weight
+        current_price = float(quote.last_price) if quote else None
+        today = date.today()
+        for raw in item.structured_conditions or []:
+            condition = dict(raw)
+            annotation: dict[str, Any] = {"description": condition.get("description"), "category": condition.get("category"), "metric": condition.get("metric"), "triggered": None}
+            threshold = condition.get("threshold")
+            operator = condition.get("operator")
+            if condition.get("metric") == "price" and threshold is not None and current_price is not None:
+                threshold_value = float(threshold)
+                annotation["current_value"] = current_price
+                annotation["threshold"] = threshold_value
+                annotation["distance"] = threshold_value - current_price
+                annotation["distance_percent"] = ((threshold_value / current_price) - 1) * 100 if current_price else None
+                annotation["triggered"] = {"gte": current_price >= threshold_value, "gt": current_price > threshold_value, "lte": current_price <= threshold_value, "lt": current_price < threshold_value}.get(operator)
+            event_date = condition.get("event_date")
+            if event_date:
+                parsed = date.fromisoformat(str(event_date))
+                annotation["event_date"] = parsed
+                annotation["days_until"] = (parsed - today).days
+                annotation["triggered"] = today >= parsed
+            live["conditions"].append(annotation)
+        if symbol:
+            upcoming = list(self.db.scalars(
+                select(InvestmentCalendarEvent)
+                .where(InvestmentCalendarEvent.symbol == symbol, InvestmentCalendarEvent.status == "active", InvestmentCalendarEvent.event_date >= today)
+                .order_by(InvestmentCalendarEvent.event_date)
+                .limit(3)
+            ))
+            live["upcoming_events"] = [{"title": row.title, "event_type": row.event_type, "event_date": row.event_date, "days_until": (row.event_date - today).days} for row in upcoming]
+        output.live_context = live
+        return output
 
     def patch(
         self, decision_id: int, user_id: int, body: DecisionPatch
@@ -1181,6 +1300,8 @@ class InvestmentDecisionService:
         if "portfolio_id" in values:
             self._portfolio(values["portfolio_id"], user_id)
         for key, value in values.items():
+            if key == "structured_conditions":
+                value = [entry.model_dump(mode="json") for entry in value]
             setattr(item, key, value)
         if "symbols" in values:
             item.primary_symbol = values["symbols"][0] if values["symbols"] else None
@@ -1374,7 +1495,25 @@ class InvestmentDecisionService:
             ),
         )
 
-    def from_message(self, message_id: int, user_id: int) -> DecisionOut:
+    def _evidence_from_assistant(self, assistant: AIMessage | None, user_id: int) -> list[EvidenceCreate]:
+        evidence: list[EvidenceCreate] = []
+        if assistant is None:
+            return evidence
+        citations = list(self.db.scalars(select(AIMessageCitation).where(
+            AIMessageCitation.message_id == assistant.id,
+            AIMessageCitation.user_id == user_id,
+        )))
+        for row in citations[: get_settings().ai_investment_decision_max_evidence]:
+            evidence.append(EvidenceCreate(
+                source_id=row.source_id, source_type=row.source_type,
+                origin="deep_search" if assistant.web_access_mode.startswith("deep_") else ("web" if assistant.web_access_mode == "search" else "internal"),
+                title=row.title, symbol=row.symbol, provider=row.provider, authority=row.authority,
+                published_at=row.published_at, retrieved_at=row.retrieved_at, url=row.url,
+                locator=row.locator, evidence_summary=row.title[:1000],
+            ))
+        return evidence
+
+    async def preview_from_message(self, message_id: int, user_id: int) -> DecisionDraftPreview:
         message = self._message(message_id, user_id)
         assert message is not None
         if message.role == "assistant":
@@ -1394,60 +1533,130 @@ class InvestmentDecisionService:
                     AIMessage.generation_index.desc(), AIMessage.id.desc()
                 )
             )
-        text = user_message.content if user_message else message.content
-        draft = extract_decision_draft(text)
-        if draft is None:
-            symbols = _symbols_from_text(text + " " + (assistant.content if assistant else ""))
-            draft = DecisionCreate(
-                title=f"{symbols[0] if symbols else '投资'}研究决策",
-                decision_type="research",
-                symbols=symbols,
-                action="记录并继续研究该投资判断",
-                thesis=[text[:1000]],
-                confidence=0.5,
-            )
-        evidence: list[EvidenceCreate] = []
-        if assistant:
-            citations = list(
-                self.db.scalars(
-                    select(AIMessageCitation).where(
-                        AIMessageCitation.message_id == assistant.id,
-                        AIMessageCitation.user_id == user_id,
-                    )
+        conversation = self.db.scalar(select(AIConversation).where(AIConversation.id == message.conversation_id, AIConversation.user_id == user_id))
+        recent_desc = list(self.db.scalars(
+            select(AIMessage).where(
+                AIMessage.conversation_id == message.conversation_id,
+                AIMessage.user_id == user_id,
+                AIMessage.id <= message.id,
+                AIMessage.deleted_at.is_(None),
+                AIMessage.status.in_(("completed", "partial", "cancelled")),
+                AIMessage.content != "",
+            ).order_by(AIMessage.id.desc()).limit(200)
+        ))
+        character_limit = max(8000, int(get_settings().ai_max_context_chars * 0.8))
+        rows: list[AIMessage] = []
+        characters = 0
+        for row in recent_desc:
+            if rows and characters + len(row.content) > character_limit:
+                break
+            rows.append(row)
+            characters += len(row.content)
+        rows.reverse()
+        previous_summary = None
+        if rows:
+            previous_summary = self.db.scalar(
+                select(AIConversationSummarySnapshot)
+                .where(
+                    AIConversationSummarySnapshot.conversation_id == message.conversation_id,
+                    AIConversationSummarySnapshot.user_id == user_id,
+                    AIConversationSummarySnapshot.status == "completed",
+                    AIConversationSummarySnapshot.through_message_id < rows[0].id,
+                    AIConversationSummarySnapshot.through_message_id <= message.id,
                 )
+                .order_by(AIConversationSummarySnapshot.version.desc())
+                .limit(1)
             )
-            for row in citations[
-                : get_settings().ai_investment_decision_max_evidence
-            ]:
-                evidence.append(
-                    EvidenceCreate(
-                        source_id=row.source_id,
-                        source_type=row.source_type,
-                        origin=(
-                            "deep_search"
-                            if assistant.web_access_mode.startswith("deep_")
-                            else (
-                                "web"
-                                if assistant.web_access_mode == "search"
-                                else "internal"
-                            )
-                        ),
-                        title=row.title,
-                        symbol=row.symbol,
-                        provider=row.provider,
-                        authority=row.authority,
-                        published_at=row.published_at,
-                        retrieved_at=row.retrieved_at,
-                        url=row.url,
-                        locator=row.locator,
-                        evidence_summary=row.title[:1000],
-                    )
-                )
+        extraction_messages = []
+        if previous_summary:
+            extraction_messages.append({
+                "id": f"summary-{previous_summary.id}",
+                "role": "conversation_summary",
+                "created_at": previous_summary.completed_at,
+                "content": previous_summary.summary_text,
+                "structured_summary": previous_summary.structured_summary,
+            })
+        extraction_messages.extend(
+            {"id": row.id, "role": row.role, "created_at": row.created_at, "content": row.content}
+            for row in rows
+        )
+        extracted = await extract_conversation_decision(
+            extraction_messages,
+            model=(assistant.model if assistant else None) or (conversation.model if conversation else None),
+        )
+        if not getattr(extracted, "has_decision", True):
+            raise DecisionConflict(
+                extracted.no_decision_reason
+                or "这段对话只有分析，尚未形成可保存的投资决策"
+            )
+        try:
+            draft = extracted.decision()
+        except ValueError as exc:
+            raise DecisionConflict("AI 返回的证券代码或决策字段无效，请重试") from exc
         draft.source_conversation_id = message.conversation_id
         draft.source_user_message_id = user_message.id if user_message else None
         draft.source_assistant_message_id = assistant.id if assistant else None
-        draft.evidence = evidence
-        return self.create(user_id, draft)
+        draft.evidence = self._evidence_from_assistant(assistant, user_id)
+        symbols = {value.upper() for value in draft.symbols}
+        conflicts: list[DecisionOut] = []
+        if symbols:
+            existing = list(self.db.scalars(select(AIInvestmentDecision).where(
+                AIInvestmentDecision.user_id == user_id,
+                AIInvestmentDecision.deleted_at.is_(None),
+                AIInvestmentDecision.status.in_(("draft", "active", "executed", "partially_executed")),
+            ).order_by(AIInvestmentDecision.decision_number)))
+            for item in existing:
+                if symbols.intersection({str(value).upper() for value in item.symbols or []}):
+                    conflicts.append(self.detail(item.id, user_id))
+        return DecisionDraftPreview(candidate=draft, conflicts=conflicts, conversation_summary=extracted.conversation_summary)
+
+    async def resolve_preview(
+        self, user_id: int, body: DecisionResolveRequest
+    ) -> DecisionOut:
+        conflicts = [self._decision(value, user_id) for value in list(dict.fromkeys(body.conflict_ids))]
+        candidate_symbols = {value.upper() for value in body.candidate.symbols}
+        if any(not candidate_symbols.intersection({str(value).upper() for value in row.symbols or []}) for row in conflicts):
+            raise DecisionConflict("只能处理同一证券的重复决策")
+        if body.resolution in {"replace_existing", "merge"} and not conflicts:
+            raise DecisionConflict("没有可替换或合并的既有决策")
+        merged = None
+        if body.resolution == "merge":
+            extracted = await merge_decisions(
+                [self.detail(row.id, user_id).model_dump(mode="json", exclude={"evidence", "reviews", "live_context"}) for row in conflicts],
+                body.candidate.model_dump(mode="json"),
+                model=get_settings().model_medium,
+            )
+            if not getattr(extracted, "has_decision", True):
+                raise DecisionConflict(
+                    extracted.no_decision_reason or "这些决策无法形成一致的合并结论"
+                )
+            try:
+                merged = extracted.decision()
+            except ValueError as exc:
+                raise DecisionConflict("AI 合并结果格式无效，请重试") from exc
+            merged.source_conversation_id = body.candidate.source_conversation_id
+            merged.source_user_message_id = body.candidate.source_user_message_id
+            merged.source_assistant_message_id = body.candidate.source_assistant_message_id
+            merged.evidence = body.candidate.evidence
+        incoming = self.create(user_id, body.candidate, resolution_type="merge_source" if body.resolution == "merge" else body.resolution)
+        incoming_row = self._decision(incoming.id, user_id)
+        if body.resolution == "replace_existing":
+            incoming_row.supersedes_decision_id = conflicts[-1].id
+            for row in conflicts:
+                row.status = "archived"
+                row.updated_at = utcnow()
+            self.db.commit()
+            return self.detail(incoming.id, user_id)
+        if body.resolution != "merge":
+            return incoming
+        assert merged is not None
+        source_ids = [row.id for row in conflicts] + [incoming.id]
+        result = self.create(user_id, merged, resolution_type="merge", merged_from_ids=source_ids)
+        for row in [*conflicts, incoming_row]:
+            row.status = "archived"
+            row.updated_at = utcnow()
+        self.db.commit()
+        return self.detail(result.id, user_id)
 
 
 def _symbols_from_text(text: str) -> list[str]:

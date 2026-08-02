@@ -1235,12 +1235,16 @@ class AIInvestmentDecision(Base):
             "target_review_at",
             "status",
         ),
+        UniqueConstraint(
+            "user_id", "decision_number", name="uq_ai_decisions_user_number"
+        ),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     title: Mapped[str] = mapped_column(String(240))
+    decision_number: Mapped[int] = mapped_column(Integer)
     decision_type: Mapped[str] = mapped_column(String(24), index=True)
     status: Mapped[str] = mapped_column(String(24), default="draft")
     primary_symbol: Mapped[str | None] = mapped_column(String(32), index=True)
@@ -1265,6 +1269,7 @@ class AIInvestmentDecision(Base):
     invalidation_conditions: Mapped[list] = mapped_column(JSON, default=list)
     assumptions: Mapped[list] = mapped_column(JSON, default=list)
     open_questions: Mapped[list] = mapped_column(JSON, default=list)
+    structured_conditions: Mapped[list] = mapped_column(JSON, default=list)
     confidence: Mapped[float | None] = mapped_column(Float)
     priority: Mapped[int] = mapped_column(Integer, default=50)
     source_conversation_id: Mapped[int | None] = mapped_column(
@@ -1276,6 +1281,11 @@ class AIInvestmentDecision(Base):
     source_assistant_message_id: Mapped[int | None] = mapped_column(
         ForeignKey("ai_messages.id", ondelete="SET NULL")
     )
+    supersedes_decision_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_investment_decisions.id", ondelete="SET NULL"), index=True
+    )
+    merged_from_ids: Mapped[list] = mapped_column(JSON, default=list)
+    resolution_type: Mapped[str] = mapped_column(String(24), default="standalone")
     executed_trade_id: Mapped[int | None] = mapped_column(
         ForeignKey("trade_transactions.id", ondelete="SET NULL"), index=True
     )

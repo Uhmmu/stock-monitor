@@ -20,9 +20,11 @@ from app.models import (
 
 from .schemas import (
     DecisionCreate,
+    DecisionDraftPreview,
     DecisionOut,
     DecisionPage,
     DecisionPatch,
+    DecisionResolveRequest,
     EvidenceCreate,
     ExecuteDecisionRequest,
     ForgetRequest,
@@ -380,18 +382,33 @@ def create_decision(
 
 @router.post(
     "/messages/{message_id}/investment-decision-draft",
-    response_model=DecisionOut,
+    response_model=DecisionDraftPreview,
 )
-def decision_from_message(
+async def decision_from_message(
     message_id: int,
     user: Any = user_dependency,
     db: Session = db_dependency,
 ):
-    return _memory_call(
-        lambda: InvestmentDecisionService(db).from_message(
-            message_id, user.id
-        )
-    )
+    try:
+        return await InvestmentDecisionService(db).preview_from_message(message_id, user.id)
+    except (DecisionNotFound, LookupError) as exc:
+        raise _not_found() from exc
+    except (DecisionConflict, SummaryError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/investment-decisions/resolve", response_model=DecisionOut)
+async def resolve_decision(
+    body: DecisionResolveRequest,
+    user: Any = user_dependency,
+    db: Session = db_dependency,
+):
+    try:
+        return await InvestmentDecisionService(db).resolve_preview(user.id, body)
+    except (DecisionNotFound, LookupError) as exc:
+        raise _not_found() from exc
+    except (DecisionConflict, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get(

@@ -26,6 +26,11 @@ class BoundedTTLCache:
         self._values.move_to_end(key)
         while len(self._values) > self.capacity: self._values.popitem(last=False)
 
+    def clear_prefix(self, prefix: str) -> int:
+        keys = [key for key in self._values if key.startswith(prefix)]
+        for key in keys:
+            self._values.pop(key, None)
+        return len(keys)
+
 
 tool_cache = BoundedTTLCache()
-

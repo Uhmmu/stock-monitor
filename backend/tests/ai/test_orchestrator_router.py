@@ -174,6 +174,6 @@ def test_router_auth_strict_json_sse_config_health_and_openapi(monkeypatch):
         assert config.status_code==200
         assert "response_modes" not in config.json()
         assert {item["family"] for item in config.json()["models"]} >= {"claude","gpt"}
-        assert client.get("/api/ai/v1/health",headers=headers).json()["tool_count"]==57
+        assert client.get("/api/ai/v1/health",headers=headers).json()["tool_count"]==71
         assert "/api/ai/v1/respond" in client.app.openapi()["paths"]
     finally: db.close()

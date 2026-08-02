@@ -210,7 +210,10 @@ class Settings(BaseSettings):
 
     # User-confirmed decision journal. It never executes a trade.
     ai_investment_decisions_enabled: bool = True
-    ai_investment_decision_draft_suggestions: bool = True
+    # Decisions are extracted on explicit save so the model can summarize the
+    # whole conversation before duplicate resolution. Regex auto-drafts remain
+    # available only as a legacy opt-in.
+    ai_investment_decision_draft_suggestions: bool = False
     ai_investment_decision_max_evidence: int = 30
     ai_investment_decision_review_due_enabled: bool = True
 
