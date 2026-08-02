@@ -1,0 +1,13 @@
+{
+  "name": "股票雷达 iPhone",
+  "short_name": "股票雷达",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f2f2f7",
+  "theme_color": "#f2f2f7",
+  "description": "stock-monitor 的独立 iPhone 前端",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

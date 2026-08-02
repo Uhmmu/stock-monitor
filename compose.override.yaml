@@ -24,5 +24,10 @@ services:
     ports:
       - "127.0.0.1:8080:80"
 
+  frontend-ios:
+    image: stock-monitor-frontend-ios:latest
+    pull_policy: never
+    profiles: ["prod"]
+
   caddy:
     profiles: ["prod"]

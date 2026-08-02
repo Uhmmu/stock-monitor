@@ -35,6 +35,8 @@ services:
   api: &backend
     build: ./backend
     env_file: .env
+    extra_hosts:
+      - "host.docker.internal:${IBKR_DOCKER_BRIDGE_GATEWAY:-host-gateway}"
     volumes:
       - archive_data:/data/archive
       - edgar_data:/data/edgar
@@ -72,7 +74,17 @@ services:
       disable: true
 
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+
+  frontend-ios:
+    build:
+      context: .
+      dockerfile: frontend-ios/Dockerfile
     depends_on:
       api:
         condition: service_healthy
@@ -81,6 +93,7 @@ services:
     image: caddy:2-alpine
     depends_on:
       - frontend
+      - frontend-ios
     environment:
       SITE_DOMAINS: ${SITE_DOMAINS:-${SITE_DOMAIN:-localhost}}
       AUTH_USER: ${AUTH_USER:-admin}

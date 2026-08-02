@@ -1,0 +1,12 @@
+{
+  "name": "@stock-monitor/shared",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api.ts",
+    "./types": "./src/types.ts",
+    "./format": "./src/format.ts"
+  }
+}

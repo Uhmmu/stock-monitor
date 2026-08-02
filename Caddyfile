@@ -1,4 +1,10 @@
 {$SITE_DOMAINS} {
   encode zstd gzip
-  reverse_proxy frontend:80
+  redir /mobile /mobile/ 308
+  handle_path /mobile/* {
+    reverse_proxy frontend-ios:80
+  }
+  handle {
+    reverse_proxy frontend:80
+  }
 }
