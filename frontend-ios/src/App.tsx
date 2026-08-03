@@ -9,6 +9,7 @@ import { ActivityPage } from './pages/ActivityPage'
 import { ChatPage } from './pages/ChatPage'
 import { CandidateDetailPage, PositionDetailPage, ReportsPage, StockDetailPage, WatchlistPage } from './pages/DetailPages'
 import { DiscoveryPage } from './pages/DiscoveryPage'
+import { DynamicPage } from './pages/DynamicPage'
 import { FundamentalsPage } from './pages/FundamentalsPage'
 import { MorePage } from './pages/MorePage'
 import { OverviewPage } from './pages/OverviewPage'
@@ -16,6 +17,7 @@ import { JournalPage } from './pages/JournalPage'
 
 const tabs: { key: RootTab; label: string; icon: string }[] = [
   { key: 'overview', label: '主页', icon: 'overview' },
+  { key: 'dynamic', label: '动态', icon: 'news' },
   { key: 'chat', label: 'Chat', icon: 'chat' },
   { key: 'fundamentals', label: '基本面', icon: 'fundamentals' },
   { key: 'more', label: '更多', icon: 'more' },
@@ -49,6 +51,7 @@ export default function App() {
 
   const pages: Record<RootTab, ReactNode> = {
     overview: <OverviewPage username={user.data.username} openStock={symbol => push({ kind: 'stock', id: symbol })} openPosition={symbol => push({ kind: 'position', id: symbol })} openActivity={section => push({ kind: 'activity', segment: section === 'movement' ? 'reports' : 'news' })} openReport={id => push({ kind: 'reports', id })} openJournal={request => push({ kind: 'journal', id: request.mode === 'edit' ? request.id : undefined, mode: request.mode === 'new' ? 'new' : 'list' })}/>,
+    dynamic: <DynamicPage/>,
     chat: <ChatPage/>,
     fundamentals: <FundamentalsPage/>,
     more: <MorePage user={user.data} openDiscovery={() => push({ kind: 'discovery' })} openWatchlist={() => push({ kind: 'watchlist' })} openReports={() => push({ kind: 'reports' })} logout={() => { clearToken(); queryClient.clear(); setTokenVersion(value => value + 1) }}/>,

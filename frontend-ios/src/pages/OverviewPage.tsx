@@ -179,7 +179,6 @@ export function OverviewPage({ username, openStock, openPosition, openActivity, 
         <h1>你好，{username}</h1>
         <p>持仓、市场与今日异动，集中查看。</p>
       </div>
-      <button className="activity-entry" onClick={() => openActivity()}><i/><span>动态</span><b>›</b></button>
     </section>
 
     <GlassCard className="market-card">
