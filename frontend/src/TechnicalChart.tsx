@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   CandlestickSeries,
   ColorType,
@@ -16,6 +16,7 @@ import {
   type Time,
 } from 'lightweight-charts'
 import { api, getToken, post } from './api'
+import './technical-mobile.css'
 
 export type WeeklyCandle = {
   time:string
@@ -61,6 +62,9 @@ export type ChartHeatZone = {
 }
 export type ChartTrendLine = {
   type:string
+  projectedPrice?:number
+  priceRelation?:string
+  confidence?:number
   anchors?:{date:string;price:number}[]
 }
 
@@ -157,6 +161,29 @@ const timeString=(time:Time):string=>typeof time==='string'
   : typeof time==='number'
     ? new Date(time*1000).toISOString().slice(0,10)
     : `${time.year}-${String(time.month).padStart(2,'0')}-${String(time.day).padStart(2,'0')}`
+const MOBILE_TECHNICAL_QUERY='(max-width: 640px)'
+const matchesMobileTechnicalViewport=()=>{
+  if(typeof window==='undefined') return false
+  return typeof window.matchMedia==='function'
+    ? window.matchMedia(MOBILE_TECHNICAL_QUERY).matches
+    : window.innerWidth<=640
+}
+function useMobileTechnicalPresentation(){
+  const [isMobile,setIsMobile]=useState(matchesMobileTechnicalViewport)
+  useEffect(()=>{
+    if(typeof window==='undefined') return
+    const update=()=>setIsMobile(matchesMobileTechnicalViewport())
+    const media=typeof window.matchMedia==='function'?window.matchMedia(MOBILE_TECHNICAL_QUERY):null
+    update()
+    window.addEventListener('resize',update)
+    media?.addEventListener?.('change',update)
+    return ()=>{
+      window.removeEventListener('resize',update)
+      media?.removeEventListener?.('change',update)
+    }
+  },[])
+  return isMobile
+}
 const drawingKey=(symbol:string)=>`technical-chart-drawings:${symbol}`
 const loadDrawings=(symbol:string):Drawing[]=>{
   try{
@@ -206,6 +233,176 @@ function StaticChartLink({url,symbol,visible=false}:{url:string;symbol:string;vi
     : <a className="technical-static-link" href={src} target="_blank" rel="noreferrer">静态图 ↗</a>
 }
 
+const rangeFmt=(lower:number,upper:number)=>`${fmt(Math.min(lower,upper))}–${fmt(Math.max(lower,upper))}`
+const signedPercent=(value:number|undefined)=>value==null?'—':`${value>=0?'+':''}${value.toFixed(1)}%`
+const relativeLevel=(price:number,current:number|undefined)=>current==null||current===0?undefined:(price-current)/current*100
+const zoneCenter=(zone:ChartHeatZone)=>(zone.lower+zone.upper)/2
+const trendLineLabel=(type:string)=>type==='rising_support'?'上升支撑线':type==='falling_resistance'?'下降阻力线':type||'趋势线'
+
+function MobileTechnicalView({
+  symbol,
+  data,
+  staticChartUrl,
+  heatZones,
+  fibonacci,
+  trendLines,
+  portfolioCost,
+  priceAlerts,
+}:Readonly<{
+  symbol:string
+  data:PreparedChartData
+  staticChartUrl?:string|null
+  heatZones:ChartHeatZone[]
+  fibonacci?:{available:boolean;levels?:Record<string,number>}
+  trendLines:ChartTrendLine[]
+  portfolioCost:{average_cost:number;quantity:number;currency:string}|null
+  priceAlerts:TechnicalPriceAlert[]
+}>) {
+  const [open,setOpen]=useState(false)
+  const triggerRef=useRef<HTMLButtonElement>(null)
+  const closeRef=useRef<HTMLButtonElement>(null)
+  const wasOpen=useRef(false)
+  const panelId=`technical-mobile-panel-${useId().replace(/:/g,'')}`
+  const headingId=`${panelId}-title`
+  const latest=data.candles.at(-1)
+  const previous=data.candles.at(-2)
+  const latestClose=latest?.close
+  const periodChange=latest&&previous&&previous.close!==0
+    ? (latest.close-previous.close)/previous.close*100
+    : undefined
+  const supportLevels=heatZones
+    .filter(zone=>zone.role==='support'&&finite(zone.lower)&&finite(zone.upper))
+    .sort((a,b)=>latestClose==null
+      ? zoneCenter(a)-zoneCenter(b)
+      : Math.abs(zoneCenter(a)-latestClose)-Math.abs(zoneCenter(b)-latestClose))
+    .slice(0,3)
+  const resistanceLevels=heatZones
+    .filter(zone=>zone.role==='resistance'&&finite(zone.lower)&&finite(zone.upper))
+    .sort((a,b)=>latestClose==null
+      ? zoneCenter(a)-zoneCenter(b)
+      : Math.abs(zoneCenter(a)-latestClose)-Math.abs(zoneCenter(b)-latestClose))
+    .slice(0,3)
+  const neutralLevels=heatZones
+    .filter(zone=>zone.role==='neutral'&&finite(zone.lower)&&finite(zone.upper))
+    .sort((a,b)=>latestClose==null
+      ? zoneCenter(a)-zoneCenter(b)
+      : Math.abs(zoneCenter(a)-latestClose)-Math.abs(zoneCenter(b)-latestClose))
+    .slice(0,2)
+  const fibonacciLevels=Object.entries(fibonacci?.levels||{}).filter(([,price])=>finite(price))
+  const projectedTargets=trendLines.filter(line=>typeof line.projectedPrice==='number'&&finite(line.projectedPrice))
+  const activeAlerts=priceAlerts.filter(item=>item.enabled&&finite(item.target_price))
+  const hasReferenceLevels=projectedTargets.length>0||fibonacciLevels.length>0||neutralLevels.length>0
+    ||(portfolioCost!=null&&finite(portfolioCost.average_cost))||activeAlerts.length>0
+
+  useEffect(()=>{
+    if(open) closeRef.current?.focus()
+    else if(wasOpen.current) triggerRef.current?.focus()
+    wasOpen.current=open
+  },[open])
+  useEffect(()=>setOpen(false),[symbol])
+
+  const zoneMeta=(zone:ChartHeatZone)=>{
+    const center=zoneCenter(zone)
+    const distance=relativeLevel(center,latestClose)
+    return distance==null?`中心 ${fmt(center)}`:`中心 ${fmt(center)} · ${signedPercent(distance)}`
+  }
+
+  return <section className="technical-mobile-view" aria-labelledby={`${panelId}-visual-title`}>
+    <div className="technical-mobile-visual">
+      <div className="technical-mobile-visual-meta">
+        <div><span>本地静态缓存</span><strong id={`${panelId}-visual-title`}>{symbol} · 周线</strong></div>
+        {latest&&<small>截至 {timeString(latest.time)}</small>}
+      </div>
+      {staticChartUrl
+        ? <StaticChartLink url={staticChartUrl} symbol={symbol} visible/>
+        : <div className="technical-mobile-static-empty"><strong>暂无静态图缓存</strong><span>仍可查看已保存的指标与价位。</span></div>}
+      <button
+        ref={triggerRef}
+        type="button"
+        className="technical-mobile-open"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={()=>setOpen(value=>!value)}
+      >
+        <span aria-hidden="true">⌁</span>{open?'收起指标与价位':'查看指标与价位'}
+      </button>
+      {open&&<div
+        id={panelId}
+        className="technical-mobile-panel"
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby={headingId}
+        onKeyDown={event=>{
+          if(event.key==='Escape'){
+            event.preventDefault()
+            event.stopPropagation()
+            setOpen(false)
+          }
+        }}
+      >
+        <div className="technical-mobile-panel-heading">
+          <div><span>缓存快照</span><h3 id={headingId}>关键指标与价位</h3></div>
+          <button ref={closeRef} type="button" aria-label="关闭技术指标与价位" onClick={()=>setOpen(false)}>×</button>
+        </div>
+        <div className="technical-mobile-panel-scroll">
+          <section className="technical-mobile-panel-section" aria-labelledby={`${panelId}-metrics-title`}>
+            <div className="technical-mobile-section-heading"><h4 id={`${panelId}-metrics-title`}>关键指标</h4><small>只显示已有缓存值</small></div>
+            <div className="technical-mobile-metric-grid">
+              <div><span>最新收盘</span><strong>{fmt(latestClose)}</strong><small>{latest?timeString(latest.time):'数据不足'}</small></div>
+              <div><span>区间变化</span><strong className={periodChange==null?'neutral':periodChange>=0?'positive':'negative'}>{signedPercent(periodChange)}</strong><small>相对上一根周线</small></div>
+              <div><span>MA 20</span><strong>{fmt(data.ma20.at(-1)?.value)}</strong><small>移动平均</small></div>
+              <div><span>MA 50</span><strong>{fmt(data.ma50.at(-1)?.value)}</strong><small>移动平均</small></div>
+              <div><span>最新高 / 低</span><strong>{latest?`${fmt(latest.high)} / ${fmt(latest.low)}`:'—'}</strong><small>周线范围</small></div>
+              <div><span>成交量</span><strong>{volumeFmt(data.volume.at(-1)?.value)}</strong><small>最新周线</small></div>
+            </div>
+          </section>
+
+          <section className="technical-mobile-panel-section" aria-labelledby={`${panelId}-zones-title`}>
+            <div className="technical-mobile-section-heading"><h4 id={`${panelId}-zones-title`}>支撑与阻力</h4><small>按距离现价排序</small></div>
+            <div className="technical-mobile-level-columns">
+              <div className="technical-mobile-level-group support">
+                <h5>支撑</h5>
+                {supportLevels.length?supportLevels.map((zone,index)=><div className="technical-mobile-level-row" key={`support-${index}-${zone.lower}-${zone.upper}`}>
+                  <span>{index===0?'最近':'支撑区'}</span><strong>{rangeFmt(zone.lower,zone.upper)}</strong><small>{zoneMeta(zone)}</small>
+                </div>):<p>暂无可用支撑位</p>}
+              </div>
+              <div className="technical-mobile-level-group resistance">
+                <h5>阻力</h5>
+                {resistanceLevels.length?resistanceLevels.map((zone,index)=><div className="technical-mobile-level-row" key={`resistance-${index}-${zone.lower}-${zone.upper}`}>
+                  <span>{index===0?'最近':'阻力区'}</span><strong>{rangeFmt(zone.lower,zone.upper)}</strong><small>{zoneMeta(zone)}</small>
+                </div>):<p>暂无可用阻力位</p>}
+              </div>
+            </div>
+          </section>
+
+          <section className="technical-mobile-panel-section" aria-labelledby={`${panelId}-targets-title`}>
+            <div className="technical-mobile-section-heading"><h4 id={`${panelId}-targets-title`}>目标与参考位</h4><small>来自趋势、斐波那契与提醒</small></div>
+            <div className="technical-mobile-target-list">
+              {projectedTargets.map((line,index)=><div className="technical-mobile-target-row target" key={`target-${index}-${line.type}`}>
+                <span>目标 · {trendLineLabel(line.type)}</span><strong>{fmt(line.projectedPrice)}</strong><small>{line.confidence==null?'趋势投影':`置信度 ${Math.round(line.confidence*100)}%`}</small>
+              </div>)}
+              {fibonacciLevels.map(([label,price])=><div className="technical-mobile-target-row fibonacci" key={`fibonacci-${label}`}>
+                <span>斐波那契 · {label}</span><strong>{fmt(price)}</strong><small>回撤 / 延展位</small>
+              </div>)}
+              {neutralLevels.map((zone,index)=><div className="technical-mobile-target-row neutral" key={`neutral-${index}-${zone.lower}-${zone.upper}`}>
+                <span>中性价位</span><strong>{rangeFmt(zone.lower,zone.upper)}</strong><small>{zoneMeta(zone)}</small>
+              </div>)}
+              {portfolioCost&&finite(portfolioCost.average_cost)&&<div className="technical-mobile-target-row cost">
+                <span>持仓成本 · {portfolioCost.currency}</span><strong>{fmt(portfolioCost.average_cost)}</strong><small>{portfolioCost.quantity} 股</small>
+              </div>}
+              {activeAlerts.map(item=><div className="technical-mobile-target-row alert" key={`alert-${item.id}`}>
+                <span>价格提醒 · {item.direction==='above'?'上破':'下破'}</span><strong>{fmt(item.target_price)}</strong><small>已启用</small>
+              </div>)}
+              {!hasReferenceLevels&&<p>暂无可用目标或参考位</p>}
+            </div>
+          </section>
+          <p className="technical-mobile-note">静态图与数值均来自本地缓存；缺失项目不会用估算值填充。</p>
+        </div>
+      </div>}
+    </div>
+  </section>
+}
+
 function LayerButton({active,onClick,children}:{active:boolean;onClick:()=>void;children:string}) {
   return <button type="button" className={active?'active':''} aria-pressed={active} onClick={onClick}>{children}</button>
 }
@@ -231,6 +428,7 @@ export function TechnicalChart({
   portfolioCost?:{average_cost:number;quantity:number;currency:string}|null
   initialPriceAlerts?:TechnicalPriceAlert[]
 }) {
+  const isMobile=useMobileTechnicalPresentation()
   const hostRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const legendRef = useRef<HTMLDivElement>(null)
@@ -251,6 +449,8 @@ export function TechnicalChart({
   const [alertStatus,setAlertStatus]=useState('')
   const selected=series[timeframe]||{candles:[],moving_averages:EMPTY_MA}
   const data = useMemo(()=>prepareTechnicalChartData(selected.candles,selected.moving_averages),[selected])
+  const mobileSelected=series.week||selected
+  const mobileData=useMemo(()=>prepareTechnicalChartData(mobileSelected.candles,mobileSelected.moving_averages),[mobileSelected])
   const volumeProfile=useMemo(()=>buildVolumeProfile(selected.candles),[selected.candles])
 
   useEffect(()=>setPriceAlerts(initialPriceAlerts),[initialPriceAlerts])
@@ -258,7 +458,7 @@ export function TechnicalChart({
 
   useEffect(()=>{
     const host=hostRef.current
-    if(!host||!data.candles.length) return
+    if(isMobile||!host||!data.candles.length) return
     setFailed(false)
     let chart:IChartApi|null=null
     try{
@@ -366,7 +566,7 @@ export function TechnicalChart({
       candleRef.current=null
       setFailed(true)
     }
-  },[data,layers.ma,symbol,timeframe])
+  },[data,isMobile,layers.ma,symbol,timeframe])
 
   const toChartPoint=(clientX:number,clientY:number):ChartPoint|null=>{
     const stage=stageRef.current
@@ -475,6 +675,16 @@ export function TechnicalChart({
     })}</g>
   }
 
+  if(isMobile) return <MobileTechnicalView
+    symbol={symbol}
+    data={mobileData}
+    staticChartUrl={staticChartUrl}
+    heatZones={heatZones}
+    fibonacci={fibonacci}
+    trendLines={trendLines}
+    portfolioCost={portfolioCost}
+    priceAlerts={priceAlerts}
+  />
   if(!data.candles.length) return <div className="technical-dynamic-chart technical-chart-fallback">
     <div className="technical-chart-empty">该周期 OHLC 数据不足，暂无法绘制动态图表。</div>
     {staticChartUrl&&<div className="technical-chart-actions"><span>未请求外部行情</span><StaticChartLink url={staticChartUrl} symbol={symbol}/></div>}

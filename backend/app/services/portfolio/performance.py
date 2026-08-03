@@ -40,6 +40,9 @@ def _position_view(pos: PortfolioPosition, price: PriceInfo | None) -> dict:
         "price_available": price is not None or pos.ibkr_market_price is not None,
         "project_price_available": price is not None,
         "current_price": price.price if price else pos.ibkr_market_price,
+        "previous_close": price.previous_close if price else None,
+        "daily_change_amount": None,
+        "daily_change_percent": None,
         "price_source": price.source if price else ("ibkr_flex_fallback" if pos.ibkr_market_price is not None else None),
         "price_as_of": price.as_of.isoformat() if price and price.as_of else (pos.ibkr_report_date.isoformat() if pos.ibkr_report_date else None),
         "price_is_report_fallback": price is None and pos.ibkr_market_price is not None,
@@ -65,6 +68,10 @@ def _position_view(pos: PortfolioPosition, price: PriceInfo | None) -> dict:
         view["unrealized_pnl_percent"] = (
             round(unrealized / cost_basis * 100, 4) if cost_basis > 0 else None
         )
+        previous_close = price.previous_close if price is not None else None
+        if previous_close is not None and previous_close > 0:
+            view["daily_change_amount"] = round(effective_price - previous_close, 4)
+            view["daily_change_percent"] = round((effective_price - previous_close) / previous_close * 100, 4)
     return view
 
 

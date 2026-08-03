@@ -343,6 +343,9 @@ def test_build_summary_only_weights_priced_positions(db, portfolio):
     msft = next(p for p in summary["positions"] if p["symbol"] == "MSFT")
     assert aapl["price_available"] is True
     assert aapl["market_value"] == pytest.approx(1500.0)
+    assert aapl["previous_close"] == pytest.approx(140.0)
+    assert aapl["daily_change_amount"] == pytest.approx(10.0)
+    assert aapl["daily_change_percent"] == pytest.approx(7.1429)
     assert aapl["portfolio_weight"] == pytest.approx(100.0)  # only priced position in the weighted base
     assert msft["price_available"] is False
     assert msft["market_value"] is None

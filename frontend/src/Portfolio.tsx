@@ -10,7 +10,7 @@ import { PortfolioOptimizationView } from './PortfolioOptimization'
 import { PortfolioAnalysisHistory } from './PortfolioAnalysisHistory'
 
 // ── 持仓模块类型 ──────────────────────────────────────────────
-type PositionView = {
+export type PositionView = {
   symbol:string
   security_id:number|null
   total_quantity:number
@@ -20,6 +20,9 @@ type PositionView = {
   last_transaction_at:string|null
   price_available:boolean
   current_price:number|null
+  previous_close?:number|null
+  daily_change_amount?:number|null
+  daily_change_percent?:number|null
   price_source:string|null
   market_value:number|null
   unrealized_pnl:number|null
@@ -48,7 +51,7 @@ type PositionView = {
   first_trade_at:string|null
   data_completeness:string
 }
-type PortfolioSummary = {
+export type PortfolioSummary = {
   portfolio_id:number
   base_currency:string
   position_count:number
@@ -156,7 +159,7 @@ type HealthFinding = {
   affected_weight:number
   priority:number
 }
-type PortfolioHealth = {
+export type PortfolioHealth = {
   portfolio_id:number
   as_of:string
   base_currency:string
@@ -232,7 +235,7 @@ type StrategyProfileResponse = {
   presets:Record<string,Omit<StrategyProfile,'updated_at'>>
   choices:Record<string,StrategyChoice[]>
 }
-type PersonalizedInterpretation = {
+export type PersonalizedInterpretation = {
   strategy_type:string
   strategy_label:string
   evaluated_at:string
@@ -723,7 +726,7 @@ function PersonalizedInterpretationSection({data,loading}:{data:PersonalizedInte
   </section>
 }
 
-function PortfolioHealthView({health,loading,currency,interpretation,interpretationLoading}:{health:PortfolioHealth|undefined;loading:boolean;currency:string;interpretation:PersonalizedInterpretation|undefined;interpretationLoading:boolean}) {
+export function PortfolioHealthView({health,loading,currency,interpretation,interpretationLoading}:{health:PortfolioHealth|undefined;loading:boolean;currency:string;interpretation:PersonalizedInterpretation|undefined;interpretationLoading:boolean}) {
   if(loading) return <div className="empty">正在计算组合健康…</div>
   if(!health) return <div className="empty">组合健康数据暂不可用。</div>
   const scoreClass = (value:number|null,risk=false) => value==null?'muted':risk?(value>60?'risk-high':value>40?'risk-mid':'risk-low'):(value>=80?'score-high':value>=60?'score-mid':'score-low')

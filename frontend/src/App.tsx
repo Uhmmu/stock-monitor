@@ -16,6 +16,7 @@ import { MarketSnapshot } from './MarketSnapshot'
 import { IbkrIntegrationTest } from './IbkrIntegrationTest'
 import { IbkrAccount } from './IbkrAccount'
 import { MacroDataSourcePanel, MacroFundamentals } from './MacroFundamentals'
+import { MobileHome } from './MobileHome'
 import './macro.css'
 import {
   TechnicalChart,
@@ -451,10 +452,23 @@ export default function App() {
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const tabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['sentiment','舆情'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['sentiment','市场舆情'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
-  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ibkr-test')window.history.pushState({},'','/admin/integrations/ibkr');else if(key==='ibkr')window.history.pushState({},'','/ibkr');else if(key==='ai'){if(!window.location.pathname.startsWith('/ai'))window.history.pushState({},'', '/ai/new')}else if(key==='decisions')window.history.pushState({},'','/investment-decisions');else if(window.location.pathname.startsWith('/ai')||window.location.pathname.startsWith('/investment-decisions')||window.location.pathname.startsWith('/admin/integrations/ibkr')||window.location.pathname==='/ibkr')window.history.pushState({},'',`/?tab=${key}`)}
+  const tabs = [['overview','主页'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['sentiment','舆情'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
+  const tabTitle = tab==='overview'?'主页':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['sentiment','市场舆情'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
+  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ibkr-test')window.history.pushState({},'','/admin/integrations/ibkr');else if(key==='ibkr')window.history.pushState({},'','/ibkr');else if(key==='ai'){window.history.pushState({},'', '/ai/new');window.dispatchEvent(new PopStateEvent('popstate'))}else if(key==='decisions')window.history.pushState({},'','/investment-decisions');else if(window.location.pathname.startsWith('/ai')||window.location.pathname.startsWith('/investment-decisions')||window.location.pathname.startsWith('/admin/integrations/ibkr')||window.location.pathname==='/ibkr')window.history.pushState({},'','/?tab='+key)}
   const askAI=(symbol:string)=>{setSelectedProfileSymbol(null);setActiveTicker(symbol);setTab('ai');window.history.pushState({},'',`/ai/new?symbol=${encodeURIComponent(symbol)}&context=company`);window.dispatchEvent(new PopStateEvent('popstate'))}
+  const openMobileTab=(key:string,symbol?:string,query?:string)=>{
+    if(symbol) setActiveTicker(symbol)
+    setTab(key)
+    setMobileNavOpen(false)
+    if(key==='ai') window.history.pushState({},'',`/ai/new${symbol?`?symbol=${encodeURIComponent(symbol)}`:''}`)
+    else if(key==='journal') window.history.pushState({},'',`/?tab=journal${query==='new'?'&journal=new':''}`)
+    else {
+      const params=new URLSearchParams({tab:key})
+      if(symbol) params.set('symbol',symbol)
+      window.history.pushState({},'',`/?${params.toString()}`)
+    }
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
   const viewIndices = demoMode ? demoIndices : indices.data
   const viewAlerts = demoMode ? demoAlerts : alerts.data
@@ -477,10 +491,13 @@ export default function App() {
       {tab!=='ai'&&!demoMode&&(dashboard.error||watchlist.error)&&<div className="error">后端暂不可用，请确认服务已启动。</div>}
       <div className="view-stage" key={tab}>
       {tab==='overview'&&<>
+        <div className="desktop-overview">
         <section className="hero index-hero"><div className="hero-copy"><span className={`badge${viewIndices?.market.is_open?'':' closed'}`}><i/>{viewIndices?.market.is_open?'LIVE MARKET':'MARKET CLOSED'}</span><h2>早上好，{authUser.username}</h2><p>你的市场雷达保持安静。我们只在真正值得注意时打扰你。</p></div><div className="index-row">{(viewIndices?.indices||[{symbol:'^GSPC',name:'标普500'},{symbol:'^IXIC',name:'纳斯达克'},{symbol:'^DJI',name:'道琼斯'}] as IndexQuote[]).map(idx=>{const up=idx.change_percent!=null&&idx.change_percent>=0;return <div className="index-card" key={idx.symbol}><span className="index-name">{idx.name}</span><strong>{idx.price!=null?idx.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}</strong><span className={idx.change_percent==null?'':up?'positive':'negative'}>{idx.change_points==null||idx.change_percent==null?'数据不足':`${up?'+':''}${idx.change_points.toFixed(2)} (${up?'+':''}${idx.change_percent.toFixed(2)}%)`}</span></div>})}</div></section>
         <section><div className="section-title"><div><p>WATCHLIST</p><h2>市场快照</h2></div><div className="section-actions"><button className="stock-collapse-btn" onClick={()=>setStocksExpanded(v=>!v)}>{stocksExpanded?'收起':'展开更多'} <span>{stocksExpanded?'↑':'↓'}</span></button><button onClick={()=>setTab('watchlist')}>管理自选股 <span>→</span></button></div></div><div className={`stock-grid${stocksExpanded?' is-expanded':' is-collapsed'}`}>{overviewStocks.map(stock=>{const change=stock.price&&stock.previous_close?(stock.price-stock.previous_close)/stock.previous_close*100:null;return <article className="stock-card" key={stock.ticker}><div className="stock-card-head"><ProfileLogo symbol={stock.ticker} url={stock.logo_url}/><div className="stock-card-id"><span className="ticker">{stock.ticker}</span><small>{stock.updated_at?'刚刚更新':'等待首次采集'}</small></div></div><strong>{formatPrice(stock.price)}</strong><span className={change!=null&&change<0?'negative':'positive'}>{change==null?'—':`${change>=0?'+':''}${change.toFixed(2)}% 今日`}</span><button className="company-overview-btn" onClick={()=>setSelectedProfileSymbol(stock.ticker)}>公司概览</button>{stock.volume_label&&stock.volume_label!=='正常'&&<span className={`vol-tag ${stock.volume_label==='放量'?'heavy':'light'}`}>{stock.volume_label} · {stock.volume_ratio?.toFixed(2)}×</span>}<div className="card-glow"/></article>})}{!overviewStocks.length&&<div className="empty">添加第一只股票，开始建立你的市场雷达。</div>}</div></section>
         <TradingViewStockHeatmap/>
         <section className="split"><div><div className="section-title"><div><p>SIGNALS</p><h2>最近异动</h2></div></div>{viewAlerts?.slice(0,5).map(a=><div className="list-row" key={a.id}><span className="signal-symbol">{a.ticker.slice(0,1)}</span><b>{a.ticker}</b><span>{a.period}</span><em className={a.change_percent<0?'negative':'positive'}>{a.change_percent>=0?'+':''}{a.change_percent.toFixed(2)}%</em></div>)}</div><div><div className="section-title"><div><p>INTELLIGENCE</p><h2>最新报告</h2></div></div>{viewReports?.slice(0,5).map(r=><button className="report-row" key={r.id} onClick={()=>!demoMode&&setSelectedReport(r.id)}><span>{typeNames[r.report_type]||r.report_type}</span><b>{r.title}</b><small>{demoMode?'刚刚生成':formatDate(r.created_at)}</small></button>)}</div></section>
+        </div>
+        <MobileHome username={authUser.username} indices={viewIndices} alerts={viewAlerts} demoMode={demoMode} onOpenTab={openMobileTab}/>
       </>}
       {tab==='watchlist'&&<StockManagement onWatchlistChanged={()=>{client.invalidateQueries({queryKey:['watchlist']});client.invalidateQueries({queryKey:['dashboard']})}}/>}
       {tab==='holdings'&&<PortfolioModule/>}
