@@ -28,6 +28,35 @@ CARD_KEYS = [
     "us_federal_funds_rate", "us_treasury_10y", "us_treasury_2y", "us_retail_sales",
     "us_durable_goods_orders",
 ]
+_RAW_KEYS = {row["series_key"] for row in RAW_SERIES}
+_DETAIL_SOURCE_KEYS = {
+    "us_real_gdp_qoq": ("us_real_gdp",),
+    "us_real_gdp_yoy": ("us_real_gdp",),
+    "us_real_gdp_per_capita_yoy": ("us_real_gdp_per_capita",),
+    "us_real_gdp_per_capita_5y_cagr": ("us_real_gdp_per_capita",),
+    "us_cpi_mom": ("us_cpi",),
+    "us_cpi_yoy": ("us_cpi",),
+    "us_cpi_3m_annualized": ("us_cpi",),
+    "us_retail_sales_mom": ("us_retail_sales",),
+    "us_retail_sales_yoy": ("us_retail_sales",),
+    "us_durable_goods_orders_mom": ("us_durable_goods_orders",),
+    "us_durable_goods_orders_yoy": ("us_durable_goods_orders",),
+    "us_nonfarm_payroll_change": ("us_nonfarm_payroll_total",),
+    "us_nonfarm_payroll_3m_avg_change": ("us_nonfarm_payroll_total",),
+    "us_unemployment_3m_avg": ("us_unemployment_rate",),
+    "us_sahm_rule_gap": ("us_unemployment_rate",),
+    "us_yield_spread_10y_2y": ("us_treasury_10y", "us_treasury_2y"),
+    "us_yield_spread_10y_3m": ("us_treasury_10y", "us_treasury_3m"),
+    "us_yield_spread_30y_5y": ("us_treasury_30y", "us_treasury_5y"),
+}
+_DETAIL_COMPANIONS = {
+    "us_cpi": ("us_cpi_mom", "us_cpi_yoy", "us_cpi_3m_annualized"),
+    "us_real_gdp": ("us_real_gdp_qoq", "us_real_gdp_yoy"),
+    "us_retail_sales": ("us_retail_sales_mom", "us_retail_sales_yoy"),
+    "us_durable_goods_orders": ("us_durable_goods_orders_mom", "us_durable_goods_orders_yoy"),
+    "us_nonfarm_payroll_total": ("us_nonfarm_payroll_change", "us_nonfarm_payroll_3m_avg_change"),
+    "us_unemployment_rate": ("us_unemployment_3m_avg", "us_sahm_rule_gap"),
+}
 
 
 def _safe(value: Any) -> Any:
@@ -55,6 +84,33 @@ def _latest_derived(service: MacroDerivedMetricsService, key: str) -> dict[str, 
 def _previous_derived(service: MacroDerivedMetricsService, key: str) -> dict[str, Any] | None:
     rows = _derived_rows(service, key)
     return rows[-2] if len(rows) > 1 else None
+
+
+def _latest_comparison_for_key(
+    key: str,
+    values: dict[str, list[tuple[date, Decimal]]],
+    derived: dict[str, list[dict[str, Any]]],
+) -> Decimal | None:
+    comparison_key = {
+        "us_cpi": "us_cpi_yoy",
+        "us_unemployment_rate": "us_unemployment_3m_avg",
+        "us_nonfarm_payroll_total": "us_nonfarm_payroll_change",
+        "us_real_gdp": "us_real_gdp_yoy",
+        "us_retail_sales": "us_retail_sales_yoy",
+        "us_durable_goods_orders": "us_durable_goods_orders_mom",
+        "us_treasury_10y": "us_treasury_10y",
+        "us_treasury_2y": "us_treasury_2y",
+        "us_federal_funds_rate": "us_federal_funds_rate",
+    }.get(key)
+    if comparison_key in {"us_treasury_10y", "us_treasury_2y", "us_federal_funds_rate"}:
+        rows = values.get(key) or []
+        return rows[-1][1] - rows[-22][1] if len(rows) >= 22 else None
+    rows = derived.get(comparison_key or "") or []
+    if not rows:
+        return None
+    if comparison_key == "us_nonfarm_payroll_change":
+        return Decimal(str(rows[-1]["value"]))
+    return Decimal(str(rows[-1]["value"])) - Decimal(str(rows[-2]["value"])) if len(rows) > 1 else None
 
 
 def _raw_status(definition: dict[str, Any], latest_date: date | None, fetched_at: datetime | None) -> dict[str, Any]:
@@ -171,39 +227,61 @@ def build_series_list(db, *, category: str | None = None, frequency: str | None 
     return result
 
 
-def build_series_detail(db, key: str, *, start_date: date | None = None, end_date: date | None = None, limit: int = 500) -> dict[str, Any] | None:
+def build_series_detail(
+    db,
+    key: str,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: int = 500,
+    include_history: bool = True,
+) -> dict[str, Any] | None:
     definition = get_series_definition(key)
     if definition is None: return None
-    values, series_rows, observations = load_macro_observations(db)
+    source_keys = (key,) if key in _RAW_KEYS else _DETAIL_SOURCE_KEYS.get(key, ())
+    values, series_rows, observations = load_macro_observations(db, series_keys=source_keys)
     service = MacroDerivedMetricsService(values)
+    derived = service.all_derived()
     if definition.get("is_derived"):
-        rows = _derived_rows(service, key)
-        obs = [{"observation_date": row["observation_date"], "value": row["value"], "is_derived": True} for row in rows]
+        rows = derived.get(key, [])
+        observations_for_detail = [{"observation_date": row["observation_date"], "value": row["value"], "is_derived": True} for row in rows]
     else:
         series = series_rows.get(key)
-        if not series: obs = []
-        else:
-            raw_rows = db.scalars(select(MacroObservation).where(MacroObservation.series_id == series.id).order_by(MacroObservation.observation_date.asc())).all()
-            obs = [{"observation_date": row.observation_date, "value": row.value, "raw_value": row.raw_value, "unit": row.unit, "provider": row.provider, "source_name": row.source_name, "is_preliminary": row.is_preliminary, "revision_number": row.revision_number, "last_fetched_at": row.last_fetched_at, "is_derived": False} for row in raw_rows]
-    if start_date: obs = [row for row in obs if row["observation_date"] >= start_date]
-    if end_date: obs = [row for row in obs if row["observation_date"] <= end_date]
-    obs = obs[-max(1, min(limit, 2500)):]
-    latest = obs[-1] if obs else None
-    previous = obs[-2] if len(obs) > 1 else None
-    companion_keys = {
-        "us_cpi": ["us_cpi_mom", "us_cpi_yoy", "us_cpi_3m_annualized"],
-        "us_real_gdp": ["us_real_gdp_qoq", "us_real_gdp_yoy"],
-        "us_retail_sales": ["us_retail_sales_mom", "us_retail_sales_yoy"],
-        "us_durable_goods_orders": ["us_durable_goods_orders_mom", "us_durable_goods_orders_yoy"],
-        "us_nonfarm_payroll_total": ["us_nonfarm_payroll_change", "us_nonfarm_payroll_3m_avg_change"],
-        "us_unemployment_rate": ["us_unemployment_3m_avg", "us_sahm_rule_gap"],
-    }.get(key, [])
+        raw_rows = [row for row in observations if series and row.series_id == series.id]
+        observations_for_detail = [{"observation_date": row.observation_date, "value": row.value, "raw_value": row.raw_value, "unit": row.unit, "provider": row.provider, "source_name": row.source_name, "is_preliminary": row.is_preliminary, "revision_number": row.revision_number, "last_fetched_at": row.last_fetched_at, "is_derived": False} for row in raw_rows]
+    if start_date: observations_for_detail = [row for row in observations_for_detail if row["observation_date"] >= start_date]
+    if end_date: observations_for_detail = [row for row in observations_for_detail if row["observation_date"] <= end_date]
+    observations_for_detail = observations_for_detail[-max(1, min(limit, 2500)):]
+    latest = observations_for_detail[-1] if observations_for_detail else None
+    previous = observations_for_detail[-2] if len(observations_for_detail) > 1 else None
+    companion_keys = _DETAIL_COMPANIONS.get(key, ())
+    trend_rows = observations_for_detail
+    if key in _RAW_KEYS:
+        trend_rows = [{"observation_date": observed, "value": value} for observed, value in values.get(key, [])]
+    elif definition.get("is_derived"):
+        trend_rows = derived.get(key, [])
+    latest_raw = _latest_raw(values, key)
+    latest_fetched = latest.get("last_fetched_at") if latest and not definition.get("is_derived") else None
+    comparison = None
+    if key in _RAW_KEYS:
+        comparison = _latest_comparison_for_key(key, values, derived)
+    impact, impact_label = _impact_label(key, latest_raw[1] if latest_raw else (Decimal(str(latest["value"])) if latest and latest.get("value") is not None else None), comparison)
+    freshness = _raw_status(definition, latest_raw[0] if latest_raw else None, latest_fetched) if key in _RAW_KEYS else {"status": "derived", "label_zh": "系统推导"}
     return _safe({
-        **definition, "observations": obs, "latest": latest, "previous": previous,
+        **definition,
+        "observations": observations_for_detail if include_history else [],
+        "latest": latest,
+        "previous": previous,
+        "sparkline": observations_for_detail[-36:] if include_history else [],
+        "trend": _trend_from_rows(trend_rows),
+        "current_impact": {"label": impact, "label_zh": impact_label},
+        "freshness": freshness,
+        "data_status": "available" if latest is not None else "insufficient",
         "derived_comparisons": {
-            "mom": _latest_derived(service, f"{key}_mom"), "yoy": _latest_derived(service, f"{key}_yoy"),
+            "mom": derived.get(f"{key}_mom", [])[-1] if derived.get(f"{key}_mom") else None,
+            "yoy": derived.get(f"{key}_yoy", [])[-1] if derived.get(f"{key}_yoy") else None,
         },
-        "derived_series": {derived_key: _derived_rows(service, derived_key) for derived_key in companion_keys},
+        "derived_series": {derived_key: derived.get(derived_key, [])[-max(1, min(limit, 2500)):] for derived_key in companion_keys} if include_history else {},
         "interpretation": {"why_it_matters": definition.get("why_it_matters"), "rising_interpretation": definition.get("rising_interpretation"), "falling_interpretation": definition.get("falling_interpretation"), "bullish_scenarios": definition.get("bullish_scenarios", []), "bearish_scenarios": definition.get("bearish_scenarios", []), "context_notes": definition.get("context_notes", []), "affected_assets": definition.get("affected_assets", {})},
         "source_attribution": SOURCE_NAME, "disclaimer": DISCLAIMER,
     })
@@ -303,7 +381,7 @@ def build_sync_status(db) -> dict[str, Any]:
 
 
 def build_explanation(db, key: str) -> dict[str, Any] | None:
-    detail = build_series_detail(db, key, limit=2500)
+    detail = build_series_detail(db, key, limit=2, include_history=False)
     if detail is None: return None
     definition = get_series_definition(key) or {}
     latest = detail.get("latest")

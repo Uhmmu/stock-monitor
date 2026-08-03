@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, post } from './api'
 import { Sheet } from './Sheet'
@@ -54,15 +54,44 @@ function Sparkline({ values, color = '#397bd8', height = 42 }: { values: (number
 
 function MacroHistoryChart({ detail, range, mode }: { detail: SeriesDetail; range: string; mode: string }) {
   const days: Record<string, number | null> = { '1y': 365, '3y': 365 * 3, '5y': 365 * 5, '10y': 365 * 10, all: null }
-  const raw = (mode === 'raw' ? detail.observations : detail.derived_series[mode] || detail.observations) || []
+  const raw = (mode === 'raw' ? detail.observations : detail.derived_series?.[mode] || detail.observations) || []
   const cutoff = days[range] == null ? null : Date.now() - days[range]! * 86_400_000
-  const rows = raw.filter(row => !cutoff || new Date(row.observation_date).getTime() >= cutoff)
-  const values = rows.map(row => row.value).filter((value): value is number => value != null && Number.isFinite(value))
+  const rows = raw.filter(row => {
+    if (!row || typeof row.observation_date !== 'string') return false
+    const observedAt = new Date(row.observation_date).getTime()
+    return Number.isFinite(observedAt) && (!cutoff || observedAt >= cutoff)
+  })
+  const chartRows = rows.filter((row): row is ValuePoint & { value: number } => typeof row.value === 'number' && Number.isFinite(row.value))
+  const values = chartRows.map(row => row.value)
   if (values.length < 2) return <div className="macro-chart-empty">这个范围内的历史数据不足，系统不会用直线填补缺失日期。</div>
   const min = Math.min(0, ...values); const max = Math.max(...values); const span = max - min || 1
   const width = 720; const height = 230
-  const coords = rows.filter(row => row.value != null).map((row, index, filtered) => `${(index / Math.max(filtered.length - 1, 1)) * width},${height - 20 - ((row.value! - min) / span) * (height - 38)}`).join(' ')
-  return <div className="macro-history-chart"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="宏观指标历史图"><line x1="0" x2={width} y1={height - 20 - ((0 - min) / span) * (height - 38)} y2={height - 20 - ((0 - min) / span) * (height - 38)} className="macro-zero-line"/><polyline points={coords} className="macro-chart-line"/><title>{rows.map(row => `${row.observation_date}: ${row.value ?? '数据不足'}`).join('\n')}</title></svg><div className="macro-chart-axis"><span>{rows[0]?.observation_date}</span><span>{rows[rows.length - 1]?.observation_date}</span></div></div>
+  const coords = chartRows.map((row, index, filtered) => `${(index / Math.max(filtered.length - 1, 1)) * width},${height - 20 - ((row.value! - min) / span) * (height - 38)}`).join(' ')
+  const titleRows = chartRows.length > 300 ? chartRows.filter((_, index) => index % Math.ceil(chartRows.length / 300) === 0) : chartRows
+  return <div className="macro-history-chart"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="宏观指标历史图"><line x1="0" x2={width} y1={height - 20 - ((0 - min) / span) * (height - 38)} y2={height - 20 - ((0 - min) / span) * (height - 38)} className="macro-zero-line"/><polyline points={coords} className="macro-chart-line"/><title>{titleRows.map(row => `${row.observation_date}: ${row.value}`).join('\n')}</title></svg><div className="macro-chart-axis"><span>{chartRows[0]?.observation_date}</span><span>{chartRows[chartRows.length - 1]?.observation_date}</span></div></div>
+}
+
+class MacroDetailErrorBoundary extends Component<{ children: ReactNode; resetKey: string | null; onClose: () => void }, { hasError: boolean }> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true }
+  }
+
+  componentDidUpdate(previousProps: Readonly<{ children: ReactNode; resetKey: string | null; onClose: () => void }>) {
+    if (previousProps.resetKey !== this.props.resetKey && this.state.hasError) this.setState({ hasError: false })
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Macro detail render failed', error, info)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <div className="macro-detail-error" role="alert"><b>指标详情暂时无法显示</b><span>历史数据已经保留，当前弹窗内容出现异常。</span><button className="macro-outline-btn" onClick={this.props.onClose}>关闭弹窗</button></div>
+    }
+    return this.props.children
+  }
 }
 
 function MacroStatusBanner({ overview }: { overview: Overview }) {
@@ -86,10 +115,11 @@ function YieldCurvePanel({ curve }: { curve?: YieldCurve }) {
 
 function MacroDetail({ selectedKey, onClose }: { selectedKey: string | null; onClose: () => void }) {
   const detail = useQuery({ queryKey: ['us-macro-series', selectedKey], queryFn: () => api<SeriesDetail>(`/fundamentals/macro/us/series/${selectedKey}`), enabled: !!selectedKey, staleTime: 10 * 60_000 })
-  const explanation = useQuery({ queryKey: ['us-macro-explanation', selectedKey], queryFn: () => api<SeriesDetail & { limitations: string[]; current_system_judgment: { label_zh: string; reason: string; confidence: string }; market_impact: { asset: string; stance: string; reason: string }[] }>(`/fundamentals/macro/us/series/${selectedKey}/explanation`), enabled: !!selectedKey, staleTime: 10 * 60_000 })
+  const explanation = useQuery({ queryKey: ['us-macro-explanation', selectedKey], queryFn: () => api<SeriesDetail & { limitations: string[]; current_system_judgment: { label_zh: string; reason: string; confidence: string }; market_impact: { asset: string; stance: string; reason: string }[] }>(`/fundamentals/macro/us/series/${selectedKey}/explanation`), enabled: !!selectedKey && detail.isSuccess, staleTime: 10 * 60_000 })
   const [range, setRange] = useState('5y'); const [mode, setMode] = useState('raw')
+  useEffect(() => { setRange('5y'); setMode('raw') }, [selectedKey])
   const modes = detail.data ? [{ key: 'raw', label: detail.data.unit === 'index' ? '指数水平' : '原始值' }, ...Object.keys(detail.data.derived_series || {}).map(key => ({ key, label: key.includes('yoy') ? '同比' : key.includes('mom') ? '环比' : key.includes('annualized') ? '三个月年化' : key.includes('change') ? '月度变化' : '推导值' }))] : []
-  return <Sheet open={!!selectedKey} onClose={onClose} title={detail.data?.display_name_zh || '宏观指标详情'}>{detail.isLoading && <div className="macro-loading">正在读取历史数据…</div>}{detail.isError && <div className="macro-empty-panel">指标详情暂不可用，请稍后重试。</div>}{detail.data && <article className="macro-detail"><header><p className="eyebrow">{detail.data.display_name_en} · {detail.data.frequency}</p><h2>{detail.data.display_name_zh}</h2><p>{detail.data.description_zh}</p></header><div className="macro-detail-facts"><div><span>最新值</span><b>{formatValue(detail.data.latest?.value, detail.data.unit)}</b><small>{displayDate(detail.data.latest?.observation_date)}</small></div><div><span>前值</span><b>{formatValue(detail.data.previous?.value, detail.data.unit)}</b><small>{displayDate(detail.data.previous?.observation_date)}</small></div><div><span>趋势</span><b>{directionLabel[detail.data.trend.direction] || detail.data.trend.direction}</b><small>{detail.data.freshness.label_zh}</small></div></div><div className="macro-chart-toolbar"><div>{modes.map(item => <button key={item.key} className={mode === item.key ? 'active' : ''} onClick={() => setMode(item.key)}>{item.label}</button>)}</div><div>{['1y', '3y', '5y', '10y', 'all'].map(item => <button key={item} className={range === item ? 'active' : ''} onClick={() => setRange(item)}>{item === 'all' ? '全部' : item}</button>)}</div></div><MacroHistoryChart detail={detail.data} range={range} mode={mode}/>{explanation.data && <><section><h3>如何解读</h3><p>{explanation.data.interpretation.rising_interpretation}</p><p>{explanation.data.interpretation.falling_interpretation}</p></section><section><h3>对市场的可能影响</h3><div className="macro-impact-list">{explanation.data.market_impact.map(item => <div key={item.asset}><b>{item.asset}</b><span>{item.stance}</span><p>{item.reason}</p></div>)}</div></section><section><h3>当前系统判断</h3><div className="macro-judgment"><b>{explanation.data.current_system_judgment.label_zh}</b><p>{explanation.data.current_system_judgment.reason}</p><small>置信度：{explanation.data.current_system_judgment.confidence} · 依据：已存历史序列与确定性规则</small></div></section><section><h3>限制与注意事项</h3><ul>{explanation.data.limitations.map(note => <li key={note}>{note}</li>)}</ul></section></>}</article>}</Sheet>
+  return <Sheet open={!!selectedKey} onClose={onClose} title={detail.data?.display_name_zh || '宏观指标详情'}><MacroDetailErrorBoundary resetKey={selectedKey} onClose={onClose}>{detail.isLoading && <div className="macro-loading">正在读取历史数据…</div>}{detail.isError && <div className="macro-empty-panel">指标详情暂不可用，请稍后重试。</div>}{detail.data && <article className="macro-detail"><header><p className="eyebrow">{detail.data.display_name_en} · {detail.data.frequency}</p><h2>{detail.data.display_name_zh}</h2><p>{detail.data.description_zh}</p></header><div className="macro-detail-facts"><div><span>最新值</span><b>{formatValue(detail.data.latest?.value, detail.data.unit)}</b><small>{displayDate(detail.data.latest?.observation_date)}</small></div><div><span>前值</span><b>{formatValue(detail.data.previous?.value, detail.data.unit)}</b><small>{displayDate(detail.data.previous?.observation_date)}</small></div><div><span>趋势</span><b>{directionLabel[detail.data.trend?.direction || 'insufficient_data'] || detail.data.trend?.direction || '数据不足'}</b><small>{detail.data.freshness?.label_zh || '数据不足'}</small></div></div><div className="macro-chart-toolbar"><div>{modes.map(item => <button key={item.key} className={mode === item.key ? 'active' : ''} onClick={() => setMode(item.key)}>{item.label}</button>)}</div><div>{['1y', '3y', '5y', '10y', 'all'].map(item => <button key={item} className={range === item ? 'active' : ''} onClick={() => setRange(item)}>{item === 'all' ? '全部' : item}</button>)}</div></div><MacroHistoryChart detail={detail.data} range={range} mode={mode}/>{explanation.isLoading && <p className="macro-detail-loading">正在读取指标解读…</p>}{explanation.data && <><section><h3>如何解读</h3><p>{explanation.data.interpretation?.rising_interpretation}</p><p>{explanation.data.interpretation?.falling_interpretation}</p></section><section><h3>对市场的可能影响</h3><div className="macro-impact-list">{(explanation.data.market_impact || []).map(item => <div key={item.asset}><b>{item.asset}</b><span>{item.stance}</span><p>{item.reason}</p></div>)}</div></section><section><h3>当前系统判断</h3><div className="macro-judgment"><b>{explanation.data.current_system_judgment?.label_zh || '数据不足'}</b><p>{explanation.data.current_system_judgment?.reason}</p><small>置信度：{explanation.data.current_system_judgment?.confidence || '未知'} · 依据：已存历史序列与确定性规则</small></div></section><section><h3>限制与注意事项</h3><ul>{(explanation.data.limitations || []).map(note => <li key={note}>{note}</li>)}</ul></section></>}</article>}</MacroDetailErrorBoundary></Sheet>
 }
 
 export function MacroFundamentals({ isAdmin = false }: { isAdmin?: boolean }) {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import select
 
@@ -14,13 +14,22 @@ from .derived import MacroDerivedMetricsService
 from .sync import PROVIDER
 
 
-def load_macro_observations(db) -> tuple[dict[str, list[tuple[date, Decimal]]], dict[str, MacroSeries], list[MacroObservation]]:
-    rows = db.execute(
+def load_macro_observations(
+    db,
+    series_keys: Iterable[str] | None = None,
+) -> tuple[dict[str, list[tuple[date, Decimal]]], dict[str, MacroSeries], list[MacroObservation]]:
+    statement = (
         select(MacroObservation, MacroSeries)
         .join(MacroSeries, MacroSeries.id == MacroObservation.series_id)
         .where(MacroSeries.provider == PROVIDER, MacroSeries.enabled.is_(True))
         .order_by(MacroSeries.series_key, MacroObservation.observation_date)
-    ).all()
+    )
+    if series_keys is not None:
+        keys = tuple(dict.fromkeys(series_keys))
+        if not keys:
+            return {}, {}, []
+        statement = statement.where(MacroSeries.series_key.in_(keys))
+    rows = db.execute(statement).all()
     values: dict[str, list[tuple[date, Decimal]]] = {}
     series: dict[str, MacroSeries] = {}
     observations: list[MacroObservation] = []

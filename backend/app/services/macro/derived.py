@@ -49,6 +49,7 @@ class MacroDerivedMetricsService:
 
     def __init__(self, observations: dict[str, list[tuple[date, Decimal]]] | None = None):
         self.observations = {key: _rows(values) for key, values in (observations or {}).items()}
+        self._derived_cache: dict[str, list[dict[str, Any]]] | None = None
 
     def values(self, series_key: str) -> list[tuple[date, Decimal]]:
         return self.observations.get(series_key, [])
@@ -111,26 +112,28 @@ class MacroDerivedMetricsService:
         return [{"observation_date": observed, "value": long_rows[observed] - short_rows[observed]} for observed in dates]
 
     def all_derived(self) -> dict[str, list[dict[str, Any]]]:
-        return {
-            "us_real_gdp_qoq": self.change_series("us_real_gdp", 1),
-            "us_real_gdp_yoy": self.change_series("us_real_gdp", 4),
-            "us_real_gdp_per_capita_yoy": self.change_series("us_real_gdp_per_capita", 4),
-            "us_real_gdp_per_capita_5y_cagr": self._cagr_series("us_real_gdp_per_capita", 20),
-            "us_cpi_mom": self.change_series("us_cpi", 1),
-            "us_cpi_yoy": self.change_series("us_cpi", 12),
-            "us_cpi_3m_annualized": self.cpi_3m_annualized(),
-            "us_retail_sales_mom": self.change_series("us_retail_sales", 1),
-            "us_retail_sales_yoy": self.change_series("us_retail_sales", 12),
-            "us_durable_goods_orders_mom": self.change_series("us_durable_goods_orders", 1),
-            "us_durable_goods_orders_yoy": self.change_series("us_durable_goods_orders", 12),
-            "us_nonfarm_payroll_change": self.nonfarm_change(),
-            "us_nonfarm_payroll_3m_avg_change": self.nonfarm_3m_average_change(),
-            "us_unemployment_3m_avg": self.unemployment_3m_average(),
-            "us_sahm_rule_gap": self.sahm_rule_gap(),
-            "us_yield_spread_10y_2y": self.yield_spread("us_treasury_10y", "us_treasury_2y"),
-            "us_yield_spread_10y_3m": self.yield_spread("us_treasury_10y", "us_treasury_3m"),
-            "us_yield_spread_30y_5y": self.yield_spread("us_treasury_30y", "us_treasury_5y"),
-        }
+        if self._derived_cache is None:
+            self._derived_cache = {
+                "us_real_gdp_qoq": self.change_series("us_real_gdp", 1),
+                "us_real_gdp_yoy": self.change_series("us_real_gdp", 4),
+                "us_real_gdp_per_capita_yoy": self.change_series("us_real_gdp_per_capita", 4),
+                "us_real_gdp_per_capita_5y_cagr": self._cagr_series("us_real_gdp_per_capita", 20),
+                "us_cpi_mom": self.change_series("us_cpi", 1),
+                "us_cpi_yoy": self.change_series("us_cpi", 12),
+                "us_cpi_3m_annualized": self.cpi_3m_annualized(),
+                "us_retail_sales_mom": self.change_series("us_retail_sales", 1),
+                "us_retail_sales_yoy": self.change_series("us_retail_sales", 12),
+                "us_durable_goods_orders_mom": self.change_series("us_durable_goods_orders", 1),
+                "us_durable_goods_orders_yoy": self.change_series("us_durable_goods_orders", 12),
+                "us_nonfarm_payroll_change": self.nonfarm_change(),
+                "us_nonfarm_payroll_3m_avg_change": self.nonfarm_3m_average_change(),
+                "us_unemployment_3m_avg": self.unemployment_3m_average(),
+                "us_sahm_rule_gap": self.sahm_rule_gap(),
+                "us_yield_spread_10y_2y": self.yield_spread("us_treasury_10y", "us_treasury_2y"),
+                "us_yield_spread_10y_3m": self.yield_spread("us_treasury_10y", "us_treasury_3m"),
+                "us_yield_spread_30y_5y": self.yield_spread("us_treasury_30y", "us_treasury_5y"),
+            }
+        return self._derived_cache
 
     def _cagr_series(self, source_key: str, steps: int) -> list[dict[str, Any]]:
         rows = self.values(source_key)

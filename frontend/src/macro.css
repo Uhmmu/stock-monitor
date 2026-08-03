@@ -6,3 +6,4 @@
 @media(prefers-reduced-motion:reduce){.macro-summary-chip,.macro-card,.macro-outline-btn{transition:none}.macro-summary-chip:hover,.macro-card:hover{transform:none}}
 @media(prefers-reduced-transparency:reduce){.macro-status-banner,.macro-summary-chip,.macro-card,.macro-curve-panel,.macro-data-notes,.macro-settings-panel{background:var(--solid)}}
 @media(prefers-contrast:more){.macro-status-banner,.macro-summary-chip,.macro-card,.macro-curve-panel,.macro-data-notes,.macro-settings-panel,.macro-history-chart{border-color:var(--ink-3)}}
+.macro-detail-loading{margin:12px 0;color:var(--ink-4);font-size:10px}.macro-detail-error{display:grid;gap:8px;margin:10px 0 28px;padding:28px 16px;border:1px dashed var(--line);border-radius:14px;color:var(--ink-3);font-size:11px;text-align:center}.macro-detail-error b{color:var(--ink-2);font-size:13px}.macro-detail-error .macro-outline-btn{justify-self:center;margin-top:4px}

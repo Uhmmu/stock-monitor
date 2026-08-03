@@ -27,7 +27,7 @@ from app.services.macro.provider import (
     AlphaVantageSchemaError,
 )
 from app.services.macro.sync import ensure_series_definitions, run_macro_sync, usage_status
-from app.services.macro.views import build_series_detail, build_yield_curve
+from app.services.macro.views import build_explanation, build_series_detail, build_yield_curve
 from app.api.macro_routes import router
 
 
@@ -117,6 +117,35 @@ def test_yield_curve_uses_common_observation_date():
         result = build_yield_curve(db)
         assert result["curves"][0]["observation_date"] == "2024-01-01"
         assert result["curves"][0]["points"][0]["maturity"] == "3M"
+
+
+def test_series_detail_returns_frontend_render_fields_and_keeps_explanation_compact():
+    engine = create_engine("sqlite+pysqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine, tables=[MacroSeries.__table__, MacroObservation.__table__])
+    with Session(engine) as db:
+        rows = ensure_series_definitions(db)
+        for index in range(14):
+            db.add(MacroObservation(
+                series_id=rows["us_cpi"].id,
+                observation_date=date(2024 + index // 12, index % 12 + 1, 1),
+                value=Decimal(str(100 + index)),
+                raw_value=Decimal(str(100 + index)),
+                unit="index",
+                metadata_json={},
+            ))
+        db.commit()
+
+        detail = build_series_detail(db, "us_cpi")
+        assert detail is not None
+        assert detail["trend"]["direction"] == "rising"
+        assert detail["freshness"]["label_zh"]
+        assert detail["current_impact"]["label_zh"]
+        assert detail["data_status"] == "available"
+        assert detail["derived_series"]["us_cpi_mom"]
+
+        explanation = build_explanation(db, "us_cpi")
+        assert explanation is not None
+        assert explanation["current"]["observation_date"] == detail["latest"]["observation_date"]
 
 
 def test_macro_router_requires_authentication():
