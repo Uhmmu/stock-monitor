@@ -20,17 +20,43 @@ export function ChatPage() {
   const [webMode, setWebMode] = useState<WebAccessMode>('off')
   const [localMessages, setLocalMessages] = useState<AIMessage[]>([])
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [webMenuOpen, setWebMenuOpen] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [activity, setActivity] = useState('')
   const [error, setError] = useState('')
   const controller = useRef<AbortController | null>(null)
   const end = useRef<HTMLDivElement>(null)
-  const autoSelected = useRef(false)
+  const modelPicker = useRef<HTMLDivElement>(null)
+  const webPicker = useRef<HTMLDivElement>(null)
+  const configDefaultsApplied = useRef(false)
+  const webModeTouched = useRef(false)
   const config = useQuery({ queryKey: ['ios-ai-config'], queryFn: getAIConfig, staleTime: 5 * 60_000 })
   const conversations = useQuery({ queryKey: ['ios-ai-conversations'], queryFn: listConversations, staleTime: 10_000 })
   const messages = useQuery({ queryKey: ['ios-ai-messages', conversationId], queryFn: () => getMessages(conversationId!), enabled: conversationId != null })
-  useEffect(() => { if (!model && config.data?.default_model) setModel(config.data.default_model); if (config.data?.web_search.default_mode) setWebMode(config.data.web_search.default_mode) }, [config.data, model])
-  useEffect(() => { if (!autoSelected.current && conversations.data?.items.length) { autoSelected.current = true; setConversationId(conversations.data.items[0].id) } }, [conversations.data])
+  useEffect(() => {
+    const data = config.data
+    if (!data || configDefaultsApplied.current) return
+    configDefaultsApplied.current = true
+    if (data.default_model) setModel(value => value || data.default_model)
+    if (!webModeTouched.current) setWebMode(data.web_search.default_mode || 'off')
+  }, [config.data])
+  useEffect(() => {
+    if (!modelMenuOpen && !webMenuOpen) return
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return
+      if (!modelPicker.current?.contains(event.target)) setModelMenuOpen(false)
+      if (!webPicker.current?.contains(event.target)) setWebMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setModelMenuOpen(false); setWebMenuOpen(false) } }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [modelMenuOpen, webMenuOpen])
+  useEffect(() => { if (generating) { setModelMenuOpen(false); setWebMenuOpen(false) } }, [generating])
   useEffect(() => { if (!generating) setLocalMessages([]) }, [conversationId])
   useEffect(() => {
     const viewport = window.visualViewport
@@ -70,13 +96,32 @@ export function ChatPage() {
   }, [messages.data, localMessages])
   useEffect(() => { const frame = requestAnimationFrame(() => end.current?.scrollIntoView({ block: 'end' })); return () => cancelAnimationFrame(frame) }, [displayMessages, activity])
 
-  const newConversation = () => { if (generating) return; autoSelected.current = true; setConversationId(null); setLocalMessages([]); setDraft(''); setDrawerOpen(false); setError('') }
-  const selectConversation = (conversation: Conversation) => { if (generating) return; setConversationId(conversation.id); setModel(conversation.model || config.data?.default_model || ''); setWebMode(conversation.web_access_mode || 'off'); setLocalMessages([]); setDrawerOpen(false); setError('') }
+  const modelOptions = config.data?.models.filter(item => item.available) || []
+  const currentModel = config.data?.models.find(item => item.id === model)
+  const currentModelLabel = currentModel?.label || model || '默认模型'
+  const currentModelId = currentModel?.id || model || (config.data ? '未指定' : '配置加载中')
+  const webSearch = config.data?.web_search
+  const configuredWebModes: WebAccessMode[] = webSearch?.available_modes?.length ? webSearch.available_modes : ['off']
+  const webModes = [...new Set<WebAccessMode>([webMode, ...configuredWebModes])]
+  const deepModeConfig = (mode: WebAccessMode) => mode.startsWith('deep_') ? webSearch?.deep_modes[mode.slice(5)] : undefined
+  const webModeInfo = (mode: WebAccessMode) => ({ label: mode.startsWith('deep_') ? deepModeConfig(mode)?.label || modeLabels[mode] : modeLabels[mode], deep: deepModeConfig(mode) })
+  const currentWebModeInfo = webModeInfo(webMode)
+  const webModeDescription = (mode: WebAccessMode, available: boolean) => {
+    if (!available) return '当前会话模式不可用'
+    if (mode === 'off') return '仅使用账户内研究数据'
+    if (mode === 'search') return '搜索最新公开资料'
+    const deep = deepModeConfig(mode)
+    if (!deep) return '深度研究'
+    return deep.confirmation_required ? `发送时确认 · 基础费用 $${deep.estimated_base_cost_usd.toFixed(2)}` : `基础费用约 $${deep.estimated_base_cost_usd.toFixed(2)}`
+  }
+  const chooseWebMode = (mode: WebAccessMode) => { webModeTouched.current = true; setWebMode(mode); setWebMenuOpen(false) }
+  const newConversation = () => { if (generating) return; setConversationId(null); setLocalMessages([]); setDraft(''); setDrawerOpen(false); setModelMenuOpen(false); setWebMenuOpen(false); setError('') }
+  const selectConversation = (conversation: Conversation) => { if (generating) return; webModeTouched.current = true; setConversationId(conversation.id); setModel(conversation.model || config.data?.default_model || ''); setWebMode(conversation.web_access_mode || 'off'); setLocalMessages([]); setDrawerOpen(false); setModelMenuOpen(false); setWebMenuOpen(false); setError('') }
   const send = async () => {
     const question = draft.trim()
     if (!question || generating) return
-    const deep = config.data?.web_search.deep_modes[webMode.replace('deep_', '')]
-    if (deep?.confirmation_required && !window.confirm(`${modeLabels[webMode]} 预计基础费用 $${deep.estimated_base_cost_usd.toFixed(2)}，继续吗？`)) return
+    const deep = deepModeConfig(webMode)
+    if (deep?.confirmation_required && !window.confirm(`${currentWebModeInfo.label} 预计基础费用 $${deep.estimated_base_cost_usd.toFixed(2)}，继续吗？`)) return
     setGenerating(true); setError(''); setActivity('正在准备上下文…'); setDraft('')
     let id = conversationId
     try {
@@ -113,11 +158,43 @@ export function ChatPage() {
   }
   const stop = async () => { controller.current?.abort(); if (conversationId != null) await stopGeneration(conversationId).catch(() => undefined); setGenerating(false); setActivity(''); void client.invalidateQueries({ queryKey: ['ios-ai-messages', conversationId] }) }
 
-  return <main className="mobile-chat-page"><header className="mobile-chat-header"><button onClick={() => setDrawerOpen(true)} aria-label="会话列表"><Icon name="more"/></button><div><span>AI RESEARCH</span><strong>{conversationId ? conversations.data?.items.find(item => item.id === conversationId)?.title || '研究对话' : '新对话'}</strong></div><button onClick={newConversation} aria-label="新建对话">＋</button></header>
-    <section className="mobile-chat-scroll">{messages.isLoading ? <LoadingState rows={5}/> : !displayMessages.length ? <div className="mobile-chat-empty"><div className="chat-orb">✦</div><h1>今天想研究什么？</h1><p>我可以读取你的持仓、估值、新闻、财报和 SEC 数据，并在回答中保留来源。</p><div>{suggestions.map(value => <button key={value} onClick={() => setDraft(value)}>{value}<span>↗</span></button>)}</div></div> : displayMessages.map(message => <ChatMessage message={message} key={message.id}/>) }{activity && <div className="chat-activity"><i/><span>{activity}</span></div>}{error && <div className="chat-error"><span>{error}</span><button onClick={() => setError('')}>关闭</button></div>}<div ref={end}/></section>
-    <section className="mobile-chat-composer"><div className="chat-controls"><select value={model} onChange={event => setModel(event.target.value)} aria-label="选择模型">{config.data?.models.filter(item => item.available).map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select>{config.data?.web_search.enabled && <select value={webMode} onChange={event => setWebMode(event.target.value as WebAccessMode)} aria-label="联网模式">{config.data.web_search.available_modes.map(mode => <option value={mode} key={mode}>{modeLabels[mode]}</option>)}</select>}</div><div className="chat-input-row"><textarea className="mobile-chat-input" value={draft} onChange={event => setDraft(event.target.value)} rows={1} maxLength={config.data?.max_message_chars || 12000} placeholder="询问持仓、公司或市场…" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }}/>{generating ? <button className="chat-stop" onClick={() => void stop()} aria-label="停止生成"><i/></button> : <button className="chat-send" onClick={() => void send()} disabled={!draft.trim()} aria-label="发送">↑</button>}</div></section>
-    {drawerOpen && <><button className="chat-drawer-scrim" onClick={() => setDrawerOpen(false)} aria-label="关闭会话列表"/><aside className="chat-drawer"><header><div><span>CHAT HISTORY</span><h2>对话</h2></div><button onClick={() => setDrawerOpen(false)}>完成</button></header><button className="new-chat-row" onClick={newConversation}><i>＋</i><span><strong>新对话</strong><small>开始新的研究主题</small></span></button><div>{conversations.data?.items.map(item => <button className={conversationId === item.id ? 'active' : ''} key={item.id} onClick={() => selectConversation(item)}><span><strong>{item.title}</strong><small>{item.last_message_preview || '还没有消息'}</small></span><time>{formatDateTime(item.last_message_at || item.updated_at)}</time></button>)}</div></aside></>}
+  return <main className="mobile-chat-page">
+    <header className="mobile-chat-header">
+      <button type="button" onClick={() => setDrawerOpen(true)} aria-label="会话列表"><Icon name="more"/></button>
+      <div className="chat-model-picker" ref={modelPicker}>
+        <button type="button" className="chat-model-trigger" onClick={() => setModelMenuOpen(value => !value)} aria-haspopup="listbox" aria-expanded={modelMenuOpen} aria-label={`当前模型：${currentModelLabel}（${currentModelId}），点击切换`}>
+          <strong className="chat-model-label">{currentModelLabel}</strong>
+          <span className="chat-model-id">{currentModelId}</span>
+          <i className="chat-model-chevron" aria-hidden="true">⌄</i>
+        </button>
+        {modelMenuOpen && <div className="chat-model-menu" role="listbox" aria-label="选择模型">
+          {modelOptions.length ? modelOptions.map(option => <button type="button" role="option" aria-selected={option.id === model} className={`chat-model-option${option.id === model ? ' selected' : ''}`} key={option.id} onClick={() => { setModel(option.id); setModelMenuOpen(false) }}>
+            <span><strong>{option.label}</strong><small>{option.id}</small></span><i aria-hidden="true">{option.id === model ? '✓' : ''}</i>
+          </button>) : <p className="chat-model-empty">{config.isLoading ? '模型配置加载中…' : '暂无可用模型'}</p>}
+        </div>}
+      </div>
+      <button type="button" onClick={newConversation} aria-label="新建对话">＋</button>
+    </header>
+    <section className="mobile-chat-scroll">{messages.isLoading ? <LoadingState rows={5}/> : !displayMessages.length ? <div className="mobile-chat-empty"><div className="chat-orb">✦</div><h1>今天想研究什么？</h1><p>我可以读取你的持仓、估值、新闻、财报和 SEC 数据，并在回答中保留来源。</p><div>{suggestions.map(value => <button type="button" key={value} onClick={() => setDraft(value)}>{value}<span>↗</span></button>)}</div></div> : displayMessages.map(message => <ChatMessage message={message} key={message.id}/>) }{activity && <div className="chat-activity"><i/><span>{activity}</span></div>}{error && <div className="chat-error"><span>{error}</span><button type="button" onClick={() => setError('')}>关闭</button></div>}<div ref={end}/></section>
+    <section className="mobile-chat-composer"><div className="chat-input-row"><textarea className="mobile-chat-input" value={draft} onChange={event => setDraft(event.target.value)} rows={1} maxLength={config.data?.max_message_chars || 12000} placeholder="询问持仓、公司或市场…" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }}/><div className="chat-web-picker" ref={webPicker}>
+      <button type="button" className={`chat-web-trigger${webMode !== 'off' ? ' active' : ''}`} onClick={() => setWebMenuOpen(value => !value)} disabled={generating || !config.data} aria-haspopup="menu" aria-expanded={webMenuOpen} aria-label={config.data ? `联网模式：${currentWebModeInfo.label}` : '联网模式配置加载中'}><WebIcon/></button>
+      {webMenuOpen && config.data && <div className="chat-web-menu" role="menu" aria-label="选择联网模式">
+        <div className="chat-web-menu-heading"><strong>联网模式</strong><small>{currentWebModeInfo.label}</small></div>
+        {webModes.map(mode => {
+          const info = webModeInfo(mode)
+          const available = configuredWebModes.includes(mode)
+          return <button type="button" role="menuitemradio" aria-checked={mode === webMode} className={`chat-web-option${mode === webMode ? ' selected' : ''}`} key={mode} onClick={() => chooseWebMode(mode)}>
+            <span><strong>{info.label}</strong><small>{webModeDescription(mode, available)}</small></span><i aria-hidden="true">{mode === webMode ? '✓' : ''}</i>
+          </button>
+        })}
+      </div>}
+    </div>{generating ? <button type="button" className="chat-stop" onClick={() => void stop()} aria-label="停止生成"><i/></button> : <button type="button" className="chat-send" onClick={() => void send()} disabled={!draft.trim()} aria-label="发送">↑</button>}</div></section>
+    {drawerOpen && <><button type="button" className="chat-drawer-scrim" onClick={() => setDrawerOpen(false)} aria-label="关闭会话列表"/><aside className="chat-drawer"><header><div><span>CHAT HISTORY</span><h2>对话</h2></div><button type="button" onClick={() => setDrawerOpen(false)}>完成</button></header><button type="button" className="new-chat-row" onClick={newConversation}><i>＋</i><span><strong>新对话</strong><small>开始新的研究主题</small></span></button><div>{conversations.data?.items.map(item => <button type="button" className={conversationId === item.id ? 'active' : ''} key={item.id} onClick={() => selectConversation(item)}><span><strong>{item.title}</strong><small>{item.last_message_preview || '还没有消息'}</small></span><time>{formatDateTime(item.last_message_at || item.updated_at)}</time></button>)}</div></aside></>}
   </main>
+}
+
+function WebIcon() {
+  return <svg className="chat-web-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.3 2.5 3.5 5.5 3.5 9S14.3 18.5 12 21c-2.3-2.5-3.5-5.5-3.5-9S9.7 5.5 12 3Z"/></svg>
 }
 
 function ChatMessage({ message }: { message: AIMessage }) {

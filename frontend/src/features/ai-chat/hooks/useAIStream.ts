@@ -62,12 +62,23 @@ export function useAIStream({ conversationId, onConversationCreated }: {
   const activeConversation = useRef<number | null>(null)
   const activeAssistant = useRef<string | number | null>(null)
   const busy = useRef(false)
+  const delta = useRef('')
+  const deltaTimer = useRef<number | null>(null)
 
-  const appendDelta = useCallback((value: string) => {
+  const flushDelta = useCallback(() => {
+    if (deltaTimer.current != null) window.clearTimeout(deltaTimer.current)
+    deltaTimer.current = null
+    const value = delta.current
+    delta.current = ''
     const id = activeAssistant.current
     if (!value || id == null) return
     setLocalMessages(items => items.map(item => item.id === id ? { ...item, content: item.content + value, status: 'streaming', updated_at: now() } : item))
   }, [])
+
+  const scheduleDelta = useCallback((value: string) => {
+    delta.current += value
+    if (deltaTimer.current == null) deltaTimer.current = window.setTimeout(flushDelta, 32)
+  }, [flushDelta])
 
   const updateActivity = useCallback((event: AIStreamEvent) => {
     if (!event.type.startsWith('tool.') || activeAssistant.current == null) return
@@ -99,9 +110,9 @@ export function useAIStream({ conversationId, onConversationCreated }: {
       } else if (event.type === 'response.started') {
         setState('streaming')
       } else if (event.type === 'response.delta') {
-        setState('streaming')
-        appendDelta(event.data.delta)
+        scheduleDelta(event.data.delta)
       } else if (event.type === 'response.reset') {
+        flushDelta()
         const id = activeAssistant.current
         setLocalMessages(items => items.map(item => item.id === id ? { ...item, content: '' } : item))
       } else if (event.type === 'citation.map' && activeAssistant.current != null) {
@@ -117,6 +128,7 @@ export function useAIStream({ conversationId, onConversationCreated }: {
             : { ...item, rich_block_skeletons: [...skeletons, event.data] }
         }))
       } else if (event.type === 'response.rich_content.completed' && activeAssistant.current != null) {
+        flushDelta()
         const id = activeAssistant.current
         setLocalMessages(items => items.map(item => item.id === id ? {
           ...item,
@@ -130,9 +142,11 @@ export function useAIStream({ conversationId, onConversationCreated }: {
         const data = event.data as { run_id?: string | null }
         if (data.run_id) setDeepRunId(data.run_id)
       } else if (event.type === 'message.persisted' && activeAssistant.current != null) {
+        flushDelta()
         const id = activeAssistant.current
         setLocalMessages(items => items.map(item => item.id === id ? { ...item, status: event.data.status } : item))
       } else if (event.type === 'response.completed') {
+        flushDelta()
         const id = activeAssistant.current
         setLocalMessages(items => items.map(item => item.id === id ? {
           ...item,
@@ -146,6 +160,7 @@ export function useAIStream({ conversationId, onConversationCreated }: {
         setState(event.data.status === 'partial' ? 'partial' : 'completed')
         terminal = true
       } else if (event.type === 'error') {
+        flushDelta()
         const id = activeAssistant.current
         setLocalMessages(items => items.map(item => item.id === id ? { ...item, status: item.content ? 'partial' : 'failed', error_code: event.data.code, error_message_safe: event.data.message } : item))
         setError(friendlyError(new AIAPIError(event.data.message, event.data.code, 0, event.data.retryable)))
@@ -153,7 +168,7 @@ export function useAIStream({ conversationId, onConversationCreated }: {
         terminal = true
       }
     }
-  }, [appendDelta, updateActivity])
+  }, [flushDelta, scheduleDelta, updateActivity])
 
   const finalizeRequest = useCallback(async (id: number) => {
     await Promise.all([
@@ -234,12 +249,13 @@ export function useAIStream({ conversationId, onConversationCreated }: {
     setState('stopping')
     controller.current?.abort()
     try { await stopGeneration(id) } catch { /* a completed race is harmless */ }
+    flushDelta()
     const assistantId = activeAssistant.current
     setLocalMessages(items => items.map(item => item.id === assistantId ? { ...item, status: 'cancelled', cancelled_at: now(), has_partial_content: Boolean(item.content) } : item))
     setState('cancelled')
     busy.current = false
     await finalizeRequest(id)
-  }, [finalizeRequest, state])
+  }, [finalizeRequest, flushDelta, state])
 
   const clearPersisted = useCallback((serverIds: Set<string>) => {
     setLocalMessages(items => {

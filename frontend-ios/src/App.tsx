@@ -12,11 +12,10 @@ import { DiscoveryPage } from './pages/DiscoveryPage'
 import { FundamentalsPage } from './pages/FundamentalsPage'
 import { MorePage } from './pages/MorePage'
 import { OverviewPage } from './pages/OverviewPage'
-import { PortfolioPage } from './pages/PortfolioPage'
+import { JournalPage } from './pages/JournalPage'
 
 const tabs: { key: RootTab; label: string; icon: string }[] = [
-  { key: 'overview', label: '概览', icon: 'overview' },
-  { key: 'portfolio', label: '持仓', icon: 'portfolio' },
+  { key: 'overview', label: '主页', icon: 'overview' },
   { key: 'chat', label: 'Chat', icon: 'chat' },
   { key: 'fundamentals', label: '基本面', icon: 'fundamentals' },
   { key: 'more', label: '更多', icon: 'more' },
@@ -43,13 +42,13 @@ export default function App() {
     if (detail.kind === 'candidate') return <CandidateDetailPage id={Number(detail.id)} back={back}/>
     if (detail.kind === 'watchlist') return <WatchlistPage back={back} openStock={symbol => push({ kind: 'stock', id: symbol })}/>
     if (detail.kind === 'reports') return <ReportsPage back={back} initialId={detail.id == null ? null : Number(detail.id)}/>
-    if (detail.kind === 'activity') return <ActivityPage back={back} openReport={id => push({ kind: 'reports', id })}/>
+    if (detail.kind === 'activity') return <ActivityPage back={back} initialSegment={detail.segment || 'news'} initialTicker={typeof detail.id === 'string' ? detail.id : ''} openReport={id => push({ kind: 'reports', id })}/>
     if (detail.kind === 'discovery') return <DiscoveryPage back={back} openCandidate={id => push({ kind: 'candidate', id })}/>
+    if (detail.kind === 'journal') return <JournalPage back={back} initialMode={detail.mode || 'list'} initialLogId={typeof detail.id === 'number' ? detail.id : null}/>
   }
 
   const pages: Record<RootTab, ReactNode> = {
-    overview: <OverviewPage username={user.data.username} openStock={symbol => push({ kind: 'stock', id: symbol })} openActivity={() => push({ kind: 'activity' })}/>,
-    portfolio: <PortfolioPage openPosition={symbol => push({ kind: 'position', id: symbol })}/>,
+    overview: <OverviewPage username={user.data.username} openStock={symbol => push({ kind: 'stock', id: symbol })} openPosition={symbol => push({ kind: 'position', id: symbol })} openActivity={section => push({ kind: 'activity', segment: section === 'movement' ? 'reports' : 'news' })} openReport={id => push({ kind: 'reports', id })} openJournal={request => push({ kind: 'journal', id: request.mode === 'edit' ? request.id : undefined, mode: request.mode === 'new' ? 'new' : 'list' })}/>,
     chat: <ChatPage/>,
     fundamentals: <FundamentalsPage/>,
     more: <MorePage user={user.data} openDiscovery={() => push({ kind: 'discovery' })} openWatchlist={() => push({ kind: 'watchlist' })} openReports={() => push({ kind: 'reports' })} logout={() => { clearToken(); queryClient.clear(); setTokenVersion(value => value + 1) }}/>,

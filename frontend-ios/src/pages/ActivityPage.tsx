@@ -13,11 +13,11 @@ type Segment = 'news' | 'calendar' | 'reports'
 const eventLabels: Record<string, string> = { earnings: '财报', dividend: '分红', split: '拆股', economic: '宏观事件' }
 const reportLabels: Record<string, string> = { movement: '价格异动', premarket: '盘前', postmarket: '盘后', earnings_before: '财报前', earnings_after: '财报后' }
 
-export function ActivityPage({ openReport, back }: { openReport: (id: number) => void; back?: () => void }) {
+export function ActivityPage({ openReport, back, initialSegment = 'news', initialTicker = '' }: { openReport: (id: number) => void; back?: () => void; initialSegment?: Segment; initialTicker?: string }) {
   const client = useQueryClient()
-  const [segment, setSegment] = useState<Segment>('news')
-  const [newsScope, setNewsScope] = useState<'market' | 'company'>('market')
-  const [ticker, setTicker] = useState('')
+  const [segment, setSegment] = useState<Segment>(initialSegment)
+  const [newsScope, setNewsScope] = useState<'market' | 'company'>(initialTicker ? 'company' : 'market')
+  const [ticker, setTicker] = useState(initialTicker)
   const [topic, setTopic] = useState('')
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const end = useMemo(() => { const date = new Date(); date.setDate(date.getDate() + 30); return date.toISOString().slice(0, 10) }, [])

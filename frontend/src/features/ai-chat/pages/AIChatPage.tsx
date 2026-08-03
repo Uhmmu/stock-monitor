@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import '../ai-chat-mobile.css'
 import {
   archiveConversation,
   conversationKeys,
@@ -25,7 +24,6 @@ import { ChatDialog } from '../components/ChatDialog'
 import { CitationDrawer } from '../components/CitationDrawer'
 import { ConversationSidebar } from '../components/ConversationSidebar'
 import { MessageComposer } from '../components/MessageComposer'
-import { ModelSelector } from '../components/ModelSelector'
 import { MessageList } from '../components/MessageList'
 import { DeepSearchConfirmDialog } from '../search/DeepSearchConfirmDialog'
 import { DeepSearchProgress } from '../search/DeepSearchProgress'
@@ -86,12 +84,7 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
 
   useEffect(() => {
     if (window.location.pathname.startsWith('/ai-memory')) window.history.replaceState({}, '', '/ai/new')
-    const normalizeNewRoute = () => {
-      if (window.location.pathname === '/ai') window.history.replaceState({}, '', `/ai/new${window.location.search}`)
-    }
-    normalizeNewRoute()
     const onPop = () => {
-      normalizeNewRoute()
       setConversationId(routeConversationId())
       const next = new URLSearchParams(window.location.search)
       setInitialSymbol(next.get('symbol')?.toUpperCase() || null)
@@ -307,14 +300,7 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
       onSettings={() => { setSidebarOpen(false); setMemorySettingsOpen(true) }}
     />
     <section className="ai-chat-workspace">
-      <header className="ai-chat-header">
-        <button className="ai-conversation-toggle" onClick={() => setSidebarOpen(true)} aria-label="打开会话列表">☰</button>
-        <div className="ai-chat-header-title">
-          <span className="ai-chat-header-name">Chat</span>
-          <ModelSelector model={effectiveModel} models={aiConfig.data?.models || []} onModel={changeModel} disabled={generating}/>
-        </div>
-        <button type="button" className="ai-new-chat-button" onClick={newConversation} aria-label="开始新对话" title="开始新对话">＋</button>
-      </header>
+      <button className="ai-conversation-toggle" onClick={() => setSidebarOpen(true)} aria-label="打开会话列表">☰</button>
       {detail.isError && <div className="ai-chat-error" role="alert">该会话不存在、已删除，或当前账户无权访问。</div>}
       {!conversationId && !displayMessages.length ? <div className="ai-chat-empty">
         <h2>开始一段对话</h2><p>我会读取你已保存的持仓、估值、新闻与 SEC 数据，并把依据放在回答旁边。</p>
@@ -349,6 +335,9 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
         generating={generating}
         stopping={stream.state === 'stopping'}
         disabled={detail.isError}
+        model={effectiveModel}
+        models={aiConfig.data?.models || []}
+        onModel={changeModel}
         webMode={selectedWebMode}
         webSearchConfig={aiConfig.data?.web_search}
         onWebMode={changeWebMode}

@@ -24,11 +24,40 @@ export type Position = {
   symbol: string
   total_quantity: number
   average_cost: number
+  total_cost?: number | null
   currency: string
   current_price: number | null
+  previous_close?: number | null
+  daily_change_amount?: number | null
+  daily_change_percent?: number | null
   market_value: number | null
   unrealized_pnl: number | null
   unrealized_pnl_percent: number | null
+  total_pnl?: number | null
+  total_return_pct?: number | null
+  daily_pnl?: number | null
+  daily_return_pct?: number | null
+  holding_days?: number | null
+  first_trade_at?: string | null
+  price_source?: string | null
+  price_as_of?: string | null
+  price_is_report_fallback?: boolean
+  price_available?: boolean
+  project_price_available?: boolean
+  quantity_source?: string | null
+  average_cost_source?: string | null
+  ibkr_conid?: number | null
+  ibkr_market_price?: number | null
+  ibkr_market_value?: number | null
+  ibkr_unrealized_pnl?: number | null
+  ibkr_fx_rate_to_base?: number | null
+  ibkr_report_date?: string | null
+  fx_rate?: number | null
+  fx_rate_source?: string | null
+  base_currency_market_value?: number | null
+  base_currency_total_cost?: number | null
+  base_currency_unrealized_pnl?: number | null
+  authority_source?: string | null
   valuation_available: boolean
   portfolio_weight: number | null
 }
@@ -41,6 +70,13 @@ export type PortfolioSummary = {
   total_cost: number
   total_unrealized_pnl: number
   total_unrealized_pnl_percent: number | null
+  net_asset_value?: number | null
+  invested_market_value?: number | null
+  cash?: number | null
+  latest_daily_return?: number | null
+  time_weighted_return?: number | null
+  latest_sync_at?: string | null
+  account_data_source?: string | null
   has_unpriced_positions: boolean
   has_unconverted_positions: boolean
   fx_conversion_used: boolean

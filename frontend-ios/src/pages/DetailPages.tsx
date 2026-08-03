@@ -4,9 +4,10 @@ import ReactMarkdown from 'react-markdown'
 import rehypeSanitize from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
 import { api } from '@shared/api'
-import { formatDateTime, formatMoney, formatPercent } from '@shared/format'
-import type { Dashboard, DiscoveryCandidate, PortfolioSummary, Report, ReportDetail, WatchItem } from '@shared/types'
+import { formatDateTime, formatPercent } from '@shared/format'
+import type { Dashboard, DiscoveryCandidate, Report, ReportDetail, WatchItem } from '@shared/types'
 import { InsetList, IOSPage, ListRow, LoadingState, NavigationBar, StateView, StatusPill } from '../components'
+import { MobilePositionWorkspace } from './MobilePositionWorkspace'
 
 type CandidateDetail = DiscoveryCandidate & { sources?: { title: string; url: string; origin: string }[]; thesis_breakers?: string[] }
 
@@ -18,9 +19,7 @@ export function StockDetailPage({ symbol, back }: { symbol: string; back: () => 
 }
 
 export function PositionDetailPage({ symbol, back }: { symbol: string; back: () => void }) {
-  const query = useQuery({ queryKey: ['ios-portfolio-summary'], queryFn: () => api<PortfolioSummary>('/portfolio/summary') })
-  const item = query.data?.positions.find(position => position.symbol === symbol)
-  return <><NavigationBar title={symbol} eyebrow="持仓详情" back={back}/><IOSPage className="detail-page">{query.isLoading ? <LoadingState rows={5}/> : !item ? <StateView title="持仓不存在" message="该仓位可能已平仓。"/> : <><section className="quote-hero"><span>当前市值</span><strong>{formatMoney(item.market_value, item.currency)}</strong><StatusPill tone={(item.unrealized_pnl || 0) >= 0 ? 'positive' : 'negative'}>{formatPercent(item.unrealized_pnl_percent)}</StatusPill></section><InsetList label="仓位"><ListRow title="持有数量" value={item.total_quantity.toLocaleString('zh-CN')}/><ListRow title="平均成本" value={formatMoney(item.average_cost, item.currency)}/><ListRow title="当前价格" value={formatMoney(item.current_price, item.currency)}/><ListRow title="浮动盈亏" value={formatMoney(item.unrealized_pnl, item.currency)}/><ListRow title="组合权重" value={formatPercent(item.portfolio_weight).replace('+', '')}/></InsetList></>}</IOSPage></>
+  return <MobilePositionWorkspace symbol={symbol} back={back}/>
 }
 
 export function CandidateDetailPage({ id, back }: { id: number; back: () => void }) {
