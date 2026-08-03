@@ -113,6 +113,8 @@ class Settings(BaseSettings):
     ibkr_flex_query_id: str = ""
     ibkr_flex_base_url: str = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
     ibkr_flex_timeout_seconds: float = 60.0
+    ibkr_flex_auto_sync_enabled: bool = True
+    ibkr_flex_auto_sync_interval_hours: int = 6
     ibkr_proxy_url: str = "socks5h://127.0.0.1:10808"
 
     # Server-only Alpha Vantage economic time-series integration.  The

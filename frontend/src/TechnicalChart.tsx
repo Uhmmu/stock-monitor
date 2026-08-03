@@ -249,12 +249,19 @@ export function TechnicalChart({
   const [pendingAlert,setPendingAlert]=useState<{price:number;direction:'above'|'below'}|null>(null)
   const [priceAlerts,setPriceAlerts]=useState(initialPriceAlerts)
   const [alertStatus,setAlertStatus]=useState('')
+  const [mobileStatic,setMobileStatic]=useState(()=>typeof window!=='undefined'&&window.matchMedia('(max-width: 640px)').matches)
   const selected=series[timeframe]||{candles:[],moving_averages:EMPTY_MA}
   const data = useMemo(()=>prepareTechnicalChartData(selected.candles,selected.moving_averages),[selected])
   const volumeProfile=useMemo(()=>buildVolumeProfile(selected.candles),[selected.candles])
 
   useEffect(()=>setPriceAlerts(initialPriceAlerts),[initialPriceAlerts])
   useEffect(()=>localStorage.setItem(drawingKey(symbol),JSON.stringify(drawings)),[drawings,symbol])
+  useEffect(()=>{
+    const media=window.matchMedia('(max-width: 640px)')
+    const update=()=>setMobileStatic(media.matches)
+    media.addEventListener('change',update)
+    return()=>media.removeEventListener('change',update)
+  },[])
 
   useEffect(()=>{
     const host=hostRef.current
@@ -475,9 +482,13 @@ export function TechnicalChart({
     })}</g>
   }
 
+  if(mobileStatic) return <div className="technical-mobile-static">
+    {staticChartUrl?<StaticChartLink url={staticChartUrl} symbol={symbol} visible/>:<div className="technical-chart-empty">静态技术图缓存暂不可用。</div>}
+    <small>手机端展示后端生成的静态技术图，避免缩放、拖动和绘图工具干扰阅读。</small>
+  </div>
   if(!data.candles.length) return <div className="technical-dynamic-chart technical-chart-fallback">
     <div className="technical-chart-empty">该周期 OHLC 数据不足，暂无法绘制动态图表。</div>
-    {staticChartUrl&&<div className="technical-chart-actions"><span>未请求外部行情</span><StaticChartLink url={staticChartUrl} symbol={symbol}/></div>}
+    {staticChartUrl&&<StaticChartLink url={staticChartUrl} symbol={symbol} visible/>}
   </div>
   if(failed) return staticChartUrl?<StaticChartLink url={staticChartUrl} symbol={symbol} visible/>:<div className="technical-chart-empty">动态图表初始化失败，且没有可用的静态缓存。</div>
 

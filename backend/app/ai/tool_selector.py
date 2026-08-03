@@ -40,7 +40,10 @@ DOMAIN_RULES = {
 }
 
 PREFERRED = {
-    "portfolio": ["get_portfolio_summary", "get_portfolio_positions", "get_position_detail", "get_portfolio_risk_analysis"],
+    # Historical analysis runs are intentionally excluded here. They can
+    # contain an older position snapshot and must not be treated as current
+    # holdings merely because the user mentioned their portfolio.
+    "portfolio": ["get_portfolio_summary", "get_portfolio_positions", "get_position_detail"],
     "news": ["get_latest_news", "search_news", "get_news_detail"],
     "sec": ["get_sec_filings", "get_sec_events", "get_sec_financial_facts", "get_insider_trades"],
     "valuation": ["get_latest_valuation", "get_valuation_history", "compare_valuations"],

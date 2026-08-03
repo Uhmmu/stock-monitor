@@ -51,3 +51,24 @@ def test_news_summary_uses_low_latency_translation_stack(monkeypatch):
     assert model == "haiku-test"
     assert captured["temperature"] == 0
     assert "Article body" in captured["messages"][1]["content"]
+
+
+def test_news_summary_retries_when_provider_ignores_chinese_requirement(monkeypatch):
+    replies = iter(["- English summary only", "- 中文要点已经修正"])
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=next(replies)))]
+            )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    monkeypatch.setattr(llm, "_translation_client_and_model", lambda: (client, "haiku-test"))
+
+    summary, _ = llm.summarize_news("Title", "Article body")
+
+    assert summary == "- 中文要点已经修正"
+    assert len(calls) == 2
+    assert "不是中文" in calls[1]["messages"][-1]["content"]

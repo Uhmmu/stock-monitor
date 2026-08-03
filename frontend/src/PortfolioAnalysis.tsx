@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AreaSeries, ColorType, LineSeries, createChart, type Time } from 'lightweight-charts'
 import { post } from './api'
+import { Sheet } from './Sheet'
 import { cacheTimeLabel, latestFreshAnalysis, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
 
 export type RiskPoint={date:string;value:number}
@@ -57,11 +58,13 @@ export function PortfolioRiskAnalysis({portfolioId,currency,healthContent}:{port
   const history=usePortfolioAnalysisHistory()
   const restoredCache=useRef(false)
   const [mode,setMode]=useState<'common_start'|'dynamic_available'>('common_start')
+  const [settingsOpen,setSettingsOpen]=useState(false)
   const [launchedMode,setLaunchedMode]=useState<'common_start'|'dynamic_available'|null>(null)
   const run=useMutation({mutationFn:(selectedMode:'common_start'|'dynamic_available')=>post<PortfolioRiskResult>('/portfolio/analysis/metrics',{portfolio_id:portfolioId,mode:selectedMode,covariance_method:'ledoit_wolf',confidence_level:.95}),onMutate:selectedMode=>setLaunchedMode(selectedMode),onSuccess:()=>client.invalidateQueries({queryKey:['portfolio-analysis-history']})})
   const savedRun=latestFreshAnalysis<PortfolioRiskResult>(history.data?.runs,'metrics',item=>item.result?.data_period.mode===mode)
   const liveResult=launchedMode===mode?run.data:null
   const data=liveResult||savedRun?.result
+  const controls=(mobile=false)=><div className="risk-toolbar"><div><button className={mode==='common_start'?'active':''} onClick={()=>setMode('common_start')} disabled={run.isPending}>完整持仓共同区间</button><button className={mode==='dynamic_available'?'active':''} onClick={()=>setMode('dynamic_available')} disabled={run.isPending}>动态可用区间</button></div><button className="risk-run" onClick={()=>{run.mutate(mode);if(mobile)setSettingsOpen(false)}} disabled={run.isPending}>{run.isPending?'计算中…':data?'重新计算':'运行组合风险分析'}</button></div>
 
   useEffect(()=>{
     if(restoredCache.current||!history.data)return
@@ -73,7 +76,8 @@ export function PortfolioRiskAnalysis({portfolioId,currency,healthContent}:{port
     {healthContent}
     <section className="health-section portfolio-risk-section">
       <div className="portfolio-health-heading"><div><small>历史风险</small><h3>组合风险</h3>{savedRun&&!liveResult&&<span className="analysis-cache-note">{cacheTimeLabel(savedRun)}</span>}</div><span>收缩协方差估计</span></div>
-      <div className="risk-toolbar"><div><button className={mode==='common_start'?'active':''} onClick={()=>setMode('common_start')} disabled={run.isPending}>完整持仓共同区间</button><button className={mode==='dynamic_available'?'active':''} onClick={()=>setMode('dynamic_available')} disabled={run.isPending}>动态可用区间</button></div><button className="risk-run" onClick={()=>run.mutate(mode)} disabled={run.isPending}>{run.isPending?'计算中…':data?'重新计算':'运行组合风险分析'}</button></div>
+      <button className="analysis-settings-fab risk-settings-fab" onClick={()=>setSettingsOpen(true)}>风险参数 <span>⚙</span></button>
+      <div className="analysis-desktop-parameters">{controls()}</div>
       {history.isLoading&&<div className="empty">正在读取七天内的风险分析…</div>}
       {!history.isLoading&&!data&&!run.isPending&&<div className="empty">该计算口径在最近 7 天没有可用结果，请手动运行组合风险分析。</div>}
       {run.error&&<p className="error">{run.error.message}</p>}
@@ -99,5 +103,6 @@ export function PortfolioRiskAnalysis({portfolioId,currency,healthContent}:{port
       </>}
     </section>
     <p className="portfolio-analysis-disclaimer">分析结果基于历史数据、统计模型和用户设定假设，不构成投资建议。历史表现和模拟结果不代表未来收益。<br/>当前历史行情主要覆盖 2021 年之后，部分历史风险指标可能低估完整市场周期中的极端风险。</p>
+    <Sheet open={settingsOpen} onClose={()=>setSettingsOpen(false)} title="组合风险参数"><div className="analysis-mobile-parameters">{controls(true)}</div></Sheet>
   </div>
 }

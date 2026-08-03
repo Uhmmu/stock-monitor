@@ -93,7 +93,7 @@ def portfolio_attribution(
 
 @router.get("/benchmark", response_model=PortfolioBenchmarkResponse)
 def portfolio_benchmark(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return build_benchmark_comparison(_portfolio(db, user))
+    return build_benchmark_comparison(_portfolio(db, user), db)
 
 
 @router.put("/benchmark", response_model=PortfolioBenchmarkResponse)
@@ -110,7 +110,7 @@ def portfolio_benchmark_update(
     portfolio.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(portfolio)
-    return build_benchmark_comparison(portfolio)
+    return build_benchmark_comparison(portfolio, db)
 
 
 @router.get("/positions")

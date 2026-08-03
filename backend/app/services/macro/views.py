@@ -12,7 +12,7 @@ from app.models import MacroObservation, MacroSeries, MacroSyncRun
 from .context import _curve_analysis, _float, load_macro_observations
 from .definitions import DERIVED_SERIES, RAW_SERIES, SOURCE_NAME, get_series_definition
 from .derived import MacroDerivedMetricsService
-from .sync import PROVIDER, usage_status
+from .sync import PROVIDER, redact_provider_error, usage_status
 
 
 DISCLAIMER = "仅为规则化市场环境摘要与研究信息，不构成投资建议。市场反应取决于历史趋势与实际数据相对预期的差异；当前模块未接入一致预期数据。"
@@ -338,17 +338,29 @@ def build_overview(db) -> dict[str, Any]:
         item = _definition_with_latest(db, key, values, series_rows, service)
         if item: cards.append(item)
     available = sum(1 for definition in RAW_SERIES if values.get(definition["series_key"]))
-    errors = latest_run.error_summary_json if latest_run and isinstance(latest_run.error_summary_json, dict) else {}
+    errors = redact_provider_error(latest_run.error_summary_json) if latest_run and isinstance(latest_run.error_summary_json, dict) else {}
     usage = usage_status(db, settings).as_dict()
     configured = bool(settings.alpha_vantage_enabled and settings.alpha_vantage_api_key.strip())
     if not configured: source_status = "not_configured"
     elif latest_run and latest_run.status in {"failed", "partial_success"}: source_status = "partial_failure" if available else "failed"
     elif observations and latest_observation_date and (datetime.now(UTC).date() - latest_observation_date).days > 90: source_status = "stale"
     else: source_status = "healthy" if available else "no_data"
+    last_full_success_at = db.scalar(
+        select(MacroSyncRun.finished_at).where(
+            MacroSyncRun.provider == PROVIDER,
+            MacroSyncRun.status == "success",
+            (
+                (MacroSyncRun.requested_series_count >= len(RAW_SERIES))
+                | (MacroSyncRun.trigger_type == "scheduled_retry")
+            ),
+        ).order_by(MacroSyncRun.finished_at.desc()).limit(1)
+    )
     return _safe({
         "source": {"provider": PROVIDER, "name": SOURCE_NAME, "enabled": settings.alpha_vantage_enabled, "configured": configured, "status": source_status, "status_label_zh": {"not_configured": "未配置", "healthy": "正常", "partial_failure": "部分失败", "failed": "同步失败", "stale": "数据可能过期", "no_data": "暂无数据"}.get(source_status, source_status)},
         "last_sync_at": latest_run.finished_at if latest_run else None,
-        "last_successful_sync_at": db.scalar(select(MacroSyncRun.finished_at).where(MacroSyncRun.provider == PROVIDER, MacroSyncRun.status.in_(["success", "partial_success"])).order_by(MacroSyncRun.finished_at.desc()).limit(1)),
+        "last_attempt_status": latest_run.status if latest_run else None,
+        "last_successful_sync_at": last_full_success_at,
+        "last_full_success_at": last_full_success_at,
         "latest_observation_date": latest_observation_date,
         "latest_fetched_at": fetched_at,
         "usage": usage,
@@ -377,7 +389,8 @@ def build_yield_curve(db) -> dict[str, Any]:
 def build_sync_status(db) -> dict[str, Any]:
     overview = build_overview(db)
     runs = db.scalars(select(MacroSyncRun).where(MacroSyncRun.provider == PROVIDER).order_by(MacroSyncRun.started_at.desc()).limit(20)).all()
-    return {"source": overview["source"], "usage": overview["usage"], "last_successful_sync_at": overview["last_successful_sync_at"], "next_scheduled_sync": "每日 08:00 UTC（Celery Beat due check）", "runs": [_safe({"id": row.id, "status": row.status, "started_at": row.started_at, "finished_at": row.finished_at, "requested_series_count": row.requested_series_count, "successful_series_count": row.successful_series_count, "failed_series_count": row.failed_series_count, "api_requests_used": row.api_requests_used, "inserted_count": row.inserted_count, "updated_count": row.updated_count, "unchanged_count": row.unchanged_count, "errors": row.error_summary_json, "trigger_type": row.trigger_type}) for row in runs], "disclaimer": DISCLAIMER}
+    hour = max(0, min(23, int(get_settings().alpha_vantage_macro_sync_hour_utc)))
+    return {"source": overview["source"], "usage": overview["usage"], "last_successful_sync_at": overview["last_successful_sync_at"], "last_attempt_at": overview["last_sync_at"], "last_attempt_status": overview["last_attempt_status"], "next_scheduled_sync": f"每日 {hour:02d}:00 UTC（Celery Beat due check）", "runs": [_safe({"id": row.id, "status": row.status, "started_at": row.started_at, "finished_at": row.finished_at, "requested_series_count": row.requested_series_count, "successful_series_count": row.successful_series_count, "failed_series_count": row.failed_series_count, "api_requests_used": row.api_requests_used, "inserted_count": row.inserted_count, "updated_count": row.updated_count, "unchanged_count": row.unchanged_count, "errors": redact_provider_error(row.error_summary_json), "trigger_type": row.trigger_type}) for row in runs], "disclaimer": DISCLAIMER}
 
 
 def build_explanation(db, key: str) -> dict[str, Any] | None:

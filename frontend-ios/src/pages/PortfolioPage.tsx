@@ -5,7 +5,7 @@ import type { PortfolioSummary, Position } from '@shared/types'
 import { GlassCard, IOSPage, LoadingState, SectionHeader, StateView, StatusPill } from '../components'
 
 export function PortfolioPage({ openPosition }: { openPosition: (symbol: string) => void }) {
-  const summary = useQuery({ queryKey: ['ios-portfolio-summary'], queryFn: () => api<PortfolioSummary>('/portfolio/summary'), staleTime: 30_000 })
+  const summary = useQuery({ queryKey: ['ios-portfolio-summary'], queryFn: () => api<PortfolioSummary>('/portfolio/summary'), staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: true })
   const data = summary.data
   if (summary.isLoading) return <IOSPage><section className="large-title"><span>PORTFOLIO</span><h1>持仓</h1></section><LoadingState rows={6}/></IOSPage>
   if (summary.isError) return <IOSPage><section className="large-title"><h1>持仓</h1></section><StateView title="持仓读取失败" message="请检查网络后重试。" retry={() => summary.refetch()}/></IOSPage>

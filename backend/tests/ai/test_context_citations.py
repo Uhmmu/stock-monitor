@@ -5,6 +5,7 @@ import pytest
 from app.ai.budgets import OrchestratorBudget
 from app.ai.citations import CitationBuilder, CitationValidator
 from app.ai.context_builder import ContextBuilder
+from app.ai.orchestrator import _build_current_portfolio_context
 from app.ai.context_trimmer import ContextTrimmer
 from app.ai.providers.schemas import ProviderMessage, ProviderToolCall
 from app.ai.schemas import AIRespondRequest
@@ -60,6 +61,41 @@ def test_selector_allow_deny_unknown_and_context_builder_injection_boundary():
     assert injected.messages[-2].role=="user"
     assert '"latest_price_snapshot"' in injected.messages[-2].content
     assert injected.messages[-1].content.endswith("MSFT 怎么样")
+
+
+def test_portfolio_intent_excludes_historical_analysis_and_injects_current_ledger():
+    selection = ToolSelector(tool_registry).select(
+        message="哪些持仓违背我的组合策略",
+        page_context=None,
+        active_symbol=None,
+        allowed_tools=None,
+        denied_tools=set(),
+    )
+    assert "get_portfolio_positions" in selection.tool_names
+    assert "get_portfolio_risk_analysis" not in selection.tool_names
+
+    class Gateway:
+        def portfolio_summary(self, portfolio_id):
+            assert portfolio_id == 7
+            return type("Response", (), {"data": {"portfolio_id": 7}})()
+
+        def portfolio_positions(self, portfolio_id, page, page_size, sort):
+            assert (portfolio_id, page, page_size, sort) == (7, 1, 100, "symbol")
+            freshness = type("Freshness", (), {"model_dump": lambda self, **_: {"status": "fresh"}})()
+            meta = type("Meta", (), {"total": 1})()
+            return type("Response", (), {
+                "data": [{"symbol": "MSFT", "total_quantity": 2}],
+                "freshness": freshness,
+                "meta": meta,
+            })()
+
+    context = _build_current_portfolio_context(
+        Gateway(),
+        AIRespondRequest(message="分析我的持仓", active_portfolio_id=7),
+    )
+    assert context is not None
+    assert '"current_positions":[{"symbol":"MSFT","total_quantity":2}]' in context
+    assert "historical chat" in context
 
 
 def test_citation_dedup_validation_filter_and_path_safety():

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -26,8 +26,8 @@ from app.services.macro.provider import (
     AlphaVantageRateLimitError,
     AlphaVantageSchemaError,
 )
-from app.services.macro.sync import ensure_series_definitions, run_macro_sync, usage_status
-from app.services.macro.views import build_explanation, build_series_detail, build_yield_curve
+from app.services.macro.sync import ensure_series_definitions, redact_provider_error, run_macro_sync, usage_status
+from app.services.macro.views import build_explanation, build_overview, build_series_detail, build_yield_curve
 from app.api.macro_routes import router
 
 
@@ -43,6 +43,16 @@ def test_normalizer_preserves_decimal_filters_missing_and_deduplicates():
     assert rows[0].observation_date == date(2024, 1, 1)
     with pytest.raises(MacroNormalizationError):
         normalize_provider_rows("us_cpi", [{"date": "bad", "value": "1"}], unit="index")
+
+
+def test_macro_provider_errors_redact_api_keys():
+    settings = Settings(alpha_vantage_api_key="EXAMPLESECRET123")
+    result = redact_provider_error(
+        {"series": {"message": "We detected your API key as EXAMPLESECRET123"}},
+        settings,
+    )
+    assert result["series"]["message"].endswith("[REDACTED]")
+    assert "EXAMPLESECRET123" not in str(result)
 
 
 def test_derived_metrics_use_period_lags_and_compound_annualization():
@@ -168,3 +178,26 @@ def test_macro_overview_exposes_unconfigured_state_instead_of_500():
         assert response.json()["source"]["status"] == "not_configured"
     finally:
         db.close()
+
+
+def test_macro_overview_distinguishes_partial_attempt_from_full_success(monkeypatch):
+    engine = create_engine("sqlite+pysqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine, tables=[MacroSeries.__table__, MacroObservation.__table__, MacroApiUsage.__table__, MacroSyncRun.__table__])
+    monkeypatch.setattr("app.services.macro.views.get_settings", lambda: Settings())
+    with Session(engine) as db:
+        full = MacroSyncRun(
+            provider="alpha_vantage", status="success", trigger_type="manual",
+            requested_series_count=len(RAW_SERIES), successful_series_count=len(RAW_SERIES),
+            started_at=datetime(2026, 8, 2, 8, tzinfo=UTC), finished_at=datetime(2026, 8, 2, 8, 5, tzinfo=UTC),
+        )
+        partial = MacroSyncRun(
+            provider="alpha_vantage", status="partial_success", trigger_type="scheduled",
+            requested_series_count=len(RAW_SERIES), successful_series_count=10, failed_series_count=4,
+            started_at=datetime(2026, 8, 3, 8, tzinfo=UTC), finished_at=datetime(2026, 8, 3, 8, 5, tzinfo=UTC),
+        )
+        db.add_all([full, partial]); db.commit()
+        overview = build_overview(db)
+        assert overview["last_attempt_status"] == "partial_success"
+        assert overview["last_sync_at"].startswith("2026-08-03")
+        assert overview["last_full_success_at"].startswith("2026-08-02")
+        assert overview["source"]["name"] == "Alpha Vantage 宏观经济接口"

@@ -102,7 +102,7 @@ export function MessageComposer({ value, onChange, onSend, onStop, generating, s
       />
       <div className="ai-model-picker" ref={picker}>
         <button type="button" className="ai-model-trigger" onClick={() => setModelOpen(value => !value)} disabled={generating || !models.length} aria-haspopup="listbox" aria-expanded={modelOpen} aria-label={`当前模型：${currentModel?.label || model || '默认模型'}`}>
-          <ModelLogo family={currentModel?.family || 'other'}/><b>{currentModel?.label || model || '模型'}</b><i aria-hidden="true">⌃</i>
+          <ModelLogo family={currentModel?.family || 'other'}/><b>{currentModel?.label || model || (models.length ? '选择模型' : '模型列表不可用')}</b><i aria-hidden="true">⌃</i>
         </button>
         {modelOpen && <div className="ai-model-menu" role="listbox" aria-label="选择研究模型">
           <div className="ai-model-menu-heading"><b>选择模型</b><span>用于后续回答</span></div>

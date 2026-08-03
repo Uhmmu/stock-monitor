@@ -14,7 +14,7 @@ type MacroCard = {
 type Summary = { state: string; label_zh: string; tone: string; confidence: number; drivers: { series_key: string; observation_date: string | null; effect: string; reason: string }[]; disclaimer: string }
 type Overview = {
   source: { provider: string; name: string; enabled: boolean; configured: boolean; status: string; status_label_zh: string }
-  last_sync_at: string | null; last_successful_sync_at: string | null; latest_observation_date: string | null; latest_fetched_at: string | null
+  last_sync_at: string | null; last_attempt_status: string | null; last_successful_sync_at: string | null; last_full_success_at: string | null; latest_observation_date: string | null; latest_fetched_at: string | null
   usage: { used: number; daily_limit: number; reserved_requests: number; remaining: number; automatic_remaining: number; automatic_usable_limit: number; usage_date_utc: string }
   summaries: Record<string, Summary>; cards: MacroCard[]; curve_analysis: { state: string; label_zh: string; spread_10y_2y?: number | null; spread_10y_3m?: number | null; reason_codes?: string[] }
   integrity: { raw_series_count: number; available_series_count: number; missing_series_keys: string[]; errors: Record<string, unknown> }
@@ -97,12 +97,13 @@ class MacroDetailErrorBoundary extends Component<{ children: ReactNode; resetKey
 function MacroStatusBanner({ overview }: { overview: Overview }) {
   const source = overview.source
   if (!source.configured) return <div className="macro-status-banner macro-status-unconfigured"><span className="macro-status-dot"/><div><b>Alpha Vantage 宏观数据源未配置</b><p>管理员可在服务器环境变量中配置 Key；页面不会直接访问 Alpha Vantage。</p></div></div>
-  const partial = source.status === 'partial_failure' || source.status === 'stale'
-  return <div className={`macro-status-banner ${partial ? 'macro-status-warning' : ''}`}><span className="macro-status-dot"/><div><b>数据源：Alpha Vantage · {source.status_label_zh}</b><p>最后同步 {displayDateTime(overview.last_sync_at)} · 最新观察 {displayDate(overview.latest_observation_date)}</p></div><span className="macro-quota">今日项目侧调用 {overview.usage.used} / {overview.usage.daily_limit}<small>自动同步可用 {overview.usage.automatic_remaining} 次 · 预留 {overview.usage.reserved_requests} 次</small></span></div>
+  const partial = source.status === 'partial_failure' || source.status === 'failed' || source.status === 'stale'
+  const attemptLabel:Record<string,string>={success:'成功',partial_success:'部分成功',failed:'失败',running:'进行中'}
+  return <div className={`macro-status-banner ${partial ? 'macro-status-warning' : ''}`}><span className="macro-status-dot"/><div><b>数据源：Alpha Vantage 宏观经济接口 · {source.status_label_zh}</b><p>最后完整同步 {displayDateTime(overview.last_full_success_at||overview.last_successful_sync_at)} · 最新观察 {displayDate(overview.latest_observation_date)}</p>{overview.last_sync_at&&overview.last_attempt_status!=='success'&&<small>最近同步尝试 {displayDateTime(overview.last_sync_at)} · {attemptLabel[overview.last_attempt_status||'']||overview.last_attempt_status}</small>}</div><span className="macro-quota">今日项目侧调用 {overview.usage.used} / {overview.usage.daily_limit}<small>自动同步可用 {overview.usage.automatic_remaining} 次 · 预留 {overview.usage.reserved_requests} 次</small></span></div>
 }
 
 function SummaryStrip({ summaries, onSelect }: { summaries: Overview['summaries']; onSelect: (summary: Summary) => void }) {
-  return <div className="macro-summary-strip">{Object.entries(summaries).map(([key, summary]) => <button key={key} className={`macro-summary-chip ${toneClass(summary.tone)}`} onClick={() => onSelect(summary)}><span>{summaryLabels[key] || key}</span><strong>{summary.label_zh}</strong><small>置信度 {Math.round(summary.confidence * 100)}%</small></button>)}</div>
+  return <><p className="macro-rule-note">增长、通胀、就业与政策均由已存 Alpha Vantage 序列按本地确定性规则推导，不是 AI 生成；点击可查看指标、观察日期与判断原因。</p><div className="macro-summary-strip">{Object.entries(summaries).map(([key, summary]) => <button key={key} className={`macro-summary-chip ${toneClass(summary.tone)}`} onClick={() => onSelect(summary)}><span>{summaryLabels[key] || key}</span><strong>{summary.label_zh}</strong><small>规则推导 · 置信度 {Math.round(summary.confidence * 100)}%</small></button>)}</div></>
 }
 
 function YieldCurvePanel({ curve }: { curve?: YieldCurve }) {

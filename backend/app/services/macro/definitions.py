@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 
-SOURCE_NAME = "Alpha Vantage（数据标注的美国官方/FRED序列）"
+SOURCE_NAME = "Alpha Vantage 宏观经济接口"
 
 
 def _series(

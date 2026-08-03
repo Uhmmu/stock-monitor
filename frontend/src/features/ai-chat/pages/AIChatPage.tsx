@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   archiveConversation,
@@ -28,6 +28,7 @@ import { MessageList } from '../components/MessageList'
 import { DeepSearchConfirmDialog } from '../search/DeepSearchConfirmDialog'
 import { DeepSearchProgress } from '../search/DeepSearchProgress'
 import { effortForMode, isDeepMode } from '../search/searchModes'
+import { loadChatPreference, newestChatPreference, saveChatPreference, validateChatPreference } from '../preferences'
 import {
   AIMemorySettingsPage,
   ChatMemorySuggestions,
@@ -67,8 +68,9 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
   const [initialSymbol, setInitialSymbol] = useState<string | null>(() => params.get('symbol')?.toUpperCase() || null)
   const [initialContext, setInitialContext] = useState<string | null>(() => params.get('context'))
   const [draft, setDraft] = useState('')
-  const [selectedModel, setSelectedModel] = useState('')
-  const [selectedWebMode, setSelectedWebMode] = useState<WebAccessMode>('off')
+  const initialPreference = useRef(loadChatPreference())
+  const [selectedModel, setSelectedModel] = useState(() => initialPreference.current?.model || '')
+  const [selectedWebMode, setSelectedWebMode] = useState<WebAccessMode>(() => initialPreference.current?.web_access_mode || 'off')
   const [confirmedWebMode, setConfirmedWebMode] = useState<WebAccessMode | null>(null)
   const [confirmIntent, setConfirmIntent] = useState<{ mode: WebAccessMode; action: 'select' | 'send' | 'regenerate'; message?: AIMessage } | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -115,6 +117,7 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
   })
   const aiConfig = useQuery({ queryKey: ['ai-config'], queryFn: getAIConfig, enabled, staleTime: 5 * 60 * 1000 })
   const conversationItems = conversations.data?.pages.flatMap(page => page.items) || []
+  const latestConversation = conversationItems[0]
   const detail = useQuery({ queryKey: conversationKeys.detail(conversationId || 0), queryFn: () => getConversation(conversationId!), enabled: enabled && conversationId != null })
   const messages = useInfiniteQuery({
     queryKey: conversationKeys.messages(conversationId || 0),
@@ -154,13 +157,32 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
   },onSuccess:()=>{void usage.refetch();void client.invalidateQueries({queryKey:memoryKeys.all})}})
 
   useEffect(() => {
-    const model = detail.data?.model || aiConfig.data?.default_model
-    if (model) setSelectedModel(model)
-  }, [detail.data, aiConfig.data?.default_model])
-  useEffect(() => {
-    const mode = detail.data?.web_access_mode || aiConfig.data?.web_search.default_mode
-    if (mode) setSelectedWebMode(mode)
-  }, [detail.data?.web_access_mode, aiConfig.data?.web_search.default_mode])
+    const config = aiConfig.data
+    if (!config) return
+    if (conversationId != null) {
+      if (!detail.data) return
+      const preference = validateChatPreference({
+        model: detail.data.model || config.default_model,
+        web_access_mode: detail.data.web_access_mode,
+        updated_at: detail.data.updated_at,
+      }, config)
+      setSelectedModel(preference.model)
+      setSelectedWebMode(preference.web_access_mode)
+      saveChatPreference(preference.model, preference.web_access_mode)
+      return
+    }
+    const stored = loadChatPreference()
+    const latest = latestConversation ? {
+      model: latestConversation.model || config.default_model,
+      web_access_mode: latestConversation.web_access_mode,
+      updated_at: latestConversation.last_message_at || latestConversation.updated_at,
+    } : null
+    const fallback = newestChatPreference(stored, latest)
+    const preference = validateChatPreference(fallback, config)
+    setSelectedModel(preference.model)
+    setSelectedWebMode(preference.web_access_mode)
+    saveChatPreference(preference.model, preference.web_access_mode)
+  }, [conversationId, detail.data, aiConfig.data, latestConversation?.id, latestConversation?.model, latestConversation?.web_access_mode, latestConversation?.updated_at, latestConversation?.last_message_at])
 
   const serverMessages = useMemo(() => {
     const pages = [...(messages.data?.pages || [])].reverse()
@@ -194,7 +216,11 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
     setInitialSymbol(null)
     setInitialContext(null)
     setDraft('')
-    setSelectedWebMode(aiConfig.data?.web_search.default_mode || 'off')
+    if (aiConfig.data) {
+      const preference = validateChatPreference(loadChatPreference(), aiConfig.data)
+      setSelectedModel(preference.model)
+      setSelectedWebMode(preference.web_access_mode)
+    }
     setConfirmedWebMode(null)
     setSidebarOpen(false)
     navigate(null)
@@ -234,10 +260,12 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
   }
   const changeModel = (model: string) => {
     setSelectedModel(model)
+    saveChatPreference(model, selectedWebMode)
     if (conversationId != null) update.mutate({ id: conversationId, body: { model } })
   }
   const applyWebMode = (mode: WebAccessMode, preserveConfirmation = false) => {
     setSelectedWebMode(mode)
+    saveChatPreference(effectiveModel, mode)
     if (!preserveConfirmation && mode !== confirmedWebMode) setConfirmedWebMode(null)
     if (conversationId != null) update.mutate({ id: conversationId, body: { web_access_mode: mode } })
   }
@@ -300,7 +328,7 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
       onSettings={() => { setSidebarOpen(false); setMemorySettingsOpen(true) }}
     />
     <section className="ai-chat-workspace">
-      <button className="ai-conversation-toggle" onClick={() => setSidebarOpen(true)} aria-label="打开会话列表">☰</button>
+      <button className="ai-conversation-toggle" onClick={() => setSidebarOpen(true)} aria-label="打开会话列表"><img src="/logo.png" alt=""/></button>
       {detail.isError && <div className="ai-chat-error" role="alert">该会话不存在、已删除，或当前账户无权访问。</div>}
       {!conversationId && !displayMessages.length ? <div className="ai-chat-empty">
         <h2>开始一段对话</h2><p>我会读取你已保存的持仓、估值、新闻与 SEC 数据，并把依据放在回答旁边。</p>

@@ -64,7 +64,7 @@ export type JournalPageProps = {
 }
 
 const fieldStyle: CSSProperties = { display: 'grid', gap: '.35rem', color: 'var(--secondary)', fontSize: '.72rem' }
-const inputStyle: CSSProperties = { width: '100%', minHeight: '2.8rem', padding: '0 .75rem', border: '1px solid var(--separator)', borderRadius: '12px', color: 'var(--text)', background: 'rgba(118,118,128,.07)', outline: 'none' }
+const inputStyle: CSSProperties = { width: '100%', minHeight: '2.8rem', padding: '0 .75rem', border: '1px solid var(--separator)', borderRadius: '12px', color: 'var(--text)', background: 'rgba(118,118,128,.07)', outline: 'none', fontSize: '1rem' }
 const textareaStyle: CSSProperties = { ...inputStyle, minHeight: '6.5rem', padding: '.7rem .75rem', resize: 'vertical', lineHeight: 1.5 }
 
 function todayKey() {
@@ -106,7 +106,7 @@ function factValue(facts: Record<string, unknown>, key: string) {
 function JournalCard({ log, onEdit }: { log: JournalLog; onEdit: (log: JournalLog) => void }) {
   const isDraft = log.status === 'draft'
   const facts = log.objective_facts || {}
-  return <article className="activity-card" style={{ display: 'block' }}>
+  return <article className="activity-card journal-card" style={{ display: 'block' }}>
     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '.7rem' }}>
       <div style={{ minWidth: 0, display: 'grid', gap: '.3rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '.45rem' }}>

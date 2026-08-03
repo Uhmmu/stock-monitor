@@ -130,7 +130,6 @@ def _source_rows(db: Session, run_id: int, sections: tuple[str, ...]) -> list[Ib
 def rebuild_cash_flows(db: Session, run: IbkrFlexSyncRun) -> int:
     db.execute(delete(IbkrNormalizedCashFlow).where(
         IbkrNormalizedCashFlow.user_id == run.user_id,
-        IbkrNormalizedCashFlow.source_sync_run_id == run.id,
         IbkrNormalizedCashFlow.calculation_version == CALCULATION_VERSION,
     ))
     count = 0
@@ -156,7 +155,6 @@ def rebuild_cash_flows(db: Session, run: IbkrFlexSyncRun) -> int:
 def rebuild_dividends(db: Session, run: IbkrFlexSyncRun) -> int:
     db.execute(delete(IbkrDividendEvent).where(
         IbkrDividendEvent.user_id == run.user_id,
-        IbkrDividendEvent.source_sync_run_id == run.id,
         IbkrDividendEvent.calculation_version == CALCULATION_VERSION,
     ))
     count = 0
@@ -202,7 +200,6 @@ def rebuild_round_trips(db: Session, run: IbkrFlexSyncRun) -> int:
     """
     db.execute(delete(IbkrTradeRoundTrip).where(
         IbkrTradeRoundTrip.user_id == run.user_id,
-        IbkrTradeRoundTrip.source_sync_run_id == run.id,
         IbkrTradeRoundTrip.calculation_version == CALCULATION_VERSION,
     ))
     securities = {row.ibkr_conid: row.id for row in db.scalars(select(Security).where(Security.ibkr_conid.is_not(None))).all()}
@@ -267,7 +264,6 @@ def rebuild_round_trips(db: Session, run: IbkrFlexSyncRun) -> int:
 def rebuild_daily_performance(db: Session, run: IbkrFlexSyncRun) -> int:
     db.execute(delete(IbkrAccountDailyPerformance).where(
         IbkrAccountDailyPerformance.user_id == run.user_id,
-        IbkrAccountDailyPerformance.source_sync_run_id == run.id,
         IbkrAccountDailyPerformance.calculation_version == CALCULATION_VERSION,
     ))
     flows = list(db.scalars(select(IbkrNormalizedCashFlow).where(
@@ -344,7 +340,6 @@ def rebuild_daily_performance(db: Session, run: IbkrFlexSyncRun) -> int:
 def rebuild_position_performance(db: Session, run: IbkrFlexSyncRun) -> int:
     db.execute(delete(IbkrPositionPerformanceDaily).where(
         IbkrPositionPerformanceDaily.user_id == run.user_id,
-        IbkrPositionPerformanceDaily.source_sync_run_id == run.id,
         IbkrPositionPerformanceDaily.calculation_version == CALCULATION_VERSION,
     ))
     securities = {row.ibkr_conid: row.id for row in db.scalars(select(Security).where(Security.ibkr_conid.is_not(None))).all()}

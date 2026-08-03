@@ -36,4 +36,23 @@ describe('AI message composer model selector', () => {
     expect(html).not.toContain('标准')
     expect(html).not.toContain('详细')
   })
+
+  it('shows an explicit unavailable state instead of silently losing the selector', () => {
+    const html = renderToStaticMarkup(<MessageComposer
+      value=""
+      onChange={() => undefined}
+      onSend={() => undefined}
+      onStop={() => undefined}
+      generating={false}
+      stopping={false}
+      model=""
+      models={[]}
+      onModel={() => undefined}
+      symbol={null}
+      pageContext={null}
+      onRemoveSymbol={() => undefined}
+    />)
+    expect(html).toContain('模型列表不可用')
+    expect(html).toContain('aria-haspopup="listbox"')
+  })
 })

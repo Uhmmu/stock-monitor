@@ -70,7 +70,8 @@ from app.services.stock_management import cache_official_relations, effective_pe
 from app.services.securities import provider_symbol
 from app.services.investment_calendar import sync_calendar
 from app.services.ownership import refresh_share_statistics
-from app.services.macro.sync import run_macro_sync
+from app.services.macro.definitions import RAW_SERIES
+from app.services.macro.sync import can_start_sync, run_macro_sync
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -111,6 +112,9 @@ celery_app.conf.beat_schedule = {
     # A frequent due check makes the daily 08:00 UTC schedule survive beat
     # restarts without accidentally running twice on the same UTC day.
     "sync-us-macro-due": {"task": "app.tasks.celery_app.ensure_us_macro_fresh", "schedule": 600},
+    # Flex users are enrolled only after one successful manual import. The
+    # due check is cheap and request_sync provides a per-user database lock.
+    "sync-ibkr-flex-due": {"task": "app.tasks.celery_app.ensure_ibkr_flex_fresh", "schedule": 900},
 }
 
 
@@ -132,16 +136,30 @@ def ensure_us_macro_fresh():
     now = datetime.now(UTC)
     if now.hour != max(0, min(23, int(settings.alpha_vantage_macro_sync_hour_utc))):
         return {"status": "not_due", "hour_utc": now.hour}
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     with SessionLocal() as db:
         latest = db.scalar(select(MacroSyncRun).where(
             MacroSyncRun.provider == "alpha_vantage",
-            MacroSyncRun.status.in_(["success", "partial_success"]),
-            MacroSyncRun.finished_at >= now.replace(hour=0, minute=0, second=0, microsecond=0),
         ).order_by(MacroSyncRun.finished_at.desc()).limit(1))
-        if latest:
+        if latest and latest.status == "success" and (
+            latest.requested_series_count >= len(RAW_SERIES)
+            or latest.trigger_type == "scheduled_retry"
+        ) and latest.finished_at and latest.finished_at >= today_start:
             return {"status": "already_synced", "run_id": latest.id}
-    task = sync_us_macro.delay(None, "scheduled")
-    return {"status": "queued", "task_id": task.id}
+        valid_keys = {row["series_key"] for row in RAW_SERIES}
+        retry_keys = [
+            key for key in (latest.error_summary_json or {})
+            if key in valid_keys
+        ] if latest and latest.status == "partial_success" else []
+        requested = retry_keys or None
+        request_count = len(retry_keys) if retry_keys else len(RAW_SERIES)
+        allowed, reason = can_start_sync(
+            db, request_count, trigger_type="scheduled", settings=settings,
+        )
+        if not allowed:
+            return {"status": "not_due", "reason": reason, "requested_series_count": request_count}
+    task = sync_us_macro.delay(requested, "scheduled_retry" if requested else "scheduled")
+    return {"status": "queued", "task_id": task.id, "series_keys": requested}
 
 
 @celery_app.task(
@@ -153,6 +171,22 @@ def sync_ibkr_flex_account(sync_run_id: int):
     """One read-only Flex pipeline shared by manual and future schedules."""
     from app.integrations.ibkr.sync import execute_sync
     return asyncio.run(execute_sync(sync_run_id))
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_ibkr_flex_fresh")
+def ensure_ibkr_flex_fresh():
+    settings = get_settings()
+    if not settings.ibkr_flex_enabled or not settings.ibkr_flex_auto_sync_enabled:
+        return {"status": "disabled"}
+    from app.integrations.ibkr.sync import request_due_syncs
+    with SessionLocal() as db:
+        run_ids = request_due_syncs(
+            db,
+            interval_hours=settings.ibkr_flex_auto_sync_interval_hours,
+        )
+    for run_id in run_ids:
+        sync_ibkr_flex_account.delay(run_id)
+    return {"status": "queued" if run_ids else "fresh", "run_ids": run_ids}
 
 
 @celery_app.task(

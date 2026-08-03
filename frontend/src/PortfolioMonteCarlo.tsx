@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, post } from './api'
+import { Sheet } from './Sheet'
 import { AnalysisDisclaimer } from './PortfolioScenarios'
 import { cacheTimeLabel, latestFreshAnalysis, requestsMatch, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
 
@@ -43,6 +44,7 @@ export function MonteCarloView({portfolioId}:{portfolioId:number}){
   const history=usePortfolioAnalysisHistory()
   const restoredCache=useRef(false)
   const [horizon,setHorizon]=useState(1),[simulations,setSimulations]=useState(5000),[method,setMethod]=useState('block_bootstrap'),[rebalance,setRebalance]=useState('quarterly'),[contribution,setContribution]=useState(0),[target,setTarget]=useState(''),[seed,setSeed]=useState('42'),[jobId,setJobId]=useState<number|null>(null)
+  const [settingsOpen,setSettingsOpen]=useState(false)
   const [launchedRequest,setLaunchedRequest]=useState<Record<string,unknown>|null>(null)
   const currentRequest={portfolio_id:portfolioId,horizon_years:horizon,simulations,method,block_length:10,rebalance_frequency:rebalance,monthly_contribution:contribution,target_value:target?Number(target):null,confidence_levels:[.8,.95],random_seed:seed===''?null:Number(seed)}
   const launch=useMutation({mutationFn:()=>post<{job_id:number}>('/portfolio/analysis/monte-carlo',{...currentRequest,force_refresh:true}),onMutate:()=>setLaunchedRequest(currentRequest),onSuccess:data=>setJobId(data.job_id)})
@@ -67,19 +69,21 @@ export function MonteCarloView({portfolioId}:{portfolioId:number}){
     setTarget(typeof request.target_value==='number'?String(request.target_value):'')
     setSeed(typeof request.random_seed==='number'?String(request.random_seed):'')
   },[history.data])
+  const parameters=(mobile=false)=><aside className="analysis-parameters">
+    <h3>模拟参数</h3>
+    <label><span>期限</span><select value={horizon} onChange={e=>setHorizon(Number(e.target.value))}><option value={1}>1 年</option><option value={3}>3 年</option><option value={5}>5 年</option></select></label>
+    <label><span>模拟次数</span><select value={simulations} onChange={e=>setSimulations(Number(e.target.value))}><option value={1000}>1,000</option><option value={5000}>5,000</option><option value={10000}>10,000</option></select></label>
+    <label><span>模拟方法</span><select value={method} onChange={e=>setMethod(e.target.value)}><option value="block_bootstrap">联合区块自助法（默认）</option><option value="multivariate_normal">多元正态（快速）</option><option value="student_t">厚尾分布（高级）</option></select></label>
+    <label><span>再平衡</span><select value={rebalance} onChange={e=>setRebalance(e.target.value)}><option value="none">不再平衡</option><option value="monthly">每月</option><option value="quarterly">每季度</option><option value="annual">每年</option></select></label>
+    <label><span>每月追加资金</span><input type="number" min="0" value={contribution} onChange={e=>setContribution(Number(e.target.value))}/></label>
+    <label><span>目标价值</span><input type="number" min="1" value={target} onChange={e=>setTarget(e.target.value)} placeholder="可选"/></label>
+    <label><span>固定随机种子</span><input type="number" min="0" value={seed} onChange={e=>setSeed(e.target.value)}/></label>
+    <button onClick={()=>{launch.mutate();if(mobile)setSettingsOpen(false)}} disabled={isRunning}>{isRunning?'模拟中…':savedRun?'重新模拟':'运行蒙特卡洛'}</button>
+  </aside>
   return <div className="monte-page">
+    <button className="analysis-settings-fab" onClick={()=>setSettingsOpen(true)}>调整参数 <span>⚙</span></button>
     <div className="analysis-workspace">
-      <aside className="analysis-parameters">
-        <h3>模拟参数</h3>
-        <label><span>期限</span><select value={horizon} onChange={e=>setHorizon(Number(e.target.value))}><option value={1}>1 年</option><option value={3}>3 年</option><option value={5}>5 年</option></select></label>
-        <label><span>模拟次数</span><select value={simulations} onChange={e=>setSimulations(Number(e.target.value))}><option value={1000}>1,000</option><option value={5000}>5,000</option><option value={10000}>10,000</option></select></label>
-        <label><span>模拟方法</span><select value={method} onChange={e=>setMethod(e.target.value)}><option value="block_bootstrap">联合区块自助法（默认）</option><option value="multivariate_normal">多元正态（快速）</option><option value="student_t">厚尾分布（高级）</option></select></label>
-        <label><span>再平衡</span><select value={rebalance} onChange={e=>setRebalance(e.target.value)}><option value="none">不再平衡</option><option value="monthly">每月</option><option value="quarterly">每季度</option><option value="annual">每年</option></select></label>
-        <label><span>每月追加资金</span><input type="number" min="0" value={contribution} onChange={e=>setContribution(Number(e.target.value))}/></label>
-        <label><span>目标价值</span><input type="number" min="1" value={target} onChange={e=>setTarget(e.target.value)} placeholder="可选"/></label>
-        <label><span>固定随机种子</span><input type="number" min="0" value={seed} onChange={e=>setSeed(e.target.value)}/></label>
-        <button onClick={()=>launch.mutate()} disabled={isRunning}>{isRunning?'模拟中…':savedRun?'重新模拟':'运行蒙特卡洛'}</button>
-      </aside>
+      <div className="analysis-desktop-parameters">{parameters()}</div>
       <main className="analysis-results">
         <div className="analysis-result-heading"><h3>概率分布</h3>{savedRun&&!liveResult&&<span>{cacheTimeLabel(savedRun)}</span>}</div>
         {history.isLoading&&!data&&<div className="empty">正在读取七天内的蒙特卡洛结果…</div>}
@@ -91,5 +95,6 @@ export function MonteCarloView({portfolioId}:{portfolioId:number}){
       </main>
     </div>
     <ExpectedReturnPanel portfolioId={portfolioId}/><AnalysisDisclaimer/>
+    <Sheet open={settingsOpen} onClose={()=>setSettingsOpen(false)} title="蒙特卡洛参数"><div className="analysis-mobile-parameters">{parameters(true)}</div></Sheet>
   </div>
 }

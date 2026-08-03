@@ -181,38 +181,21 @@ export function OverviewPage({ username, openStock, openPosition, openActivity, 
       </div>
     </section>
 
-    <GlassCard className="market-card">
+    <GlassCard className="market-card overview-performance-card">
       <div className="market-card-heading">
-        <div><span>三大指数</span><strong>{indices.data?.market.is_open ? '交易中' : '已收盘'}</strong></div>
+        <div><span>今日市场与持仓</span><strong className={changeClass(dailyChange)}>我的持仓 {formatPercent(dailyChange)}</strong></div>
         <StatusPill tone={indices.data?.market.is_open ? 'positive' : 'neutral'}>{indices.data?.market.is_open ? 'LIVE' : 'CLOSED'}</StatusPill>
       </div>
-      {indices.isLoading ? <LoadingState rows={3}/> : indices.isError ? <StateView title="指数暂不可用" message="市场数据没有响应，稍后可重试。" retry={() => { void indices.refetch() }}/> : <div className="index-strip">
+      {indices.isLoading ? <LoadingState rows={3}/> : indices.isError ? <StateView title="指数暂不可用" message="市场数据没有响应，稍后可重试。" retry={() => { void indices.refetch() }}/> : <div className="index-strip overview-index-strip">
         {orderedIndices.map(({ symbol, label, quote }) => <div key={symbol}>
           <span>{label}</span>
           <strong>{indexPrice(quote?.price)}</strong>
           <small className={changeClass(quote?.change_percent)}>{formatPercent(quote?.change_percent)}</small>
+          <small className="relative-change">相对 {dailyChange != null && quote?.change_percent != null ? formatPercent(dailyChange - quote.change_percent) : '数据不足'}</small>
         </div>)}
       </div>}
+      <p className="overview-performance-note">持仓涨跌按当前组合权重计算 · 覆盖 {dailyCoverage} / {positions.length} 个仓位</p>
     </GlassCard>
-
-    <SectionHeader title="我的仓位涨跌幅" caption={dailyCoverage > 0 ? `按组合权重计算 · 已覆盖 ${dailyCoverage} / ${positions.length} 个仓位` : '等待持仓日变动数据'}/>
-    <GlassCard className="portfolio-hero">
-      <span>今日持仓表现</span>
-      <strong className={changeClass(dailyChange)}>{formatPercent(dailyChange)}</strong>
-      <div><span>数据口径</span><b>{dailyChange == null ? '数据不足' : '当前组合权重'}</b></div>
-    </GlassCard>
-
-    <SectionHeader title="相对三大指数" caption="我的仓位涨跌幅 − 指数涨跌幅"/>
-    <div className="index-strip">
-      {orderedIndices.map(({ symbol, label, quote }) => {
-        const gap = dailyChange != null && quote?.change_percent != null ? dailyChange - quote.change_percent : null
-        return <div key={symbol}>
-          <span>{label}</span>
-          <strong>差距</strong>
-          <small className={changeClass(gap)}>{formatPercent(gap)}</small>
-        </div>
-      })}
-    </div>
 
     <SectionHeader title="全部持仓" caption={`${positions.length} 个仓位 · 按权重降序`}/>
     {summary.isLoading ? <LoadingState rows={5}/> : summary.isError ? <StateView title="持仓读取失败" message="请检查网络后重试。" retry={() => { void summary.refetch() }}/> : sortedPositions.length ? <div className="inset-list">

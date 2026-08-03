@@ -52,8 +52,8 @@ function positionRows(position: Position): [string, string][] {
 }
 
 export function MobilePositionWorkspace({ symbol, back }: { symbol: string; back: () => void }) {
-  const summary = useQuery({ queryKey: ['ios-portfolio-summary'], queryFn: () => api<PortfolioSummary>('/portfolio/summary'), staleTime: 30_000 })
-  const detail = useQuery({ queryKey: ['ios-position-ledger-detail', symbol], queryFn: () => api<LedgerDetail>('/portfolio/positions/' + encodeURIComponent(symbol)), staleTime: 30_000 })
+  const summary = useQuery({ queryKey: ['ios-portfolio-summary'], queryFn: () => api<PortfolioSummary>('/portfolio/summary'), staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: true })
+  const detail = useQuery({ queryKey: ['ios-position-ledger-detail', symbol], queryFn: () => api<LedgerDetail>('/portfolio/positions/' + encodeURIComponent(symbol)), staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: true })
   const position = detail.data?.summary ?? summary.data?.positions.find(item => item.symbol === symbol)
 
   if (summary.isLoading || detail.isLoading) return <><NavigationBar title={symbol} eyebrow="持仓详情" back={back}/><IOSPage className="detail-page"><LoadingState rows={6}/></IOSPage></>

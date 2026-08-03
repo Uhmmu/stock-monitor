@@ -135,6 +135,26 @@ def test_benchmark_comparison_requires_both_user_inputs(portfolio):
     assert result["benchmarks"] == []
 
 
+def test_benchmark_prefers_ibkr_performance_over_manual_input(portfolio, monkeypatch):
+    portfolio.benchmark_start_date = date(2020, 1, 1)
+    portfolio.benchmark_portfolio_return_percent = 999.0
+    monkeypatch.setattr(
+        "app.services.portfolio.benchmark._ibkr_performance_inputs",
+        lambda _db, _portfolio: (date(2026, 1, 5), 18.0),
+    )
+    monkeypatch.setattr(
+        "app.services.portfolio.benchmark._close_points",
+        lambda _symbol, _start: ((date(2026, 1, 5), 100.0), (date(2026, 7, 24), 110.0)),
+    )
+
+    result = build_benchmark_comparison(portfolio, object())
+
+    assert result["portfolio_return_source"] == "ibkr_flex"
+    assert result["start_date"] == date(2026, 1, 5)
+    assert result["portfolio_return_percent"] == 18.0
+    assert result["benchmarks"][0]["relative_return_percent"] == 8.0
+
+
 # ── lot_matcher.rebuild_symbol ────────────────────────────────────────────
 
 def test_rebuild_symbol_single_buy():

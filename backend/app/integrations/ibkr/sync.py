@@ -96,6 +96,30 @@ def request_sync(db: Session, *, user_id: int, trigger_type: str = "manual") -> 
     return run, True
 
 
+def request_due_syncs(db: Session, *, now: datetime | None = None, interval_hours: int = 6) -> list[int]:
+    """Create idempotent scheduled runs only for users who previously enabled Flex."""
+    current = now or _now()
+    cutoff = current - timedelta(hours=max(1, interval_hours))
+    user_ids = list(db.scalars(select(IbkrFlexSyncRun.user_id).where(
+        IbkrFlexSyncRun.status == "completed",
+    ).distinct()).all())
+    created_ids: list[int] = []
+    for user_id in user_ids:
+        latest = db.scalar(select(IbkrFlexSyncRun).where(
+            IbkrFlexSyncRun.user_id == user_id,
+            IbkrFlexSyncRun.status == "completed",
+        ).order_by(IbkrFlexSyncRun.completed_at.desc().nullslast(), IbkrFlexSyncRun.id.desc()).limit(1))
+        completed_at = latest.completed_at if latest else None
+        if completed_at and completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=UTC)
+        if completed_at and completed_at > cutoff:
+            continue
+        run, created = request_sync(db, user_id=user_id, trigger_type="scheduled")
+        if created:
+            created_ids.append(run.id)
+    return created_ids
+
+
 def _stage(db: Session, run: IbkrFlexSyncRun, stage: str, **values: Any) -> None:
     run.stage = stage
     run.status = "running" if stage not in {"completed", "failed"} else stage

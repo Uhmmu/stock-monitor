@@ -10,7 +10,7 @@ import { PortfolioOptimizationView } from './PortfolioOptimization'
 import { PortfolioAnalysisHistory } from './PortfolioAnalysisHistory'
 
 // ── 持仓模块类型 ──────────────────────────────────────────────
-type PositionView = {
+export type PositionView = {
   symbol:string
   security_id:number|null
   total_quantity:number
@@ -20,10 +20,14 @@ type PositionView = {
   last_transaction_at:string|null
   price_available:boolean
   current_price:number|null
+  previous_close?:number|null
   price_source:string|null
   market_value:number|null
   unrealized_pnl:number|null
   unrealized_pnl_percent:number|null
+  daily_change_amount?:number|null
+  daily_change_percent?:number|null
+  price_as_of?:string|null
   fx_rate:number|null
   fx_rate_source:string|null
   base_currency_market_value:number|null
@@ -48,7 +52,7 @@ type PositionView = {
   first_trade_at:string|null
   data_completeness:string
 }
-type PortfolioSummary = {
+export type PortfolioSummary = {
   portfolio_id:number
   base_currency:string
   position_count:number
@@ -156,7 +160,7 @@ type HealthFinding = {
   affected_weight:number
   priority:number
 }
-type PortfolioHealth = {
+export type PortfolioHealth = {
   portfolio_id:number
   as_of:string
   base_currency:string
@@ -232,7 +236,7 @@ type StrategyProfileResponse = {
   presets:Record<string,Omit<StrategyProfile,'updated_at'>>
   choices:Record<string,StrategyChoice[]>
 }
-type PersonalizedInterpretation = {
+export type PersonalizedInterpretation = {
   strategy_type:string
   strategy_label:string
   evaluated_at:string
@@ -278,6 +282,7 @@ type PortfolioBenchmark = {
   start_date:string|null
   portfolio_return_percent:number|null
   configured:boolean
+  portfolio_return_source:'ibkr_flex'|'manual'|'unavailable'
   benchmarks:{symbol:string;name:string;start_price:number|null;start_price_date:string|null;latest_price:number|null;latest_price_date:string|null;return_percent:number|null;relative_return_percent:number|null;status:'available'|'unavailable';message:string|null}[]
   source:string
   as_of:string
@@ -305,12 +310,13 @@ export function PortfolioModule() {
   const [entrySecurity,setEntrySecurity] = useState<SecuritySearchResult|null>(null)
   const [entryForm,setEntryForm] = useState(emptyManualForm(today))
   const [detailSymbol,setDetailSymbol] = useState<string|null>(null)
+  const [positionSheetSymbol,setPositionSheetSymbol] = useState<string|null>(null)
   const [strategyOpen,setStrategyOpen] = useState(false)
   const [performanceRange,setPerformanceRange] = useState('1Y')
   const [historyType,setHistoryType] = useState('all')
   const [historyView,setHistoryView] = useState<'activity'|'completed'|'lots'>('activity')
 
-  const summary = useQuery({queryKey:['portfolio-summary'],queryFn:()=>api<PortfolioSummary>('/portfolio/summary'),staleTime:30_000})
+  const summary = useQuery({queryKey:['portfolio-summary'],queryFn:()=>api<PortfolioSummary>('/portfolio/summary'),staleTime:20_000,refetchInterval:30_000,refetchIntervalInBackground:true})
   const strategy = useQuery({queryKey:['portfolio-strategy-profile'],queryFn:()=>api<StrategyProfileResponse>('/portfolio/strategy-profile'),staleTime:60_000})
   const benchmark = useQuery({queryKey:['portfolio-benchmark'],queryFn:()=>api<PortfolioBenchmark>('/portfolio/benchmark'),enabled:subtab==='overview',staleTime:15*60_000,refetchInterval:15*60_000})
   const performance = useQuery({queryKey:['portfolio-performance',performanceRange],queryFn:()=>api<PerformanceSeries>(`/portfolio/performance?range=${performanceRange}`),enabled:subtab==='overview',staleTime:30_000})
@@ -407,6 +413,11 @@ export function PortfolioModule() {
   </div>
   const healthContent = <PortfolioHealthView health={health.data} loading={health.isLoading} currency={s?.base_currency||'USD'} interpretation={interpretation.data} interpretationLoading={interpretation.isLoading}/>
   const strategyLabel = strategy.data?.choices.strategy_type?.find(row=>row.value===strategy.data?.profile.strategy_type)?.label||'质量成长'
+  const positionSheet = s?.positions.find(row=>row.symbol===positionSheetSymbol)
+  const openPosition = (symbol:string) => {
+    if(window.matchMedia('(max-width: 700px)').matches) setPositionSheetSymbol(symbol)
+    else openTechnical(symbol)
+  }
 
   return <div className="portfolio-module">
     <div className="section-title">
@@ -432,17 +443,18 @@ export function PortfolioModule() {
           <div className="metric-card"><span>股息与费用</span><strong>{fmtMoney(s.dividend_income-s.fees-s.taxes,s.base_currency)}</strong><small>股息 {fmtMoney(s.dividend_income,s.base_currency)} · 费用税费 {fmtMoney(s.fees+s.taxes,s.base_currency)}</small></div>
           <div className="metric-card"><span>最大回撤</span><strong className="negative">{fmtRatio(s.max_drawdown)}</strong><small>现金流调整后账户曲线</small></div>
         </div>
+        <MobilePerformanceOverview summary={s} benchmark={benchmark.data}/>
         <PortfolioPerformanceChart data={performance.data} loading={performance.isLoading} error={performance.isError} range={performanceRange} onRange={setPerformanceRange}/>
         <ReturnAttributionPreview positions={s.positions} currency={s.base_currency}/>
         <PortfolioBenchmarkSection data={benchmark.data} loading={benchmark.isLoading} saving={saveBenchmark.isPending} error={saveBenchmark.error} onSave={payload=>saveBenchmark.mutate(payload)}/>
         <div className="table portfolio-table">
           <div className="table-head portfolio-row"><span>证券</span><span>市值</span><span>权重</span><span>平均成本</span><span>未实现盈亏</span><span>总收益</span><span>来源</span></div>
-          {s.positions.map(p=><button key={p.symbol} className="table-row portfolio-row" onClick={()=>openTechnical(p.symbol)}>
+          {s.positions.map(p=><button key={p.symbol} className="table-row portfolio-row" onClick={()=>openPosition(p.symbol)}>
             <span className="toggle">{p.symbol}</span>
             <span data-label="本币市值">{p.price_available?fmtMoney(p.market_value,p.currency):'数据不足'}</span>
             <span data-label={`${s.base_currency} 占比`}>{p.portfolio_weight==null?'—':`${p.portfolio_weight.toFixed(1)}%`}</span>
             <span data-label="平均成本">{fmtMoney(p.average_cost,p.currency)}<small>{fmtNum(p.total_quantity)} 股</small></span>
-            <span data-label="浮动盈亏" className={(p.unrealized_pnl||0)>=0?'positive':'negative'}>{p.price_available?`${fmtMoney(p.unrealized_pnl,p.currency)} (${fmtPercent(p.unrealized_pnl_percent)})`:'数据不足'}</span>
+            <span data-label="浮动盈亏" className={(p.unrealized_pnl||0)>=0?'positive':'negative'}>{p.price_available?`${fmtMoney(p.unrealized_pnl,p.currency)} (${fmtPercent(p.unrealized_pnl_percent)})`:'数据不足'}{p.daily_change_percent!=null&&<small className={(p.daily_change_percent||0)>=0?'positive':'negative'}>今日 {fmtPercent(p.daily_change_percent)}</small>}</span>
             <span data-label="总收益" className={(p.total_pnl||0)>=0?'positive':'negative'}>{fmtMoney(p.total_pnl,p.currency)} ({fmtPercent(p.total_return_pct)})</span>
             <span data-label="账户来源">{p.authority_source==='ibkr_flex'?'IBKR':'手动'}<small>{p.data_completeness==='complete'?'完整':'部分数据'}</small></span>
           </button>)}
@@ -525,7 +537,50 @@ export function PortfolioModule() {
         onReset={()=>resetStrategy.mutate()}
       />
     </Sheet>
+    <Sheet open={positionSheet!==undefined} onClose={()=>setPositionSheetSymbol(null)} title={positionSheet?`${positionSheet.symbol} 持仓详情`:'持仓详情'}>
+      {positionSheet&&<MobilePositionDetail position={positionSheet} baseCurrency={s?.base_currency||positionSheet.currency} onTechnical={()=>{setPositionSheetSymbol(null);openTechnical(positionSheet.symbol)}}/>}
+    </Sheet>
   </div>
+}
+
+function MobilePerformanceOverview({summary,benchmark}:{summary:PortfolioSummary;benchmark:PortfolioBenchmark|undefined}) {
+  return <section className="mobile-performance-overview" aria-label="持仓与指数表现">
+    <header><div><small>PERFORMANCE AT A GLANCE</small><h3>持仓与指数表现</h3></div><span>{summary.latest_sync_at?`IBKR ${new Date(summary.latest_sync_at).toLocaleDateString('zh-CN')}`:'等待 IBKR 同步'}</span></header>
+    <div className="mobile-return-strip">
+      <div><span>今日</span><strong className={(summary.latest_daily_return||0)>=0?'positive':'negative'}>{fmtRatio(summary.latest_daily_return)}</strong></div>
+      <div><span>本月</span><strong className={(summary.month_return||0)>=0?'positive':'negative'}>{fmtRatio(summary.month_return)}</strong></div>
+      <div><span>年内</span><strong className={(summary.year_return||0)>=0?'positive':'negative'}>{fmtRatio(summary.year_return)}</strong></div>
+      <div><span>累计</span><strong className={(summary.time_weighted_return||0)>=0?'positive':'negative'}>{fmtRatio(summary.time_weighted_return)}</strong></div>
+    </div>
+    <div className="mobile-benchmark-grid">
+      {(benchmark?.benchmarks||[]).map(row=><article key={row.symbol} className={row.status==='available'?'':'unavailable'}>
+        <div><b>{row.symbol}</b><span>{row.name}</span></div>
+        {row.status==='available'?<><strong className={(row.return_percent||0)>=0?'positive':'negative'}>{fmtPercent(row.return_percent)}</strong><small className={(row.relative_return_percent||0)>=0?'positive':'negative'}>相对 {fmtPercent(row.relative_return_percent)}</small></>:<small>数据不足</small>}
+      </article>)}
+      {!benchmark?.configured&&<p>在下方设置入市日期与累计涨跌幅后，这里会同步显示 SPY、QQQ、DIA 及相对表现。</p>}
+    </div>
+  </section>
+}
+
+function MobilePositionDetail({position,baseCurrency,onTechnical}:{position:PositionView;baseCurrency:string;onTechnical:()=>void}) {
+  const fields = [
+    ['当前价格',position.price_available?fmtMoney(position.current_price,position.currency):'数据不足'],
+    ['持仓数量',`${fmtNum(position.total_quantity)} 股`],
+    ['本币市值',position.price_available?fmtMoney(position.market_value,position.currency):'数据不足'],
+    [`${baseCurrency} 市值`,fmtMoney(position.base_currency_market_value,baseCurrency)],
+    ['组合权重',position.portfolio_weight==null?'—':`${position.portfolio_weight.toFixed(1)}%`],
+    ['平均成本',fmtMoney(position.average_cost,position.currency)],
+    ['浮动盈亏',position.price_available?`${fmtMoney(position.unrealized_pnl,position.currency)} · ${fmtPercent(position.unrealized_pnl_percent)}`:'数据不足'],
+    ['今日涨跌',fmtPercent(position.daily_change_percent??null)],
+    ['总收益',`${fmtMoney(position.total_pnl,position.currency)} · ${fmtPercent(position.total_return_pct)}`],
+    ['账户来源',position.authority_source==='ibkr_flex'?'IBKR 权威持仓':'手动账本'],
+  ]
+  return <article className="mobile-position-detail">
+    <header><div><small>{position.currency} · {position.authority_source==='ibkr_flex'?'IBKR SYNCED':'MANUAL'}</small><h2>{position.symbol}</h2></div><strong className={(position.unrealized_pnl||0)>=0?'positive':'negative'}>{fmtPercent(position.unrealized_pnl_percent)}</strong></header>
+    <div>{fields.map(([label,value])=><section key={label}><span>{label}</span><b>{value}</b></section>)}</div>
+    <p>数量与成本取自最近成功同步的 IBKR 持仓事实；行情由项目价格快照自动更新，无需在 IBKR 页面手动刷新持仓列表。</p>
+    <button onClick={onTechnical}>查看技术位置与账户时间线 <span>→</span></button>
+  </article>
 }
 
 export function chartPoints(values:(number|null)[],width=720,height=190) {
@@ -620,13 +675,13 @@ function PortfolioBenchmarkSection({data,loading,saving,error,onSave}:{
   },[data?.start_date,data?.portfolio_return_percent])
   const canSave = !!startDate && portfolioReturn.trim()!=='' && Number.isFinite(Number(portfolioReturn))
   return <section className="portfolio-benchmark" aria-label="组合基准对比">
-    <div className="portfolio-benchmark-heading"><div><small>PERFORMANCE BASELINE</small><h3>组合与大盘对比</h3></div><span>{data?.configured?'自动同步指数收盘价':'设置后开始比较'}</span></div>
-    <p>输入你的入市日与组合至今累计涨跌幅，系统会持续对照 SPY、QQQ、VT；相对收益为你的组合涨跌幅减去对应基准。</p>
-    <form className="portfolio-benchmark-form" onSubmit={event=>{event.preventDefault();if(canSave)onSave({start_date:startDate,portfolio_return_percent:Number(portfolioReturn)})}}>
+    <div className="portfolio-benchmark-heading"><div><small>PERFORMANCE BASELINE</small><h3>组合与大盘对比</h3></div><span>{data?.portfolio_return_source==='ibkr_flex'?'IBKR 收益自动计算':data?.configured?'自动同步指数收盘价':'设置后开始比较'}</span></div>
+    <p>{data?.portfolio_return_source==='ibkr_flex'?'组合累计收益与起始日直接读取最近一次成功的 IBKR Flex 账户绩效；系统持续对照 SPY、QQQ、DIA，不需要手动填写或刷新持仓。':'尚无可用 IBKR 历史绩效时，可手动输入入市日与组合累计涨跌幅作为后备口径。'}相对收益为组合涨跌幅减去对应基准。</p>
+    {data?.portfolio_return_source!=='ibkr_flex'&&<form className="portfolio-benchmark-form" onSubmit={event=>{event.preventDefault();if(canSave)onSave({start_date:startDate,portfolio_return_percent:Number(portfolioReturn)})}}>
       <label><span>入市日期</span><input type="date" required max={today} value={startDate} onChange={event=>setStartDate(event.target.value)}/></label>
       <label><span>组合累计涨跌幅</span><div className="benchmark-percent-input"><input type="number" required inputMode="decimal" step="any" min="-100" value={portfolioReturn} onChange={event=>setPortfolioReturn(event.target.value)} placeholder="例如 18.5"/><b>%</b></div></label>
       <button disabled={!canSave||saving}>{saving?'正在更新…':data?.configured?'更新基准':'开始比较'}</button>
-    </form>
+    </form>}
     {error&&<p className="error">保存失败：{error.message}</p>}
     {loading&&<div className="benchmark-empty">正在读取市场基准…</div>}
     {!loading&&data?.configured&&<>
@@ -723,7 +778,7 @@ function PersonalizedInterpretationSection({data,loading}:{data:PersonalizedInte
   </section>
 }
 
-function PortfolioHealthView({health,loading,currency,interpretation,interpretationLoading}:{health:PortfolioHealth|undefined;loading:boolean;currency:string;interpretation:PersonalizedInterpretation|undefined;interpretationLoading:boolean}) {
+export function PortfolioHealthView({health,loading,currency,interpretation,interpretationLoading}:{health:PortfolioHealth|undefined;loading:boolean;currency:string;interpretation:PersonalizedInterpretation|undefined;interpretationLoading:boolean}) {
   if(loading) return <div className="empty">正在计算组合健康…</div>
   if(!health) return <div className="empty">组合健康数据暂不可用。</div>
   const scoreClass = (value:number|null,risk=false) => value==null?'muted':risk?(value>60?'risk-high':value>40?'risk-mid':'risk-low'):(value>=80?'score-high':value>=60?'score-mid':'score-low')

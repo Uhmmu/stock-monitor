@@ -40,7 +40,9 @@ class ResearchRepository:
 
     def position(self, portfolio_id: int, symbol: str):
         return self.db.scalar(select(m.PortfolioPosition).where(
-            m.PortfolioPosition.portfolio_id == portfolio_id, m.PortfolioPosition.symbol == symbol,
+            m.PortfolioPosition.portfolio_id == portfolio_id,
+            m.PortfolioPosition.symbol == symbol,
+            m.PortfolioPosition.total_quantity > 0,
         ))
 
     def position_lot_count(self, portfolio_id: int, symbol: str) -> int:

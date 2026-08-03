@@ -85,6 +85,19 @@ def test_contract_enum_and_source_serialization():
     assert response["freshness"]["status"] == "fresh"
 
 
+def test_current_position_detail_excludes_closed_zero_quantity_rows(db, users):
+    first, _, p1, _ = users
+    db.add(PortfolioPosition(
+        portfolio_id=p1.id, symbol="CLOSED", total_quantity=0,
+        average_cost=0, total_cost=0, currency="USD", authority_source="ibkr_flex",
+    ))
+    db.commit()
+    gateway = ResearchGateway(db, first)
+    assert all(row["symbol"] != "CLOSED" for row in gateway.portfolio_positions(None, 1, 100, "symbol").data)
+    with pytest.raises(ResearchError):
+        gateway.portfolio_position("CLOSED", None)
+
+
 def test_freshness_thresholds():
     now = datetime.now(UTC)
     assert calculate_freshness("news", now - timedelta(hours=1), "test").status == FreshnessStatus.fresh

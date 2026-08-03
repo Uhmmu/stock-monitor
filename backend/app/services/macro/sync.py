@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -23,6 +24,27 @@ logger = logging.getLogger(__name__)
 PROVIDER = "alpha_vantage"
 LOCK_KEY = "stock-monitor:macro:alpha-vantage-sync"
 ACTIVE_RUN_MAX_AGE = timedelta(hours=2)
+
+
+def redact_provider_error(value: Any, settings: Settings | None = None) -> Any:
+    """Remove credentials from provider text before persistence or API output."""
+    settings = settings or get_settings()
+    if isinstance(value, dict):
+        return {str(key): redact_provider_error(item, settings) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_provider_error(item, settings) for item in value]
+    if not isinstance(value, str):
+        return value
+    result = value
+    secret = settings.alpha_vantage_api_key.strip()
+    if secret:
+        result = result.replace(secret, "[REDACTED]")
+    result = re.sub(
+        r"(?i)(api\s*key\s+(?:as|is|=|:)?\s*)[A-Z0-9_-]{8,}",
+        r"\1[REDACTED]",
+        result,
+    )
+    return result
 
 
 class MacroQuotaExceeded(RuntimeError):
@@ -105,7 +127,7 @@ def _allowed_limit(settings: Settings, trigger_type: str) -> int:
     reserve = max(0, int(settings.alpha_vantage_reserved_requests))
     # Scheduled automation never spends the protected reserve. Manual admin
     # actions may use it after an explicit click, but never exceed the total.
-    return max(0, total - reserve) if trigger_type == "scheduled" else total
+    return max(0, total - reserve) if trigger_type.startswith("scheduled") else total
 
 
 def reserve_request(db, settings: Settings | None = None, *, trigger_type: str = "manual") -> MacroUsageStatus:
@@ -150,6 +172,12 @@ def ensure_series_definitions(db) -> dict[str, MacroSeries]:
             db.add(row)
             rows[row.series_key] = row
             changed = True
+        elif row.source_name != definition.get("source_name", SOURCE_NAME):
+            # Keep persisted attribution aligned with what the integration can
+            # actually verify. Alpha Vantage does not guarantee a per-row FRED
+            # provenance field for every function.
+            row.source_name = definition.get("source_name", SOURCE_NAME)
+            changed = True
     if changed:
         db.flush()
     return rows
@@ -183,7 +211,7 @@ def can_start_sync(db, count: int, *, trigger_type: str = "manual", settings: Se
     if _active_run(db):
         return False, MacroSyncAlreadyRunning.code
     status = usage_status(db, settings)
-    remaining = status.automatic_remaining if trigger_type == "scheduled" else status.remaining
+    remaining = status.automatic_remaining if trigger_type.startswith("scheduled") else status.remaining
     if count > remaining:
         return False, MacroQuotaExceeded.code
     return True, None
@@ -292,7 +320,10 @@ async def run_macro_sync(
                     try:
                         mark_request_result(db, error_code=getattr(exc, "code", "provider_error"))
                         run = db.get(MacroSyncRun, run.id)
-                        errors[key] = {"code": getattr(exc, "code", "provider_error"), "message": " ".join(str(exc).split())[:240]}
+                        errors[key] = {
+                            "code": getattr(exc, "code", "provider_error"),
+                            "message": redact_provider_error(" ".join(str(exc).split())[:240], settings),
+                        }
                         run.failed_series_count = len([k for k in errors if k in valid])
                         run.api_requests_used = used
                         db.commit()

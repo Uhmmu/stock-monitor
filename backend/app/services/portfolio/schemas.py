@@ -248,6 +248,7 @@ class PortfolioBenchmarkResponse(BaseModel):
     start_date: date | None
     portfolio_return_percent: float | None
     configured: bool
+    portfolio_return_source: str
     benchmarks: list[PortfolioBenchmarkOut]
     source: str
     as_of: datetime

@@ -17,7 +17,7 @@ from app.integrations.ibkr.db_models import (
     IbkrFlexSyncRun, IbkrNormalizedCashFlow, IbkrTradeRoundTrip,
 )
 from app.integrations.ibkr.reconciliation import reconcile_positions
-from app.integrations.ibkr.sync import execute_sync, request_sync
+from app.integrations.ibkr.sync import execute_sync, request_due_syncs, request_sync
 from app.integrations.ibkr.formal_routes import sync_detail
 from fastapi import HTTPException
 from app.models import Portfolio, PortfolioPosition, Security, TradeTransaction, User
@@ -267,6 +267,30 @@ def test_analytics_rebuild_is_idempotent_and_matches_partial_fifo(db):
     assert daily.calculation_version == CALCULATION_VERSION
     assert daily.daily_return is not None
 
+    run.status = "completed"
+    run.stage = "completed"
+    run.completed_at = datetime(2026, 8, 1, tzinfo=UTC)
+    db.flush()
+    second_run = IbkrFlexSyncRun(
+        user_id=user.id, account_id=run.account_id, report_from_date=run.report_from_date,
+        report_to_date=run.report_to_date, status="running", stage="importing",
+        source_hash="b" * 64, parser_version="test", section_counts=run.section_counts,
+    )
+    db.add(second_run); db.flush()
+    for source in rows:
+        db.add(IbkrFlexRecord(
+            sync_run_id=second_run.id, section=source.section, source_id=source.source_id,
+            source_index=source.source_index, account_id=source.account_id, symbol=source.symbol,
+            conid=source.conid, currency=source.currency, report_date=source.report_date,
+            occurred_at=source.occurred_at, quantity=source.quantity, price=source.price,
+            amount=source.amount, raw_payload=source.raw_payload,
+        ))
+    db.flush()
+    replacement = rebuild_all_analytics(db, second_run)
+    assert replacement == first
+    assert {row.source_sync_run_id for row in db.query(IbkrDividendEvent).all()} == {second_run.id}
+    assert {row.source_sync_run_id for row in db.query(IbkrAccountDailyPerformance).all()} == {second_run.id}
+
 
 def test_duplicate_manual_sync_returns_existing_active_run(db):
     user = User(username="sync-lock", password_hash="x", role="user", status="active")
@@ -276,6 +300,24 @@ def test_duplicate_manual_sync_returns_existing_active_run(db):
     assert created is True
     assert created_again is False
     assert second.id == first.id
+
+
+def test_due_sync_enrolls_previous_flex_users_and_respects_freshness(db):
+    user = User(username="scheduled-sync", password_hash="x", role="user", status="active")
+    db.add(user); db.flush()
+    completed_at = datetime(2026, 8, 3, 0, 0, tzinfo=UTC)
+    db.add(IbkrFlexSyncRun(
+        user_id=user.id, status="completed", stage="completed", trigger_type="manual",
+        started_at=completed_at, completed_at=completed_at, parser_version="test",
+        raw_record_count=1, normalized_record_count=1,
+    ))
+    db.commit()
+    now = datetime(2026, 8, 3, 8, 0, tzinfo=UTC)
+    run_ids = request_due_syncs(db, now=now, interval_hours=6)
+    assert len(run_ids) == 1
+    scheduled = db.get(IbkrFlexSyncRun, run_ids[0])
+    assert scheduled.trigger_type == "scheduled"
+    assert request_due_syncs(db, now=now, interval_hours=6) == []
 
 
 def test_full_sync_propagates_authoritative_portfolio_and_failure_is_not_completed(tmp_path, monkeypatch):

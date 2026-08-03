@@ -195,6 +195,7 @@ NEWS_SUMMARY_SYSTEM_PROMPT = """# Role
 - 只依据给定原文，不得补充原文没有的信息或行情数据。
 - 用 3-5 条要点概括核心事实，保持中立，不给投资建议。
 - 若原文信息不足，明确写“原文信息有限”。
+- 无论标题和原文使用何种语言，最终答案必须使用简体中文；公司名、证券代码和必要专有名词可保留原文。
 - 只输出 Markdown 正文，不要代码块包裹。
 """
 
@@ -276,15 +277,26 @@ def summarize_news(title: str, content: str) -> tuple[str, str]:
     # 单篇新闻只需要客观归纳，复用低延迟的 Haiku 栈；深度报告仍走
     # OpenAI medium/important 档。失败由持久任务状态呈现并允许用户重试。
     client, model = _translation_client_and_model()
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": NEWS_SUMMARY_SYSTEM_PROMPT},
-            {"role": "user", "content": f"标题：{title}\n\n原文：\n{content}"},
-        ],
-        temperature=0,
-    )
-    return response.choices[0].message.content or "", model
+    messages = [
+        {"role": "system", "content": NEWS_SUMMARY_SYSTEM_PROMPT},
+        {"role": "user", "content": f"请严格用简体中文总结。\n\n标题：{title}\n\n原文：\n{content}"},
+    ]
+    response = client.chat.completions.create(model=model, messages=messages, temperature=0)
+    summary = (response.choices[0].message.content or "").strip()
+    if summary and not _contains_chinese(summary):
+        response = client.chat.completions.create(
+            model=model,
+            messages=[*messages, {"role": "assistant", "content": summary}, {"role": "user", "content": "上面的输出不是中文。请只返回简体中文 Markdown 要点，不要解释。"}],
+            temperature=0,
+        )
+        summary = (response.choices[0].message.content or "").strip()
+    if not summary or not _contains_chinese(summary):
+        raise ValueError("新闻 AI 总结未返回中文内容")
+    return summary, model
+
+
+def _contains_chinese(value: str) -> bool:
+    return sum("\u4e00" <= char <= "\u9fff" for char in value) >= 4
 
 
 def summarize_trade_log(evidence: str) -> tuple[str, str]:

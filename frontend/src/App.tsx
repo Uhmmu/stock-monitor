@@ -186,6 +186,7 @@ function NavIcon({name}:{name:string}) {
     news:<><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></>,
     sentiment:<><path d="M4 15.5c1.4-1.8 2.8-2.7 4.2-2.7 2.2 0 2.8 3.4 5 3.4 1.5 0 3-1.4 4.8-4.2"/><path d="M4 9c1.1-1.2 2.2-1.8 3.3-1.8 1.8 0 2.5 2.5 4.2 2.5 1.3 0 2.5-.9 3.7-2.7"/><circle cx="19" cy="7" r="2"/><path d="M3 20h18"/></>,
     fundamentals:<><path d="m3 17 5-5 4 3 8-9"/><path d="M15 6h5v5"/></>,
+    macro:<><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/><path d="M7 8h10M7 16h10"/></>,
     calendar:<><path d="M6 2v4M18 2v4M3 9h18"/><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 13h2M14 13h2M8 17h2M14 17h2"/></>,
     financials:<><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h3M13 12h3M8 16h3M13 16h3"/></>,
     crossmodel:<><path d="M4 18V7M10 18V4M16 18v-8M22 18H2"/><path d="m5 11 5-3 4 4 6-6"/></>,
@@ -472,7 +473,7 @@ export default function App() {
       <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setDemoMode(false);setToken('');setAuthUser(null)}}>{demoMode?'退出预览':'退出登录'}</button></aside>
     {mobileNavOpen&&<button className="mobile-nav-scrim" onClick={()=>setMobileNavOpen(false)} aria-label="关闭菜单"/>}
     <main className={tab==='ai'?'ai-main':''}>
-      {tab!=='ai'&&<header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tabTitle}</h1></div><div className="header-tools"><span className="market-pill"><i className={viewDashboard?.market.is_open?'online':''}/>{viewDashboard?.market.is_open?'市场开放':'市场休市'}</span><div className="clock">{viewDashboard ? formatDate(viewDashboard.market.checked_at) : '等待同步'}</div></div></header>}
+      {tab!=='ai'&&tab!=='decisions'&&<header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tabTitle}</h1></div><div className="header-tools"><span className="market-pill"><i className={viewDashboard?.market.is_open?'online':''}/>{viewDashboard?.market.is_open?'市场开放':'市场休市'}</span><div className="clock">{viewDashboard ? formatDate(viewDashboard.market.checked_at) : '等待同步'}</div></div></header>}
       {tab!=='ai'&&demoMode&&<div className="preview-banner"><span><b>演示预览</b> 当前展示本地示例行情，所有真实数据仍以服务端为准。</span><button onClick={()=>{setDemoMode(false);setAuthUser(null)}}>连接账户</button></div>}
       {tab!=='ai'&&!demoMode&&(dashboard.error||watchlist.error)&&<div className="error">后端暂不可用，请确认服务已启动。</div>}
       <div className="view-stage" key={tab}>
@@ -849,10 +850,10 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
         <div className="news-meta">{no&&<span className="news-no">[{no}]</span>}<span className={`prov ${item.provider}`}>{item.provider==='finnhub'?'Finnhub':item.provider==='tavily'?'Tavily':item.provider==='yfinance'?'Yahoo财经':item.provider==='marketaux'?'Marketaux':item.provider}</span>{item.topic&&<span className="news-topic">{item.topic}</span>}{item.importance_score!==null&&item.importance_score>=.65&&<span className="news-important">重要</span>}{item.source&&<span>{item.source}</span>}<span>{item.published_at?formatDate(item.published_at):formatDate(item.found_at)}</span></div>
         <a className="news-title" href={item.url} target="_blank" rel="noreferrer">{item.translated_title||item.title}</a>
         {item.translated_title&&item.translated_title!==item.title&&<p className="news-original-title">{item.title}</p>}
-        {item.summary&&<p className="news-summary">{item.summary}</p>}
+        {item.summary&&!item.ai_summary&&<p className="news-summary">{item.summary}</p>}
         <button className="ai-btn" onClick={()=>summarize.mutate({id:item.id,force:!!item.ai_summary})} disabled={working||sending}>{working?(item.ai_summary_status==='queued'?'AI 总结排队中…':'AI 总结中…'):sending?'正在提交…':item.ai_summary_status==='failed'?'重试 AI 总结':item.ai_summary?'重新总结':'AI 总结'}</button>
         {item.ai_summary_status==='failed'&&<small className="summary-error">AI 总结失败，请点击按钮重试。</small>}
-        {item.ai_summary&&<div className="ai-summary"><span className="ai-tag">AI · {item.ai_summary_model}</span><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{item.ai_summary}</ReactMarkdown></div>}
+        {item.ai_summary&&<div className="ai-summary news-ai-research"><span className="ai-tag">AI 研究概要 · {item.ai_summary_model}</span><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{item.ai_summary}</ReactMarkdown>{item.summary&&<details><summary>查看数据源原始概要</summary><p>{item.summary}</p></details>}</div>}
       </div>
     </article>})}{!news?.length&&<div className="empty">暂无原始新闻，点击"刷新新闻"触发采集。</div>}</div>
   </div>

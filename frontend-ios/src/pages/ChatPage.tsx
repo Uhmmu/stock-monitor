@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm'
 import type { AIMessage, Conversation, WebAccessMode } from '@shared/types'
 import { formatDateTime } from '@shared/format'
 import { createConversation, getAIConfig, getMessages, listConversations, stopGeneration, streamChatMessage, temporaryMessage, type MobileStreamEvent } from '../chat-api'
-import { Icon } from '../icons'
+import { loadChatPreference, newestChatPreference, saveChatPreference, validateChatPreference } from '../chat-preferences'
 import { LoadingState, StateView } from '../components'
 
 const modeLabels: Record<WebAccessMode, string> = { off: '不联网', search: '联网搜索', deep_minimal: 'Deep · Minimal', deep_low: 'Deep · Low', deep_medium: 'Deep · Medium', deep_high: 'Deep · High', deep_xhigh: 'Deep · X-High' }
@@ -16,8 +16,9 @@ export function ChatPage() {
   const client = useQueryClient()
   const [conversationId, setConversationId] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
-  const [model, setModel] = useState('')
-  const [webMode, setWebMode] = useState<WebAccessMode>('off')
+  const initialPreference = useRef(loadChatPreference())
+  const [model, setModel] = useState(() => initialPreference.current?.model || '')
+  const [webMode, setWebMode] = useState<WebAccessMode>(() => initialPreference.current?.web_access_mode || 'off')
   const [localMessages, setLocalMessages] = useState<AIMessage[]>([])
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
@@ -29,18 +30,22 @@ export function ChatPage() {
   const end = useRef<HTMLDivElement>(null)
   const modelPicker = useRef<HTMLDivElement>(null)
   const webPicker = useRef<HTMLDivElement>(null)
-  const configDefaultsApplied = useRef(false)
-  const webModeTouched = useRef(false)
+  const preferencesApplied = useRef(false)
   const config = useQuery({ queryKey: ['ios-ai-config'], queryFn: getAIConfig, staleTime: 5 * 60_000 })
   const conversations = useQuery({ queryKey: ['ios-ai-conversations'], queryFn: listConversations, staleTime: 10_000 })
   const messages = useQuery({ queryKey: ['ios-ai-messages', conversationId], queryFn: () => getMessages(conversationId!), enabled: conversationId != null })
   useEffect(() => {
     const data = config.data
-    if (!data || configDefaultsApplied.current) return
-    configDefaultsApplied.current = true
-    if (data.default_model) setModel(value => value || data.default_model)
-    if (!webModeTouched.current) setWebMode(data.web_search.default_mode || 'off')
-  }, [config.data])
+    if (!data || preferencesApplied.current || conversations.isLoading) return
+    const latest = conversations.data?.items[0]
+    const latestPreference = latest ? { model: latest.model || data.default_model, web_access_mode: latest.web_access_mode, updated_at: latest.last_message_at || latest.updated_at } : null
+    const fallback = newestChatPreference(loadChatPreference(), latestPreference)
+    const preference = validateChatPreference(fallback, data)
+    preferencesApplied.current = true
+    setModel(preference.model)
+    setWebMode(preference.web_access_mode)
+    saveChatPreference(preference.model, preference.web_access_mode)
+  }, [config.data, conversations.data, conversations.isLoading])
   useEffect(() => {
     if (!modelMenuOpen && !webMenuOpen) return
     const closeOnOutside = (event: PointerEvent) => {
@@ -114,14 +119,16 @@ export function ChatPage() {
     if (!deep) return '深度研究'
     return deep.confirmation_required ? `发送时确认 · 基础费用 $${deep.estimated_base_cost_usd.toFixed(2)}` : `基础费用约 $${deep.estimated_base_cost_usd.toFixed(2)}`
   }
-  const chooseWebMode = (mode: WebAccessMode) => { webModeTouched.current = true; setWebMode(mode); setWebMenuOpen(false) }
+  const chooseModel = (nextModel: string) => { setModel(nextModel); saveChatPreference(nextModel, webMode); setModelMenuOpen(false) }
+  const chooseWebMode = (mode: WebAccessMode) => { setWebMode(mode); saveChatPreference(model, mode); setWebMenuOpen(false) }
   const newConversation = () => { if (generating) return; setConversationId(null); setLocalMessages([]); setDraft(''); setDrawerOpen(false); setModelMenuOpen(false); setWebMenuOpen(false); setError('') }
-  const selectConversation = (conversation: Conversation) => { if (generating) return; webModeTouched.current = true; setConversationId(conversation.id); setModel(conversation.model || config.data?.default_model || ''); setWebMode(conversation.web_access_mode || 'off'); setLocalMessages([]); setDrawerOpen(false); setModelMenuOpen(false); setWebMenuOpen(false); setError('') }
+  const selectConversation = (conversation: Conversation) => { if (generating) return; const nextModel=conversation.model || config.data?.default_model || ''; const nextMode=conversation.web_access_mode || 'off'; setConversationId(conversation.id); setModel(nextModel); setWebMode(nextMode); saveChatPreference(nextModel,nextMode); setLocalMessages([]); setDrawerOpen(false); setModelMenuOpen(false); setWebMenuOpen(false); setError('') }
   const send = async () => {
     const question = draft.trim()
     if (!question || generating) return
     const deep = deepModeConfig(webMode)
     if (deep?.confirmation_required && !window.confirm(`${currentWebModeInfo.label} 预计基础费用 $${deep.estimated_base_cost_usd.toFixed(2)}，继续吗？`)) return
+    saveChatPreference(model, webMode)
     setGenerating(true); setError(''); setActivity('正在准备上下文…'); setDraft('')
     let id = conversationId
     try {
@@ -160,7 +167,7 @@ export function ChatPage() {
 
   return <main className="mobile-chat-page">
     <header className="mobile-chat-header">
-      <button type="button" onClick={() => setDrawerOpen(true)} aria-label="会话列表"><Icon name="more"/></button>
+      <button type="button" className="chat-brand-button" onClick={() => setDrawerOpen(true)} aria-label="会话列表"><img src="/icon.svg" alt="本站 Logo"/></button>
       <div className="chat-model-picker" ref={modelPicker}>
         <button type="button" className="chat-model-trigger" onClick={() => setModelMenuOpen(value => !value)} aria-haspopup="listbox" aria-expanded={modelMenuOpen} aria-label={`当前模型：${currentModelLabel}（${currentModelId}），点击切换`}>
           <strong className="chat-model-label">{currentModelLabel}</strong>
@@ -168,7 +175,7 @@ export function ChatPage() {
           <i className="chat-model-chevron" aria-hidden="true">⌄</i>
         </button>
         {modelMenuOpen && <div className="chat-model-menu" role="listbox" aria-label="选择模型">
-          {modelOptions.length ? modelOptions.map(option => <button type="button" role="option" aria-selected={option.id === model} className={`chat-model-option${option.id === model ? ' selected' : ''}`} key={option.id} onClick={() => { setModel(option.id); setModelMenuOpen(false) }}>
+          {modelOptions.length ? modelOptions.map(option => <button type="button" role="option" aria-selected={option.id === model} className={`chat-model-option${option.id === model ? ' selected' : ''}`} key={option.id} onClick={() => chooseModel(option.id)}>
             <span><strong>{option.label}</strong><small>{option.id}</small></span><i aria-hidden="true">{option.id === model ? '✓' : ''}</i>
           </button>) : <p className="chat-model-empty">{config.isLoading ? '模型配置加载中…' : '暂无可用模型'}</p>}
         </div>}
