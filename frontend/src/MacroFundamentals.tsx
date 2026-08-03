@@ -116,10 +116,78 @@ function YieldCurvePanel({ curve }: { curve?: YieldCurve }) {
 function MacroDetail({ selectedKey, onClose }: { selectedKey: string | null; onClose: () => void }) {
   const detail = useQuery({ queryKey: ['us-macro-series', selectedKey], queryFn: () => api<SeriesDetail>(`/fundamentals/macro/us/series/${selectedKey}`), enabled: !!selectedKey, staleTime: 10 * 60_000 })
   const explanation = useQuery({ queryKey: ['us-macro-explanation', selectedKey], queryFn: () => api<SeriesDetail & { limitations: string[]; current_system_judgment: { label_zh: string; reason: string; confidence: string }; market_impact: { asset: string; stance: string; reason: string }[] }>(`/fundamentals/macro/us/series/${selectedKey}/explanation`), enabled: !!selectedKey && detail.isSuccess, staleTime: 10 * 60_000 })
-  const [range, setRange] = useState('5y'); const [mode, setMode] = useState('raw')
-  useEffect(() => { setRange('5y'); setMode('raw') }, [selectedKey])
-  const modes = detail.data ? [{ key: 'raw', label: detail.data.unit === 'index' ? '指数水平' : '原始值' }, ...Object.keys(detail.data.derived_series || {}).map(key => ({ key, label: key.includes('yoy') ? '同比' : key.includes('mom') ? '环比' : key.includes('annualized') ? '三个月年化' : key.includes('change') ? '月度变化' : '推导值' }))] : []
-  return <Sheet open={!!selectedKey} onClose={onClose} title={detail.data?.display_name_zh || '宏观指标详情'}><MacroDetailErrorBoundary resetKey={selectedKey} onClose={onClose}>{detail.isLoading && <div className="macro-loading">正在读取历史数据…</div>}{detail.isError && <div className="macro-empty-panel">指标详情暂不可用，请稍后重试。</div>}{detail.data && <article className="macro-detail"><header><p className="eyebrow">{detail.data.display_name_en} · {detail.data.frequency}</p><h2>{detail.data.display_name_zh}</h2><p>{detail.data.description_zh}</p></header><div className="macro-detail-facts"><div><span>最新值</span><b>{formatValue(detail.data.latest?.value, detail.data.unit)}</b><small>{displayDate(detail.data.latest?.observation_date)}</small></div><div><span>前值</span><b>{formatValue(detail.data.previous?.value, detail.data.unit)}</b><small>{displayDate(detail.data.previous?.observation_date)}</small></div><div><span>趋势</span><b>{directionLabel[detail.data.trend?.direction || 'insufficient_data'] || detail.data.trend?.direction || '数据不足'}</b><small>{detail.data.freshness?.label_zh || '数据不足'}</small></div></div><div className="macro-chart-toolbar"><div>{modes.map(item => <button key={item.key} className={mode === item.key ? 'active' : ''} onClick={() => setMode(item.key)}>{item.label}</button>)}</div><div>{['1y', '3y', '5y', '10y', 'all'].map(item => <button key={item} className={range === item ? 'active' : ''} onClick={() => setRange(item)}>{item === 'all' ? '全部' : item}</button>)}</div></div><MacroHistoryChart detail={detail.data} range={range} mode={mode}/>{explanation.isLoading && <p className="macro-detail-loading">正在读取指标解读…</p>}{explanation.data && <><section><h3>如何解读</h3><p>{explanation.data.interpretation?.rising_interpretation}</p><p>{explanation.data.interpretation?.falling_interpretation}</p></section><section><h3>对市场的可能影响</h3><div className="macro-impact-list">{(explanation.data.market_impact || []).map(item => <div key={item.asset}><b>{item.asset}</b><span>{item.stance}</span><p>{item.reason}</p></div>)}</div></section><section><h3>当前系统判断</h3><div className="macro-judgment"><b>{explanation.data.current_system_judgment?.label_zh || '数据不足'}</b><p>{explanation.data.current_system_judgment?.reason}</p><small>置信度：{explanation.data.current_system_judgment?.confidence || '未知'} · 依据：已存历史序列与确定性规则</small></div></section><section><h3>限制与注意事项</h3><ul>{(explanation.data.limitations || []).map(note => <li key={note}>{note}</li>)}</ul></section></>}</article>}</MacroDetailErrorBoundary></Sheet>
+  const [range, setRange] = useState('5y')
+  const [mode, setMode] = useState('raw')
+
+  useEffect(() => {
+    setRange('5y')
+    setMode('raw')
+  }, [selectedKey])
+
+  const modes = detail.data ? [
+    { key: 'raw', label: detail.data.unit === 'index' ? '指数水平' : '原始值' },
+    ...Object.keys(detail.data.derived_series || {}).map(key => ({
+      key,
+      label: key.includes('yoy') ? '同比' : key.includes('mom') ? '环比' : key.includes('annualized') ? '三个月年化' : key.includes('change') ? '月度变化' : '推导值',
+    })),
+  ] : []
+
+  return (
+    <Sheet open={!!selectedKey} onClose={onClose} title={detail.data?.display_name_zh || '宏观指标详情'}>
+      <MacroDetailErrorBoundary resetKey={selectedKey} onClose={onClose}>
+        {detail.isLoading && <div className="macro-loading">正在读取历史数据…</div>}
+        {detail.isError && <div className="macro-empty-panel">指标详情暂不可用，请稍后重试。</div>}
+        {detail.data && (
+          <article className="macro-detail">
+            <header className="macro-detail-header">
+              <p className="eyebrow">{detail.data.display_name_en} · {detail.data.frequency}</p>
+              <h2>{detail.data.display_name_zh}</h2>
+              <p>{detail.data.description_zh}</p>
+            </header>
+
+            <div className="macro-detail-facts" aria-label="指标摘要">
+              <div><span>最新值</span><b>{formatValue(detail.data.latest?.value, detail.data.unit)}</b><small>{displayDate(detail.data.latest?.observation_date)}</small></div>
+              <div><span>前值</span><b>{formatValue(detail.data.previous?.value, detail.data.unit)}</b><small>{displayDate(detail.data.previous?.observation_date)}</small></div>
+              <div><span>趋势</span><b>{directionLabel[detail.data.trend?.direction || 'insufficient_data'] || detail.data.trend?.direction || '数据不足'}</b><small>{detail.data.freshness?.label_zh || '数据不足'}</small></div>
+            </div>
+
+            <div className="macro-chart-toolbar" aria-label="历史数据筛选">
+              <div className="macro-chart-control-group">
+                <span>显示</span>
+                {modes.map(item => <button type="button" key={item.key} className={mode === item.key ? 'active' : ''} onClick={() => setMode(item.key)}>{item.label}</button>)}
+              </div>
+              <div className="macro-chart-control-group">
+                <span>范围</span>
+                {['1y', '3y', '5y', '10y', 'all'].map(item => <button type="button" key={item} className={range === item ? 'active' : ''} onClick={() => setRange(item)}>{item === 'all' ? '全部' : item}</button>)}
+              </div>
+            </div>
+
+            <MacroHistoryChart detail={detail.data} range={range} mode={mode}/>
+            {explanation.isLoading && <p className="macro-detail-loading">正在读取指标解读…</p>}
+            {explanation.data && <>
+              <section className="macro-detail-section macro-detail-reading">
+                <h3>如何解读</h3>
+                <p>{explanation.data.interpretation?.rising_interpretation}</p>
+                <p>{explanation.data.interpretation?.falling_interpretation}</p>
+              </section>
+              <section className="macro-detail-section macro-detail-impact">
+                <h3>对市场的可能影响</h3>
+                <div className="macro-impact-list">{(explanation.data.market_impact || []).map(item => <div key={item.asset}><b>{item.asset}</b><span>{item.stance}</span><p>{item.reason}</p></div>)}</div>
+              </section>
+              <section className="macro-detail-section macro-detail-judgment">
+                <h3>当前系统判断</h3>
+                <div className="macro-judgment"><b>{explanation.data.current_system_judgment?.label_zh || '数据不足'}</b><p>{explanation.data.current_system_judgment?.reason}</p><small>置信度：{explanation.data.current_system_judgment?.confidence || '未知'} · 依据：已存历史序列与确定性规则</small></div>
+              </section>
+              <section className="macro-detail-section macro-detail-limitations">
+                <h3>限制与注意事项</h3>
+                <ul>{(explanation.data.limitations || []).map(note => <li key={note}>{note}</li>)}</ul>
+              </section>
+            </>}
+          </article>
+        )}
+      </MacroDetailErrorBoundary>
+    </Sheet>
+  )
 }
 
 export function MacroFundamentals({ isAdmin = false }: { isAdmin?: boolean }) {
@@ -129,7 +197,7 @@ export function MacroFundamentals({ isAdmin = false }: { isAdmin?: boolean }) {
   if (overview.isLoading) return <div className="macro-page"><div className="macro-loading">正在读取美国宏观数据…</div></div>
   if (overview.isError || !overview.data) return <div className="macro-page"><div className="macro-empty-panel">美国宏观数据暂不可用。后端会继续保留上一次成功同步的数据。</div></div>
   const data = overview.data
-  return <div className="macro-page"><div className="macro-page-heading"><div><p className="eyebrow">US MACRO FUNDAMENTALS</p><h2>美国宏观</h2><p>整个市场共用的宏观时间序列。观察日期与系统抓取时间分开显示。</p></div>{isAdmin && <button className="macro-outline-btn" onClick={() => setSelectedKey('us_cpi')}>查看指标说明</button>}</div><MacroStatusBanner overview={data}/><SummaryStrip summaries={data.summaries} onSelect={setSelectedSummary}/><section><div className="macro-section-heading"><div><p>CORE INDICATORS</p><h3>核心指标</h3></div><span>{data.integrity.available_series_count}/{data.integrity.raw_series_count} 个原始序列有数据</span></div><div className="macro-card-grid">{data.cards.map(card => <button className="macro-card" key={card.series_key} onClick={() => setSelectedKey(card.series_key)}><div className="macro-card-top"><span>{categoryLabels[card.category] || card.category}</span><small className={`macro-freshness ${card.freshness.status}`}>{card.freshness.label_zh}</small></div><h4>{card.display_name_zh}</h4><strong>{formatValue(card.latest?.value, card.unit)}</strong><div className="macro-card-meta"><span>观察 {displayDate(card.latest?.observation_date)}</span><span>{card.latest?.value != null && card.previous?.value != null ? `较前值 ${formatValue(card.latest.value - card.previous.value, card.unit === 'percent' ? 'percentage_points' : card.unit)}` : '前值不足'}</span></div><Sparkline values={(card.sparkline || []).map(point => point.value)} color={card.current_impact.label === 'bearish' ? '#be6b71' : '#397bd8'}/><footer><span>影响：{card.current_impact.label_zh}</span><i>ⓘ</i></footer></button>)}</div></section><section className="macro-section-grid"><YieldCurvePanel curve={curve.data}/><div className="macro-data-notes"><div className="macro-panel-heading"><div><p>DATA NOTES</p><h3>数据状态</h3></div></div><dl><div><dt>最后成功同步</dt><dd>{displayDateTime(data.last_successful_sync_at)}</dd></div><div><dt>最新观察日期</dt><dd>{displayDate(data.latest_observation_date)}</dd></div><div><dt>自动同步预算</dt><dd>{data.usage.automatic_remaining} / {data.usage.automatic_usable_limit}</dd></div></dl>{data.integrity.missing_series_keys.length > 0 && <p className="macro-warning-text">缺少：{data.integrity.missing_series_keys.join('、')}</p>}<p className="macro-derived-note">数据来自 Alpha Vantage 官方 REST API；其页面标注的底层序列来源由 provider 字段保留。派生指标由本地确定性规则计算。</p></div></section><footer className="macro-disclaimer">{data.disclaimer}</footer><MacroDetail selectedKey={selectedKey} onClose={() => setSelectedKey(null)}/><Sheet open={!!selectedSummary} onClose={() => setSelectedSummary(null)} title="宏观环境判断依据">{selectedSummary && <article className="macro-summary-detail"><h2>{selectedSummary.label_zh}</h2><p>置信度 {Math.round(selectedSummary.confidence * 100)}%。这是规则化摘要，不是 AI 生成的投资结论。</p><ul>{selectedSummary.drivers.map((driver, index) => <li key={`${driver.series_key}-${index}`}><b>{driver.series_key}</b><span>{driver.reason}</span><small>{driver.observation_date ? `观察 ${displayDate(driver.observation_date)}` : '综合规则'}</small></li>)}</ul><p>{selectedSummary.disclaimer}</p></article>}</Sheet></div>
+  return <div className="macro-page"><div className="macro-page-heading"><div><p className="eyebrow">US MACRO FUNDAMENTALS</p><h2>美国宏观</h2><p>整个市场共用的宏观时间序列。观察日期与系统抓取时间分开显示。</p></div>{isAdmin && <button className="macro-outline-btn" onClick={() => setSelectedKey('us_cpi')}>查看指标说明</button>}</div><MacroStatusBanner overview={data}/><SummaryStrip summaries={data.summaries} onSelect={setSelectedSummary}/><section className="macro-core-section"><div className="macro-section-heading"><div><p>CORE INDICATORS</p><h3>核心指标</h3></div><span>{data.integrity.available_series_count}/{data.integrity.raw_series_count} 个原始序列有数据</span></div><div className="macro-card-grid">{data.cards.map(card => <button type="button" className="macro-card" key={card.series_key} onClick={() => setSelectedKey(card.series_key)}><div className="macro-card-top"><span>{categoryLabels[card.category] || card.category}</span><small className={`macro-freshness ${card.freshness.status}`}>{card.freshness.label_zh}</small></div><h4>{card.display_name_zh}</h4><strong>{formatValue(card.latest?.value, card.unit)}</strong><div className="macro-card-meta"><span>观察 {displayDate(card.latest?.observation_date)}</span><span>{card.latest?.value != null && card.previous?.value != null ? `较前值 ${formatValue(card.latest.value - card.previous.value, card.unit === 'percent' ? 'percentage_points' : card.unit)}` : '前值不足'}</span></div><Sparkline values={(card.sparkline || []).map(point => point.value)} color={card.current_impact.label === 'bearish' ? '#be6b71' : '#397bd8'}/><footer><span>影响：{card.current_impact.label_zh}</span><i>ⓘ</i></footer></button>)}</div></section><section className="macro-section-grid macro-secondary-section"><YieldCurvePanel curve={curve.data}/><div className="macro-data-notes"><div className="macro-panel-heading"><div><p>DATA NOTES</p><h3>数据状态</h3></div></div><dl><div><dt>最后成功同步</dt><dd>{displayDateTime(data.last_successful_sync_at)}</dd></div><div><dt>最新观察日期</dt><dd>{displayDate(data.latest_observation_date)}</dd></div><div><dt>自动同步预算</dt><dd>{data.usage.automatic_remaining} / {data.usage.automatic_usable_limit}</dd></div></dl>{data.integrity.missing_series_keys.length > 0 && <p className="macro-warning-text">缺少：{data.integrity.missing_series_keys.join('、')}</p>}<p className="macro-derived-note">数据来自 Alpha Vantage 官方 REST API；其页面标注的底层序列来源由 provider 字段保留。派生指标由本地确定性规则计算。</p></div></section><footer className="macro-disclaimer">{data.disclaimer}</footer><MacroDetail selectedKey={selectedKey} onClose={() => setSelectedKey(null)}/><Sheet open={!!selectedSummary} onClose={() => setSelectedSummary(null)} title="宏观环境判断依据">{selectedSummary && <article className="macro-summary-detail"><h2>{selectedSummary.label_zh}</h2><p>置信度 {Math.round(selectedSummary.confidence * 100)}%。这是规则化摘要，不是 AI 生成的投资结论。</p><ul>{selectedSummary.drivers.map((driver, index) => <li key={`${driver.series_key}-${index}`}><b>{driver.series_key}</b><span>{driver.reason}</span><small>{driver.observation_date ? `观察 ${displayDate(driver.observation_date)}` : '综合规则'}</small></li>)}</ul><p>{selectedSummary.disclaimer}</p></article>}</Sheet></div>
 }
 
 export function MacroDataSourcePanel({ isAdmin = false }: { isAdmin?: boolean }) {

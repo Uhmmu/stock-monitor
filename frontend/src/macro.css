@@ -7,3 +7,183 @@
 @media(prefers-reduced-transparency:reduce){.macro-status-banner,.macro-summary-chip,.macro-card,.macro-curve-panel,.macro-data-notes,.macro-settings-panel{background:var(--solid)}}
 @media(prefers-contrast:more){.macro-status-banner,.macro-summary-chip,.macro-card,.macro-curve-panel,.macro-data-notes,.macro-settings-panel,.macro-history-chart{border-color:var(--ink-3)}}
 .macro-detail-loading{margin:12px 0;color:var(--ink-4);font-size:10px}.macro-detail-error{display:grid;gap:8px;margin:10px 0 28px;padding:28px 16px;border:1px dashed var(--line);border-radius:14px;color:var(--ink-3);font-size:11px;text-align:center}.macro-detail-error b{color:var(--ink-2);font-size:13px}.macro-detail-error .macro-outline-btn{justify-self:center;margin-top:4px}
+
+/* 宏观模块的阅读节奏与详情 Sheet 局部材质 */
+.macro-page{max-width:1360px;margin:0 auto 56px}
+.macro-page-heading{gap:28px;margin:8px 4px 28px}
+.macro-page-heading h2{margin:4px 0 8px;font-size:32px;line-height:1.12}
+.macro-page-heading p:not(.eyebrow){max-width:720px;font-size:13px;line-height:1.7}
+.macro-outline-btn{min-height:38px;padding:9px 15px;border-radius:12px;font-size:12px}
+.macro-status-banner{gap:14px;margin-bottom:22px;padding:16px 20px;border-radius:18px}
+.macro-status-banner b{font-size:12px}
+.macro-status-banner p{margin-top:5px;font-size:11px;line-height:1.55}
+.macro-quota{font-size:12px}
+.macro-quota small{margin-top:4px;font-size:10px}
+.macro-summary-strip{gap:12px;margin-bottom:38px}
+.macro-summary-chip{min-height:86px;gap:6px;padding:15px 16px;border-radius:16px}
+.macro-summary-chip>span{font-size:10px}
+.macro-summary-chip strong{font-size:14px}
+.macro-summary-chip small{font-size:10px}
+.macro-section-heading{gap:16px;margin:40px 4px 18px}
+.macro-section-heading p,.macro-panel-heading p{margin-bottom:5px;font-size:9px}
+.macro-section-heading h3,.macro-panel-heading h3{font-size:20px}
+.macro-section-heading>span{font-size:11px}
+.macro-card-grid{gap:18px}
+.macro-card{min-height:250px;padding:22px;border-radius:20px}
+.macro-card-top>span{font-size:10px}
+.macro-freshness{padding:4px 7px;font-size:9px}
+.macro-card h4{min-height:42px;margin:16px 0 4px;font-size:15px;line-height:1.45}
+.macro-card>strong{font-size:28px}
+.macro-card-meta{gap:5px 14px;margin-top:6px;font-size:10px;line-height:1.5}
+.macro-sparkline,.macro-no-chart{height:52px;margin:16px 0 8px}
+.macro-no-chart{font-size:10px}
+.macro-card footer{margin-top:auto;padding-top:12px;font-size:10px}
+.macro-card footer i{font-size:16px}
+.macro-section-grid{gap:18px;margin-top:22px}
+.macro-curve-panel,.macro-data-notes{padding:24px;border-radius:21px}
+.macro-panel-heading{gap:14px}
+.macro-panel-heading>span{font-size:11px}
+.macro-curve-chart{height:170px;margin-top:20px}
+.macro-curve-labels{gap:8px}
+.macro-curve-labels span{gap:4px;font-size:10px}
+.macro-curve-labels small{font-size:12px}
+.macro-derived-note{margin-top:16px;font-size:11px;line-height:1.7}
+.macro-data-notes dl{margin-top:22px}
+.macro-data-notes dl>div{gap:16px;padding:13px 0}
+.macro-data-notes dt,.macro-data-notes dd{font-size:11px}
+.macro-warning-text{margin-top:16px;padding:10px 12px;font-size:10px;line-height:1.65}
+.macro-disclaimer{margin-top:22px;font-size:10px;line-height:1.7}
+
+/* 详情与摘要 Sheet：扩大可读区域，并让 grip/title 区共享 Sheet 材质 */
+.sheet-panel:has(.macro-detail),.sheet-panel:has(.macro-summary-detail){width:min(980px,calc(100% - 32px));max-height:min(94vh,920px);background:linear-gradient(145deg,rgba(255,255,255,.66),rgba(226,236,248,.58)),var(--glass)}
+.sheet-panel:has(.macro-detail) .sheet-grip-zone,.sheet-panel:has(.macro-summary-detail) .sheet-grip-zone{padding:15px 0 13px;background:transparent;border-bottom:1px solid rgba(77,103,137,.10)}
+.sheet-panel:has(.macro-detail) .sheet-title,.sheet-panel:has(.macro-summary-detail) .sheet-title{margin-top:10px;padding:0 28px;background:transparent;color:var(--ink-2);font-size:15px;line-height:1.4;font-weight:700;letter-spacing:-.01em}
+.sheet-panel:has(.macro-detail) .sheet-scroll,.sheet-panel:has(.macro-summary-detail) .sheet-scroll{padding:12px 38px calc(42px + env(safe-area-inset-bottom));background:transparent}
+.macro-detail{max-width:900px;margin:0 auto;padding:10px 0 50px}
+.macro-detail>header.macro-detail-header{display:block;position:static;z-index:auto;margin:0;padding:4px 2px 21px;background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;border-bottom:1px solid var(--line-2);box-shadow:none}
+.macro-detail .macro-detail-header h2{margin:8px 0 10px;font-size:30px;line-height:1.16;letter-spacing:-.035em}
+.macro-detail .macro-detail-header>p:last-child{max-width:780px;margin:0;color:var(--ink-3);font-size:14px;line-height:1.8;overflow-wrap:anywhere}
+.macro-detail-facts{gap:12px;margin:24px 0 28px;padding:14px;border:1px solid rgba(91,119,153,.12);border-radius:18px;background:rgba(222,233,245,.54);box-shadow:inset 0 1px 0 rgba(255,255,255,.65)}
+.macro-detail-facts>div{min-height:88px;gap:7px;padding:12px 15px;border-right:1px solid rgba(91,119,153,.14)}
+.macro-detail-facts span,.macro-detail-facts small{font-size:11px;line-height:1.45}
+.macro-detail-facts b{font-size:22px;line-height:1.2;overflow-wrap:anywhere}
+.macro-detail .macro-chart-toolbar{align-items:center;gap:12px;margin:0 0 16px;padding:8px;border:1px solid rgba(91,119,153,.12);border-radius:14px;background:rgba(222,233,245,.42)}
+.macro-detail .macro-chart-control-group{align-items:center;min-width:0;gap:6px;padding:4px 5px;border-radius:10px;background:rgba(255,255,255,.34)}
+.macro-detail .macro-chart-control-group>span{flex:0 0 auto;margin-right:2px;color:var(--ink-4);font-size:10px;font-weight:700;letter-spacing:.04em;white-space:nowrap}
+.macro-detail .macro-chart-toolbar button{min-height:34px;padding:7px 12px;border-color:rgba(91,119,153,.16);border-radius:9px;background:rgba(255,255,255,.42);color:var(--ink-3);font-size:11px;line-height:1.2;transition:transform .16s var(--spring),background-color .16s ease,border-color .16s ease,color .16s ease}
+.macro-detail .macro-chart-toolbar button.active{border-color:transparent;background:var(--accent);color:#fff;box-shadow:0 3px 9px rgba(0,113,227,.18)}
+.macro-detail .macro-chart-toolbar button:active{transform:scale(.97)}
+.macro-history-chart{min-height:260px;padding:16px 16px 12px;border-radius:18px;background:rgba(235,242,250,.46);box-shadow:inset 0 1px 0 rgba(255,255,255,.55)}
+.macro-history-chart svg{min-height:220px}
+.macro-chart-axis{padding:0 2px;margin-top:7px;font-size:10px;line-height:1.4}
+.macro-chart-empty{padding:58px 20px;font-size:12px;line-height:1.7}
+.macro-detail .macro-detail-section{margin-top:30px;padding-top:22px;border-top:1px solid var(--line-2)}
+.macro-detail .macro-detail-reading{margin-top:35px}
+.macro-detail .macro-detail-section h3{margin:0 0 12px;color:var(--ink-2);font-size:17px;line-height:1.35}
+.macro-detail .macro-detail-section p,.macro-detail .macro-detail-section li{margin:9px 0;color:var(--ink-3);font-size:14px;line-height:1.8;overflow-wrap:anywhere}
+.macro-detail .macro-detail-section ul{margin:0;padding-left:22px}
+.macro-impact-list{gap:12px}
+.macro-impact-list>div{min-width:0;padding:14px 15px;border-radius:13px;background:rgba(255,255,255,.38)}
+.macro-impact-list b{font-size:12px}
+.macro-impact-list span{margin-top:5px;font-size:11px}
+.macro-detail .macro-impact-list p{margin:8px 0 0;font-size:12px!important;line-height:1.7}
+.macro-judgment{padding:16px 17px;border:1px solid rgba(70,124,187,.12);border-radius:14px;background:linear-gradient(135deg,rgba(70,124,187,.10),rgba(255,255,255,.30))}
+.macro-judgment b{font-size:16px}
+.macro-judgment p{margin:7px 0!important;font-size:13px!important;line-height:1.75!important}
+.macro-judgment small{font-size:11px;line-height:1.55}
+.macro-detail-loading{margin:18px 0;font-size:13px;line-height:1.7}
+.macro-detail-error{gap:10px;margin:14px 0 34px;padding:38px 20px;font-size:13px;line-height:1.7}
+.macro-detail-error b{font-size:16px}
+
+.macro-summary-detail{max-width:900px;margin:0 auto;padding:10px 0 50px}
+.macro-summary-detail h2{margin:0 0 10px;font-size:28px;line-height:1.2}
+.macro-summary-detail>p{margin:0;color:var(--ink-3);font-size:14px;line-height:1.8;overflow-wrap:anywhere}
+.macro-summary-detail ul{gap:12px;margin:24px 0;padding:0}
+.macro-summary-detail>ul>li{grid-template-columns:minmax(140px,.45fr) minmax(0,1.5fr) auto;gap:12px;padding:15px 16px;border-radius:13px;background:rgba(255,255,255,.38)}
+.macro-summary-detail>ul>li b{font-size:12px}
+.macro-summary-detail>ul>li span{min-width:0;color:var(--ink-3);font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.macro-summary-detail>ul>li small{font-size:11px;line-height:1.5;white-space:nowrap}
+.macro-summary-detail>p:last-child{margin-top:24px;font-size:12px;line-height:1.75}
+
+.macro-summary-chip:focus-visible,.macro-card:focus-visible,.macro-outline-btn:focus-visible,.macro-detail .macro-chart-toolbar button:focus-visible{outline:3px solid rgba(0,113,227,.28);outline-offset:3px}
+
+@media (hover:none),(pointer:coarse){.macro-summary-chip:hover,.macro-card:hover{transform:none;box-shadow:var(--shadow-s)}}
+@media (max-width:1180px){.macro-summary-strip{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media (max-width:960px){.macro-card-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.macro-section-grid{grid-template-columns:1fr}}
+@media (max-width:600px){
+  .macro-page{margin-bottom:34px}
+  .macro-page-heading{gap:16px;margin:4px 0 22px}
+  .macro-page-heading h2{font-size:28px}
+  .macro-page-heading p:not(.eyebrow){font-size:12px;line-height:1.7}
+  .macro-outline-btn{width:100%;min-height:42px}
+  .macro-status-banner{gap:10px;margin-bottom:18px;padding:14px;border-radius:16px}
+  .macro-status-banner p{font-size:11px}
+  .macro-quota{margin-left:18px;font-size:11px}
+  .macro-summary-strip{gap:10px;margin-bottom:30px}
+  .macro-summary-chip{min-height:82px;padding:13px;border-radius:14px}
+  .macro-summary-chip strong{font-size:13px}
+  .macro-section-heading{gap:7px;margin:32px 0 14px}
+  .macro-section-heading h3,.macro-panel-heading h3{font-size:18px}
+  .macro-section-heading>span{max-width:100%;font-size:10px;line-height:1.5}
+  .macro-card-grid{grid-template-columns:1fr;gap:14px}
+  .macro-card{min-height:0;padding:19px;border-radius:18px}
+  .macro-card h4{min-height:0;font-size:15px}
+  .macro-section-grid{gap:14px;margin-top:18px}
+  .macro-curve-panel,.macro-data-notes{padding:19px;border-radius:18px}
+  .macro-panel-heading{align-items:flex-start;flex-direction:column;gap:6px}
+  .macro-panel-heading>span{font-size:10px;line-height:1.5}
+  .macro-curve-chart{height:145px;margin-top:17px}
+  .macro-curve-labels{gap:3px}
+  .macro-curve-labels span{font-size:9px}
+  .macro-curve-labels small{font-size:11px}
+  .macro-derived-note{font-size:10px}
+  .macro-data-notes dl>div{align-items:flex-start;flex-direction:column;gap:4px}
+  .macro-data-notes dd{text-align:left;overflow-wrap:anywhere}
+  .macro-disclaimer{font-size:10px}
+
+  .sheet-panel:has(.macro-detail),.sheet-panel:has(.macro-summary-detail){width:100%;max-height:94dvh;border-radius:24px 24px 0 0}
+  .sheet-panel:has(.macro-detail) .sheet-grip-zone,.sheet-panel:has(.macro-summary-detail) .sheet-grip-zone{padding:13px 0 11px}
+  .sheet-panel:has(.macro-detail) .sheet-title,.sheet-panel:has(.macro-summary-detail) .sheet-title{padding:0 18px;font-size:14px}
+  .sheet-panel:has(.macro-detail) .sheet-scroll,.sheet-panel:has(.macro-summary-detail) .sheet-scroll{padding:10px 16px calc(32px + env(safe-area-inset-bottom))}
+  .macro-detail,.macro-summary-detail{padding:8px 0 38px}
+  .macro-detail .macro-detail-header h2{font-size:25px}
+  .macro-detail .macro-detail-header>p:last-child{font-size:13px;line-height:1.75}
+  .macro-detail-facts{grid-template-columns:1fr;gap:0;margin:19px 0 22px;padding:8px}
+  .macro-detail .macro-detail-facts>div{min-height:0;padding:12px 13px;border-right:0;border-bottom:1px solid rgba(91,119,153,.14)}
+  .macro-detail .macro-detail-facts>div:last-child{border-bottom:0}
+  .macro-detail-facts b{font-size:20px}
+  .macro-detail .macro-chart-toolbar{align-items:stretch;flex-direction:column;gap:7px;margin-bottom:12px;padding:7px}
+  .macro-detail .macro-chart-control-group{width:100%;flex-wrap:wrap;padding:4px}
+  .macro-detail .macro-chart-toolbar button{min-height:36px;padding:8px 11px}
+  .macro-history-chart{min-height:0;padding:12px 10px 10px;border-radius:15px}
+  .macro-history-chart svg{min-height:0}
+  .macro-chart-axis{font-size:9px}
+  .macro-detail .macro-detail-section{margin-top:25px;padding-top:18px}
+  .macro-detail .macro-detail-reading{margin-top:28px}
+  .macro-detail .macro-detail-section h3{font-size:16px}
+  .macro-detail .macro-detail-section p,.macro-detail .macro-detail-section li{font-size:13px;line-height:1.75}
+  .macro-impact-list{grid-template-columns:1fr;gap:9px}
+  .macro-impact-list>div{padding:13px 14px}
+  .macro-summary-detail h2{font-size:24px}
+  .macro-summary-detail>p{font-size:13px;line-height:1.75}
+  .macro-summary-detail>ul>li{grid-template-columns:1fr;gap:6px;padding:13px 14px}
+  .macro-summary-detail>ul>li small{white-space:normal}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .macro-detail .macro-chart-toolbar button{transition:none}
+  .macro-detail .macro-chart-toolbar button:active,.macro-outline-btn:active{transform:none}
+}
+@media (prefers-reduced-transparency:reduce){
+  .sheet-panel:has(.macro-detail),.sheet-panel:has(.macro-summary-detail){background:var(--solid);backdrop-filter:none;-webkit-backdrop-filter:none}
+  .sheet-panel:has(.macro-detail) .sheet-grip-zone,.sheet-panel:has(.macro-summary-detail) .sheet-grip-zone,.sheet-panel:has(.macro-detail) .sheet-title,.sheet-panel:has(.macro-summary-detail) .sheet-title{background:var(--solid)}
+  .macro-detail-facts,.macro-detail .macro-chart-toolbar,.macro-history-chart,.macro-impact-list>div,.macro-judgment,.macro-summary-detail>ul>li{background:var(--solid);box-shadow:none}
+}
+@media (prefers-contrast:more){
+  .sheet-panel:has(.macro-detail),.sheet-panel:has(.macro-summary-detail){border-color:var(--ink-3)}
+  .sheet-panel:has(.macro-detail) .sheet-grip-zone,.sheet-panel:has(.macro-summary-detail) .sheet-grip-zone{border-color:var(--ink-3)}
+  .macro-detail-facts,.macro-detail .macro-chart-toolbar,.macro-history-chart,.macro-impact-list>div,.macro-judgment,.macro-summary-detail>ul>li{border-color:var(--ink-3)}
+  .macro-detail .macro-chart-control-group{background:var(--solid)}
+  .macro-detail .macro-chart-toolbar button{border-color:var(--ink-3);color:var(--ink)}
+  .macro-detail .macro-chart-toolbar button.active{border-color:var(--accent);color:#fff}
+}
