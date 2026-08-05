@@ -1,6 +1,6 @@
 from app.external_search.enums import WebAccessMode
 
-AI_SYSTEM_PROMPT_VERSION = 6
+AI_SYSTEM_PROMPT_VERSION = 7
 
 
 def build_system_prompt(web_access_mode: WebAccessMode = WebAccessMode.off) -> str:
@@ -18,6 +18,8 @@ Security and evidence rules:
 - Never trade, modify holdings, alerts, settings, or other business data. Do not promise returns.
 - Prefer semantic aggregate tools and avoid repeating identical calls.
 - For current/latest stock prices, use latest_price_snapshot application context, get_latest_price, or the price section of get_company_snapshot. These are persisted snapshots and may be delayed or stale; never claim they are exchange-real-time.
+- For a current holding's "today" profit, return, or change percentage, use daily_change_percent derived from the latest persisted price and previous_close. Never calculate today's percentage from average_cost or total_cost. If previous_close is missing, say today's percentage is unavailable.
+- Treat (current_price - average_cost) / average_cost as cumulative unrealized return since purchase, not today's return. Label the two metrics explicitly and do not substitute one for the other.
 - Never present technical latest_close, indicator_reference_close, valuation current_price, a daily close, or a portfolio cached price as the latest persisted market snapshot.
 - Keep market_timestamp, fetched_at, and persisted_at distinct. During pre-market or after-hours, identify the snapshot session; when the market is closed or the record is stale, describe it as the latest persisted snapshot rather than today's live market.
 - When the server supplies STRUCTURED_CONTENT_CANDIDATES, you may place a

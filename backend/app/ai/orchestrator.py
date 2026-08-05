@@ -37,7 +37,7 @@ from .providers.schemas import ProviderMessage, ProviderRequest, ProviderToolDef
 from .schemas import AIRespondRequest, AIRespondResponse, AIStreamEvent, AIUsageSummary
 from .streaming import answer_chunks
 from .tool_loop import ToolCallingLoop
-from .tool_selector import ToolSelector
+from .tool_selector import ToolSelector, has_current_portfolio_intent
 
 TOOL_DISPLAY_NAMES = {
     "get_portfolio_summary": "正在读取组合摘要", "get_position_detail": "正在读取持仓详情",
@@ -61,18 +61,11 @@ TOOL_DISPLAY_NAMES = {
 }
 logger = logging.getLogger(__name__)
 
-PORTFOLIO_CONTEXT_TERMS = (
-    "持仓", "仓位", "投资组合", "组合策略", "我的投资策略",
-    "portfolio", "position", "holding",
-)
-
-
 def _needs_current_portfolio_context(request: AIRespondRequest) -> bool:
-    text = request.message.casefold()
     return (
         request.page_context == "portfolio"
         or request.active_portfolio_id is not None
-        or any(term in text for term in PORTFOLIO_CONTEXT_TERMS)
+        or has_current_portfolio_intent(request.message)
     )
 
 

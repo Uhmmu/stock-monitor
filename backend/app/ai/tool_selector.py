@@ -63,6 +63,33 @@ PREFERRED = {
 }
 
 
+PERSONAL_POSITION_TERMS = (
+    "我的股票", "我的个股", "我的证券", "我的标的", "我持有", "我买的",
+    "我买了", "我现在的", "我每只", "我每个", "我账户里的",
+)
+POSITION_SUBJECT_TERMS = ("股票", "个股", "证券", "标的")
+POSITION_METRIC_TERMS = (
+    "盈利", "收益", "盈亏", "亏损", "赚钱", "回报", "涨跌", "表现", "百分比",
+)
+
+
+def has_current_portfolio_intent(message: str) -> bool:
+    """Recognize current-user holding questions without relying on one keyword.
+
+    Chinese users often say "我现在的每一个股票" instead of the more formal
+    "我的持仓". Requiring a personal-ownership phrase plus a security subject
+    and a position metric keeps company-profit questions out of private tools.
+    """
+    text = message.casefold()
+    if any(term in text for term in DOMAIN_RULES["portfolio"]):
+        return True
+    return (
+        any(term in text for term in PERSONAL_POSITION_TERMS)
+        and any(term in text for term in POSITION_SUBJECT_TERMS)
+        and any(term in text for term in POSITION_METRIC_TERMS)
+    )
+
+
 class ToolSelector:
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
@@ -83,6 +110,8 @@ class ToolSelector:
 
         text = message.casefold()
         domains = [domain for domain, words in DOMAIN_RULES.items() if any(word in text for word in words)]
+        if has_current_portfolio_intent(message) and "portfolio" not in domains:
+            domains.insert(0, "portfolio")
         if page_context in PREFERRED and page_context not in domains:
             domains.append(page_context)
         if not domains:

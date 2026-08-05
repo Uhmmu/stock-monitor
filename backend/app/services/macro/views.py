@@ -291,6 +291,74 @@ def _state(state: str, label: str, tone: str, confidence: float, drivers: list[d
     return {"state": state, "label_zh": label, "tone": tone, "confidence": round(max(0, min(1, confidence)), 2), "drivers": drivers, "disclaimer": DISCLAIMER}
 
 
+_SUMMARY_LABELS = {
+    "growth": "增长",
+    "inflation": "通胀",
+    "labor": "就业",
+    "policy": "政策",
+    "yield_curve": "收益率曲线",
+    "consumer": "消费",
+}
+
+
+def _enrich_summary_drivers(
+    summaries: dict[str, dict[str, Any]],
+    values: dict[str, list[tuple[date, Decimal]]],
+    service: MacroDerivedMetricsService,
+) -> None:
+    derived = service.all_derived()
+    for summary in summaries.values():
+        for driver in summary.get("drivers", []):
+            key = driver.get("series_key")
+            definition = get_series_definition(key) if key else None
+            driver["display_name_zh"] = (definition or {}).get("display_name_zh") or _SUMMARY_LABELS.get(key, key)
+            driver["unit"] = (definition or {}).get("unit")
+            if not definition:
+                continue
+
+            if key in derived:
+                rows = derived[key]
+            else:
+                rows = [
+                    {"observation_date": observed, "value": value}
+                    for observed, value in values.get(key, [])
+                ]
+            if not rows:
+                continue
+
+            target_date = driver.get("observation_date")
+            current_index = len(rows) - 1
+            if target_date is not None:
+                target_iso = target_date.isoformat() if hasattr(target_date, "isoformat") else str(target_date)
+                matching = [
+                    index for index, row in enumerate(rows)
+                    if str(row.get("observation_date")) == target_iso
+                ]
+                if matching:
+                    current_index = matching[-1]
+            current = rows[current_index]
+            comparison_offset = 1
+            comparison_label = "上一可比观察期"
+            if key == "us_yield_spread_10y_2y":
+                comparison_offset = 20
+                comparison_label = "20 个有效交易日前"
+            elif key == "us_federal_funds_rate":
+                one_month = rows[current_index - 21] if current_index >= 21 else None
+                one_month_change = current["value"] - one_month["value"] if one_month else None
+                if summary.get("state") in {"tightening", "easing"} and one_month_change is not None and abs(one_month_change) <= Decimal("0.05") and current_index >= 65:
+                    comparison_offset = 65
+                    comparison_label = "约 3 个月前"
+                else:
+                    comparison_offset = 21
+                    comparison_label = "约 1 个月前"
+            previous = rows[current_index - comparison_offset] if current_index >= comparison_offset else None
+            driver["current_value"] = current.get("value")
+            driver["current_observation_date"] = current.get("observation_date")
+            driver["previous_value"] = previous.get("value") if previous else None
+            driver["previous_observation_date"] = previous.get("observation_date") if previous else None
+            driver["comparison_label_zh"] = comparison_label
+
+
 def build_macro_summaries(db, values, service) -> dict[str, dict[str, Any]]:
     summaries: dict[str, dict[str, Any]] = {}
     gdp = _latest_derived(service, "us_real_gdp_yoy"); qoq = _latest_derived(service, "us_real_gdp_qoq"); qoq_prev = _previous_derived(service, "us_real_gdp_qoq")
@@ -323,6 +391,7 @@ def build_macro_summaries(db, values, service) -> dict[str, dict[str, Any]]:
     negative = sum(row["tone"] == "negative" for row in known); positive = sum(row["tone"] == "positive" for row in known)
     composite_label = "信号混合" if abs(negative - positive) <= 1 else "增长与消费偏强" if positive > negative else "增长/金融条件偏谨慎"
     summaries["composite"] = _state("mixed", composite_label, "mixed", .5, [{"series_key": key, "observation_date": None, "effect": row["tone"], "reason": row["label_zh"]} for key, row in summaries.items() if key != "composite" and row["state"] != "unknown"])
+    _enrich_summary_drivers(summaries, values, service)
     return summaries
 
 

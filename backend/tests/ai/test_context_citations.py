@@ -98,6 +98,51 @@ def test_portfolio_intent_excludes_historical_analysis_and_injects_current_ledge
     assert "historical chat" in context
 
 
+def test_natural_personal_stock_return_question_gets_current_portfolio_context():
+    message = "你看一下我现在的每一个股票今天的盈利百分比"
+    selection = ToolSelector(tool_registry).select(
+        message=message,
+        page_context=None,
+        active_symbol=None,
+        allowed_tools=None,
+        denied_tools=set(),
+    )
+    assert "get_portfolio_summary" in selection.tool_names
+    assert "get_portfolio_positions" in selection.tool_names
+
+    class Gateway:
+        def portfolio_summary(self, portfolio_id):
+            assert portfolio_id is None
+            return type("Response", (), {"data": {"portfolio_id": 3}})()
+
+        def portfolio_positions(self, portfolio_id, page, page_size, sort):
+            assert (portfolio_id, page, page_size, sort) == (None, 1, 100, "symbol")
+            freshness = type("Freshness", (), {"model_dump": lambda self, **_: {"status": "fresh"}})()
+            meta = type("Meta", (), {"total": 1})()
+            return type("Response", (), {
+                "data": [{"symbol": "MSFT", "daily_change_percent": 1.25}],
+                "freshness": freshness,
+                "meta": meta,
+            })()
+
+    context = _build_current_portfolio_context(
+        Gateway(), AIRespondRequest(message=message),
+    )
+    assert context is not None
+    assert '"daily_change_percent":1.25' in context
+
+
+def test_company_profit_question_does_not_open_private_portfolio_tools():
+    selection = ToolSelector(tool_registry).select(
+        message="微软公司今天公布的盈利同比增长多少",
+        page_context=None,
+        active_symbol="MSFT",
+        allowed_tools=None,
+        denied_tools=set(),
+    )
+    assert "get_portfolio_positions" not in selection.tool_names
+
+
 def test_citation_dedup_validation_filter_and_path_safety():
     sources=[{"source_id":"news:1","title":"Title","source_type":"news","locator":"/data/private","url":"https://example.test/1"},{"source_id":"news:1","title":"Duplicate","source_type":"news"},{"source_id":"sec:2","title":"10-Q","source_type":"sec_filing"}]
     builder=CitationBuilder(); citations=builder.collect([result(sources)])

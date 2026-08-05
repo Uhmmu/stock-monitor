@@ -27,7 +27,7 @@ from app.services.macro.provider import (
     AlphaVantageSchemaError,
 )
 from app.services.macro.sync import ensure_series_definitions, redact_provider_error, run_macro_sync, usage_status
-from app.services.macro.views import build_explanation, build_overview, build_series_detail, build_yield_curve
+from app.services.macro.views import build_explanation, build_macro_summaries, build_overview, build_series_detail, build_yield_curve
 from app.api.macro_routes import router
 
 
@@ -64,6 +64,21 @@ def test_derived_metrics_use_period_lags_and_compound_annualization():
     assert derived["us_cpi_3m_annualized"][-1]["value"] == ((Decimal("114") / Decimal("111")) ** 4 - 1) * 100
     assert derived["us_nonfarm_payroll_change"][-1]["value"] == Decimal("100")
     assert derived["us_nonfarm_payroll_3m_avg_change"][-1]["value"] == Decimal("100")
+
+
+def test_macro_summary_drivers_include_readable_comparison_evidence():
+    monthly = [(date(2023 + (i // 12), i % 12 + 1, 1), Decimal(str(100 + i))) for i in range(15)]
+    values = {"us_cpi": monthly}
+    summaries = build_macro_summaries(None, values, MacroDerivedMetricsService(values))
+
+    driver = summaries["inflation"]["drivers"][0]
+    assert driver["display_name_zh"] == "CPI 同比"
+    assert driver["unit"] == "percent"
+    assert driver["current_value"] is not None
+    assert driver["previous_value"] is not None
+    assert driver["comparison_label_zh"] == "上一可比观察期"
+    assert driver["current_observation_date"] == date(2024, 3, 1)
+    assert driver["previous_observation_date"] == date(2024, 2, 1)
 
 
 def _provider(payload, status=200, retries=0):

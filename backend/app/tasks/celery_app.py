@@ -299,10 +299,13 @@ def poll_market():
         items = db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all()
         watched_tickers = {item.ticker for item in items}
         peer_tickers = set(referenced_tickers(db))
+        held_tickers = set(db.scalars(
+            select(PortfolioPosition.symbol).where(PortfolioPosition.total_quantity > 0)
+        ).all())
         by_ticker = {item.ticker: item for item in items}
         stored = 0
         failed: list[str] = []
-        for ticker in sorted(watched_tickers | peer_tickers):
+        for ticker in sorted(watched_tickers | peer_tickers | held_tickers):
             try:
                 snapshot, created = persist_price_snapshot(
                     db, collect_price_snapshot(db, ticker)

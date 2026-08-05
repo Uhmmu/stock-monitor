@@ -177,6 +177,43 @@ def test_full_watchlist_sync_queues_all_existing_capabilities(monkeypatch):
     }
 
 
+def test_market_poll_includes_current_portfolio_positions(monkeypatch):
+    import importlib
+    from types import SimpleNamespace
+
+    tasks = importlib.import_module("app.tasks.celery_app")
+    watched = SimpleNamespace(ticker="WATCH", alert_enabled=False)
+
+    class ScalarRows:
+        def __init__(self, values): self.values = values
+        def all(self): return self.values
+
+    class FakeDb:
+        def __init__(self): self.scalar_calls = 0
+        def scalars(self, _statement):
+            self.scalar_calls += 1
+            return ScalarRows([watched] if self.scalar_calls == 1 else ["HELD"])
+        def commit(self): pass
+
+    fake_db = FakeDb()
+
+    class FakeContext:
+        def __enter__(self): return fake_db
+        def __exit__(self, *args): return False
+
+    collected = []
+    monkeypatch.setattr(tasks, "SessionLocal", lambda: FakeContext())
+    monkeypatch.setattr(tasks, "market_data_collection_status", lambda: {"is_collecting": True, "market_session": "regular"})
+    monkeypatch.setattr(tasks, "referenced_tickers", lambda db: ["PEER"])
+    monkeypatch.setattr(tasks, "collect_price_snapshot", lambda db, ticker: collected.append(ticker) or SimpleNamespace(symbol=ticker))
+    monkeypatch.setattr(tasks, "persist_price_snapshot", lambda db, snapshot: (snapshot, False))
+
+    result = tasks.poll_market.run()
+
+    assert collected == ["HELD", "PEER", "WATCH"]
+    assert result["failed"] == []
+
+
 def test_peer_sync_uses_only_quote_financial_and_valuation_dependencies(monkeypatch):
     import importlib
     tasks = importlib.import_module("app.tasks.celery_app")
