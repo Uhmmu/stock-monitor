@@ -1,5 +1,24 @@
 import type { Conversation, ConversationStatus } from '../api'
 
+/** Keep the compact conversation preview readable when its source is Markdown. */
+export function markdownPreviewText(value: string | null): string {
+  if (!value) return ''
+  return value
+    .replace(/```(?:[^\n]*)\n?([\s\S]*?)```/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$/gm, ' ')
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm, '')
+    .replace(/\|/g, ' · ')
+    .replace(/(\*\*|__|~~|`)(.*?)\1/g, '$2')
+    .replace(/[\\*_~`#]/g, '')
+    .replace(/\s*·\s*/g, ' · ')
+    .replace(/(?:\s*·){2,}\s*/g, ' · ')
+    .replace(/\s+/g, ' ')
+    .replace(/^(?:\s*·\s*)+|(?:\s*·\s*)+$/g, '')
+    .trim()
+}
+
 function relativeTime(value: string | null): string {
   if (!value) return '尚无消息'
   const date = new Date(value)
@@ -46,7 +65,7 @@ export function ConversationSidebar({ open, items, selectedId, status, loading, 
         {items.map(item => <article key={item.id} className={selectedId === item.id ? 'selected' : ''}>
           <button className="ai-conversation-open" onClick={() => onSelect(item.id)} title={`${item.title} · ${new Date(item.last_message_at || item.created_at).toLocaleString('zh-CN')}`}>
             <span><b>{item.title}</b>{item.active_symbol && <em>{item.active_symbol}</em>}</span>
-            <p>{item.last_message_preview || '空会话'}</p><time>{relativeTime(item.last_message_at || item.created_at)}</time>
+            <p>{markdownPreviewText(item.last_message_preview) || '空会话'}</p><time>{relativeTime(item.last_message_at || item.created_at)}</time>
           </button>
           <details><summary aria-label={`${item.title} 更多操作`}>•••</summary><div>
             {status !== 'deleted' && <button onClick={() => onRename(item)}>重命名</button>}

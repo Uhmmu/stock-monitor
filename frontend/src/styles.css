@@ -434,6 +434,9 @@ textarea{resize:vertical;min-height:140px}
 .sec-prio.normal{background:rgba(0,113,227,.14);color:var(--accent-ink)}
 .sec-form{color:var(--ink-3);font-weight:600}
 .sec-event-tag{padding:4px 10px;border-radius:8px;background:#f0f0f2;color:var(--ink-2);font-size:12px}
+.sec-summary table{display:block;width:100%;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:10px 0;font-variant-numeric:tabular-nums}
+.sec-summary th,.sec-summary td{min-width:96px;padding:7px 9px;border:1px solid var(--line);text-align:left;vertical-align:top}
+.sec-summary th{background:rgba(113,124,142,.08);font-weight:650}
 .sec-summary-pending{opacity:.55;font-style:italic}
 .sec-original{margin:6px 0}
 .sec-original>summary{cursor:pointer;color:var(--accent-ink);font-size:13px;user-select:none;font-weight:500}

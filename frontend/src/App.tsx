@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import rehypeSanitize from 'rehype-sanitize'
+import remarkGfm from 'remark-gfm'
 import { api, patch, post } from './api'
 import { Sheet } from './Sheet'
 import { SecuritySearchAutocomplete, securityPayload, type SecuritySearchResult } from './SecuritySearchAutocomplete'
@@ -507,7 +508,7 @@ export default function App() {
       </div>
     </main>
     <Sheet open={selectedReport!==null} onClose={()=>setSelectedReport(null)} title={report.data?typeNames[report.data.report_type]||report.data.report_type:'报告'}>
-      {report.data?<article className="report-detail sheet-report"><p className="eyebrow">{typeNames[report.data.report_type]} · {report.data.model}</p><h2>{report.data.title}</h2><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{report.data.content}</ReactMarkdown></div><h3>信息来源</h3>{report.data.sources.map((s,i)=><a href={s.url} target="_blank" rel="noreferrer" key={i}>{i+1}. {s.title}</a>)}</article>:<div className="empty">加载中…</div>}
+      {report.data?<article className="report-detail sheet-report"><p className="eyebrow">{typeNames[report.data.report_type]} · {report.data.model}</p><h2>{report.data.title}</h2><div className="report-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{report.data.content}</ReactMarkdown></div><h3>信息来源</h3>{report.data.sources.map((s,i)=><a href={s.url} target="_blank" rel="noreferrer" key={i}>{i+1}. {s.title}</a>)}</article>:<div className="empty">加载中…</div>}
     </Sheet>
     <CompanyProfileSheet symbol={selectedProfileSymbol} onClose={()=>setSelectedProfileSymbol(null)} onAskAI={askAI}/>
     <Sheet open={selectedModel!==null} onClose={()=>setSelectedModel(null)} title={selectedModel?.label||'指标说明'}>
@@ -796,7 +797,7 @@ function SecCenter({tickers,active,setActive}:{tickers:string[];active:string;se
       <div className="news-body">
         <div className="news-meta"><span className={`sec-prio ${e.priority}`}>{priorityName[e.priority]||e.priority}</span><span className="sec-form">{e.form}</span><span className="sec-event-tag">Item {e.item_code} · {e.item_label}</span>{e.filing_date&&<span>披露 {e.filing_date}</span>}</div>
         {e.summary_zh
-          ? <div className="ai-summary sec-summary"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{e.summary_zh}</ReactMarkdown></div>
+          ? <div className="ai-summary sec-summary"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{e.summary_zh}</ReactMarkdown></div>
           : (e.summary_status==='failed'
               ? (e.text&&<p className="news-summary" style={{whiteSpace:'pre-wrap'}}>{e.text.length>600?e.text.slice(0,600)+'…':e.text}</p>)
               : (e.text?<p className="news-summary sec-summary-pending">AI 中文总结生成中…</p>:null))}
