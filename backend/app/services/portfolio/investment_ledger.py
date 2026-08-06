@@ -28,6 +28,7 @@ from app.integrations.ibkr.db_models import (
 from app.models import Portfolio, PortfolioPosition, PortfolioPositionLot, TradeTransaction
 
 from .performance import build_summary as build_market_summary
+from .fx import fx_rate_map
 
 
 def _number(value: Any) -> float | None:
@@ -153,8 +154,19 @@ def _latest_run_filter(model, run: IbkrFlexSyncRun | None):
 def performance_series(db: Session, portfolio: Portfolio, *, start: date | None = None, end: date | None = None) -> dict:
     run = latest_authoritative_run(db, portfolio.user_id)
     if run is None:
-        return {"items": [], "source": None, "calculation_method": "unavailable", "data_completeness": 0.0,
-                "warnings": ["尚无 IBKR 账户绩效记录；不会用当前持仓倒推历史收益"]}
+        return {
+            "items": [], "source": None, "calculation_method": "unavailable",
+            "base_currency": portfolio.base_currency,
+            "period": {"start": start, "end": end},
+            "axes": {
+                "x": {"field": "date", "unit": "date"},
+                "account_assets": {"field": "nav", "unit": portfolio.base_currency},
+                "cash_flow_adjusted": {"field": "cash_flow_adjusted_index", "unit": "index", "baseline": 100},
+            },
+            "data_completeness": 0.0,
+            "warnings": ["尚无 IBKR 账户绩效记录；不会用当前持仓倒推历史收益"],
+            "latest_sync_at": None,
+        }
     filters = [_latest_run_filter(IbkrAccountDailyPerformance, run), IbkrAccountDailyPerformance.calculation_version == CALCULATION_VERSION]
     if end:
         filters.append(IbkrAccountDailyPerformance.performance_date <= end)
@@ -162,14 +174,20 @@ def performance_series(db: Session, portfolio: Portfolio, *, start: date | None 
         IbkrAccountDailyPerformance.performance_date
     )).all())
     cumulative_contributions = Decimal("0")
+    contributions_available = True
     items = []
     for row in rows:
-        cumulative_contributions += row.net_external_cash_flow or Decimal("0")
+        if row.net_external_cash_flow is None:
+            contributions_available = False
+        elif contributions_available:
+            cumulative_contributions += row.net_external_cash_flow
+        contribution_value = cumulative_contributions if contributions_available else None
         point = {
             "date": row.performance_date,
             "nav": _number(row.ending_nav),
-            "net_contributions": _number(cumulative_contributions),
-            "investment_value": _number((row.ending_nav or Decimal("0")) - cumulative_contributions) if row.ending_nav is not None else None,
+            "net_contributions": _number(contribution_value),
+            "investment_value": _number(row.ending_nav - contribution_value) if row.ending_nav is not None and contribution_value is not None else None,
+            "cash_flow_adjusted_index": None,
             "daily_return": _number(row.daily_return),
             "cumulative_return": _number(row.cumulative_return),
             "drawdown": _number(row.drawdown),
@@ -178,12 +196,35 @@ def performance_series(db: Session, portfolio: Portfolio, *, start: date | None 
         }
         if start is None or row.performance_date >= start:
             items.append(point)
+    # A 100-based wealth index is the chart-friendly, cash-flow-adjusted view.
+    # Rebase to the first visible point so changing the date range never makes
+    # the vertical scale look like account dollars or an unexplained fraction.
+    first_wealth = next(
+        (Decimal("1") + row.cumulative_return for row in rows
+         if (start is None or row.performance_date >= start) and row.cumulative_return is not None),
+        None,
+    )
+    if first_wealth and first_wealth != 0:
+        visible_rows = [row for row in rows if start is None or row.performance_date >= start]
+        by_date = {row.performance_date: row for row in visible_rows}
+        for point in items:
+            cumulative = by_date[point["date"]].cumulative_return
+            if cumulative is not None:
+                point["cash_flow_adjusted_index"] = _number(
+                    (Decimal("1") + cumulative) / first_wealth * Decimal("100")
+                )
     selected_rows = [row for row in rows if start is None or row.performance_date >= start]
     return {
         "items": items,
         "source": "ibkr_flex",
         "calculation_method": "cash_flow_adjusted_time_weighted_return",
+        "base_currency": portfolio.base_currency,
         "period": {"start": selected_rows[0].performance_date if selected_rows else start, "end": selected_rows[-1].performance_date if selected_rows else end},
+        "axes": {
+            "x": {"field": "date", "unit": "date"},
+            "account_assets": {"field": "nav", "unit": portfolio.base_currency},
+            "cash_flow_adjusted": {"field": "cash_flow_adjusted_index", "unit": "index", "baseline": 100},
+        },
         "data_completeness": min((_number(r.data_completeness) or 0 for r in selected_rows), default=0.0),
         "warnings": sorted({warning for row in selected_rows for warning in (row.warnings or [])}),
         "latest_sync_at": run.completed_at,
@@ -267,7 +308,11 @@ def overview(db: Session, portfolio: Portfolio, *, cached_fx_only: bool = False)
     ).order_by(IbkrAccountDailyPerformance.performance_date)).all()) if run else []
     today = datetime.now(UTC).date()
     latest = rows[-1] if rows else None
-    contributions = sum((r.net_external_cash_flow or Decimal("0") for r in rows), Decimal("0"))
+    contributions = (
+        sum((r.net_external_cash_flow for r in rows), Decimal("0"))
+        if rows and all(r.net_external_cash_flow is not None for r in rows)
+        else None
+    )
     def converted_total(key: str) -> Decimal:
         return sum((Decimal(str(p[key])) * Decimal(str(p.get("fx_rate") or 0)) for p in positions), Decimal("0"))
     if rows:
@@ -280,20 +325,24 @@ def overview(db: Session, portfolio: Portfolio, *, cached_fx_only: bool = False)
         dividends = converted_total("dividend_income")
         fees = converted_total("fees")
         taxes = converted_total("taxes")
-    # Current NAV combines broker-authoritative quantity/cash with current
-    # project prices. Keep the dated broker-reported NAV separately so consumers
-    # never mistake an EOD report mark for the current market valuation.
-    nav = market["total_net_liquidation"]
+    # Current NAV combines broker-authoritative cash with current project
+    # prices.  Use the same latest performance cash shown by this DTO; using the
+    # separate cash-report snapshot here made the displayed cash and NAV
+    # internally inconsistent.
+    cash = _number(latest.ending_cash) if latest and latest.ending_cash is not None else portfolio.cash_balance
+    nav = round(market["total_market_value"] + (cash or 0.0), 4)
     return {
         **market,
         "positions": positions,
+        "cash_balance": cash,
+        "total_net_liquidation": nav,
         "net_asset_value": nav,
         "ibkr_reported_nav": _number(latest.ending_nav) if latest else None,
         "invested_market_value": market["total_market_value"],
-        "cash": _number(latest.ending_cash) if latest and latest.ending_cash is not None else portfolio.cash_balance,
+        "cash": cash,
         "net_contributions": _number(contributions),
-        "investment_pnl": (nav - float(contributions)) if nav is not None else None,
-        "simple_cumulative_return": ((nav - float(contributions)) / float(contributions)) if nav is not None and contributions > 0 else None,
+        "investment_pnl": (nav - float(contributions)) if nav is not None and contributions is not None else None,
+        "simple_cumulative_return": ((nav - float(contributions)) / float(contributions)) if nav is not None and contributions is not None and contributions > 0 else None,
         "latest_daily_return": _number(latest.daily_return) if latest else None,
         "month_return": _period_return(rows, lambda d: d.year == today.year and d.month == today.month),
         "year_return": _period_return(rows, lambda d: d.year == today.year),
@@ -481,23 +530,204 @@ def position_detail(db: Session, portfolio: Portfolio, symbol: str) -> dict | No
 def return_attribution(db: Session, portfolio: Portfolio, *, start: date | None = None, end: date | None = None) -> dict:
     run = latest_authoritative_run(db, portfolio.user_id)
     if run is None:
-        return {"items": [], "source": None, "warnings": ["尚无 IBKR 归因数据"]}
-    filters = [_latest_run_filter(IbkrPositionPerformanceDaily, run)]
-    if start: filters.append(IbkrPositionPerformanceDaily.performance_date >= start)
-    if end: filters.append(IbkrPositionPerformanceDaily.performance_date <= end)
-    grouped: dict[str, dict] = defaultdict(lambda: {"total_pnl": 0.0, "realized_pnl": 0.0, "unrealized_pnl": 0.0, "dividends": 0.0, "fees": 0.0, "taxes": 0.0, "fx_pnl": 0.0})
-    for row in db.scalars(select(IbkrPositionPerformanceDaily).where(*filters)).all():
-        item = grouped[row.symbol or "UNKNOWN"]
-        item["total_pnl"] += _number(row.total_pnl) or 0.0
-        item["realized_pnl"] += _number(row.realized_pnl) or 0.0
-        item["unrealized_pnl"] += _number(row.unrealized_pnl_change) or 0.0
-        item["dividends"] += _number(row.dividend_income) or 0.0
-        item["fees"] += _number(row.commissions) or 0.0
-        item["taxes"] += _number(row.taxes) or 0.0
-        item["fx_pnl"] += _number(row.fx_pnl) or 0.0
-    items = [{"symbol": symbol, **values} for symbol, values in grouped.items()]
-    items.sort(key=lambda item: item["total_pnl"], reverse=True)
-    return {"items": items, "source": "ibkr_facts_and_project_derived", "warnings": [], "latest_sync_at": run.completed_at}
+        return {
+            "items": [], "base_currency": portfolio.base_currency,
+            "basis": "base_currency_economic_pnl", "period": {"start": start, "end": end},
+            "coverage": {"symbol_count": 0, "ranked_count": 0, "unconverted_symbols": []},
+            "source": None, "warnings": ["尚无 IBKR 归因数据"], "latest_sync_at": None,
+        }
+    # Daily position performance is a daily-change series and Flex often omits
+    # symbols which were fully closed during the report window. It therefore
+    # cannot answer the cumulative, all-trades contribution question. Build the
+    # ranking from FIFO round trips + dividend facts and add the unified current
+    # position valuation for open positions.
+    open_positions = list(db.scalars(select(PortfolioPosition).where(
+        PortfolioPosition.portfolio_id == portfolio.id,
+        PortfolioPosition.total_quantity > 0,
+    )).all())
+    open_symbols = {row.symbol for row in open_positions}
+    current_positions = {row["symbol"]: row for row in position_summaries(db, portfolio)}
+
+    trade_rows = list(db.scalars(select(IbkrFlexRecord).where(
+        IbkrFlexRecord.sync_run_id == run.id,
+        IbkrFlexRecord.section == "trades",
+    )).all())
+    identity_currencies: dict[tuple[str | None, str | None], set[str]] = defaultdict(set)
+    symbol_currencies: dict[str, set[str]] = defaultdict(set)
+    for row in trade_rows:
+        if row.currency:
+            currency = row.currency.upper()
+            identity_currencies[(row.conid, row.symbol)].add(currency)
+            if row.symbol:
+                symbol_currencies[row.symbol].add(currency)
+
+    grouped: dict[str, dict[str, dict[str, Any]]] = defaultdict(
+        lambda: defaultdict(lambda: {
+            "realized_pnl": 0.0, "unrealized_pnl": 0.0, "dividends": 0.0,
+            "fees": 0.0, "taxes": 0.0, "fx_pnl": 0.0,
+            "first_date": None, "last_date": None, "unrealized_known": True,
+            "valuation_forced_unavailable": False,
+        })
+    )
+
+    round_trip_filters = [_latest_run_filter(IbkrTradeRoundTrip, run)]
+    if start:
+        round_trip_filters.append(func.date(IbkrTradeRoundTrip.closed_at) >= start)
+    if end:
+        round_trip_filters.append(func.date(IbkrTradeRoundTrip.closed_at) <= end)
+    round_trips = list(db.scalars(select(IbkrTradeRoundTrip).where(*round_trip_filters)).all())
+    for row in round_trips:
+        symbol = row.symbol or "UNKNOWN"
+        candidates = identity_currencies.get((row.conid, row.symbol)) or symbol_currencies.get(symbol, set())
+        currency = next(iter(candidates)) if len(candidates) == 1 else "UNKNOWN"
+        item = grouped[symbol][currency]
+        item["realized_pnl"] += _number(row.gross_pnl) or 0.0
+        item["fees"] += abs(_number(row.commissions) or 0.0)
+        item["taxes"] += abs(_number(row.taxes) or 0.0)
+        opened = row.opened_at.date() if row.opened_at else None
+        closed = row.closed_at.date() if row.closed_at else None
+        item["first_date"] = min(filter(None, (item["first_date"], opened, closed)), default=None)
+        item["last_date"] = max(filter(None, (item["last_date"], closed)), default=None)
+
+    dividend_filters = [
+        _latest_run_filter(IbkrDividendEvent, run),
+        IbkrDividendEvent.status == "received",
+    ]
+    if start:
+        dividend_filters.append(IbkrDividendEvent.pay_date >= start)
+    if end:
+        dividend_filters.append(IbkrDividendEvent.pay_date <= end)
+    dividends = list(db.scalars(select(IbkrDividendEvent).where(*dividend_filters)).all())
+    for row in dividends:
+        symbol = row.symbol or "UNKNOWN"
+        currency = row.currency.upper() if row.currency else "UNKNOWN"
+        item = grouped[symbol][currency]
+        item["dividends"] += _number(row.gross_dividend) or 0.0
+        item["taxes"] += abs(_number(row.withholding_tax) or 0.0)
+        event_date = row.pay_date or row.ex_date
+        item["first_date"] = min(filter(None, (item["first_date"], event_date)), default=None)
+        item["last_date"] = max(filter(None, (item["last_date"], event_date)), default=None)
+
+    # Replace historical-only aggregates for current holdings with the unified
+    # position read model. It combines all synchronized FIFO results/dividends/
+    # costs with the latest project-priced unrealized P&L and includes every
+    # PortfolioPosition, even when Flex emitted no daily-performance row.
+    for row in open_positions:
+        currency = row.currency.upper() if row.currency else "UNKNOWN"
+        include_current = end is None or row.ibkr_report_date is None or end >= row.ibkr_report_date
+        summary = current_positions[row.symbol]
+        last_transaction_date = (
+            row.last_transaction_at.date()
+            if isinstance(row.last_transaction_at, datetime) else row.last_transaction_at
+        )
+        previous_dates = [value for values in grouped[row.symbol].values() for value in (
+            values["first_date"], values["last_date"]
+        ) if value]
+        grouped[row.symbol] = defaultdict(lambda: {
+            "realized_pnl": 0.0, "unrealized_pnl": 0.0, "dividends": 0.0,
+            "fees": 0.0, "taxes": 0.0, "fx_pnl": 0.0,
+            "first_date": None, "last_date": None, "unrealized_known": True,
+            "valuation_forced_unavailable": False,
+        })
+        item = grouped[row.symbol][currency]
+        item.update({
+            "realized_pnl": summary["realized_pnl"],
+            "unrealized_pnl": (summary["unrealized_pnl"] or 0.0) if include_current else 0.0,
+            "dividends": summary["dividend_income"],
+            "fees": summary["fees"],
+            "taxes": summary["taxes"],
+            "unrealized_known": not include_current or summary["unrealized_pnl"] is not None,
+            "valuation_forced_unavailable": not summary["valuation_available"],
+            "first_date": min(previous_dates + [last_transaction_date] if last_transaction_date else previous_dates, default=None),
+            "last_date": max(previous_dates + [row.ibkr_report_date] if row.ibkr_report_date else previous_dates, default=None),
+        })
+
+    currencies = {
+        currency for by_currency in grouped.values() for currency in by_currency
+        if currency != "UNKNOWN"
+    }
+    rates = fx_rate_map(portfolio.base_currency, currencies)
+    for summary in current_positions.values():
+        currency = (summary["currency"] or "").upper()
+        rate = summary.get("fx_rate")
+        if currency and rate is not None and rate > 0:
+            rates[currency] = type("CurrentFxQuote", (), {
+                "rate": rate, "source": summary.get("fx_rate_source") or "portfolio_current_fx",
+            })()
+
+    items: list[dict] = []
+    unconverted: list[str] = []
+    for symbol, by_currency in grouped.items():
+        valuation_available = all(
+            currency in rates and values["unrealized_known"] and not values["valuation_forced_unavailable"]
+            for currency, values in by_currency.items()
+        )
+        if not valuation_available:
+            unconverted.append(symbol)
+        component_fields = ("realized_pnl", "unrealized_pnl", "dividends", "fees", "taxes", "fx_pnl")
+        converted = {key: 0.0 for key in component_fields}
+        for currency, values in by_currency.items():
+            quote = rates.get(currency)
+            if quote is None:
+                continue
+            for key in component_fields:
+                converted[key] += values[key] * quote.rate
+        converted_total = (
+            converted["realized_pnl"] + converted["unrealized_pnl"] + converted["dividends"]
+            - converted["fees"] - converted["taxes"] + converted["fx_pnl"]
+        )
+        native_currency = next(iter(by_currency)) if len(by_currency) == 1 else None
+        native_values = by_currency[native_currency] if native_currency else None
+        native_total = (
+            native_values["realized_pnl"] + native_values["unrealized_pnl"] + native_values["dividends"]
+            - native_values["fees"] - native_values["taxes"] + native_values["fx_pnl"]
+            if native_values and native_values["unrealized_known"] else None
+        )
+        all_values = list(by_currency.values())
+        sources = sorted({rates[currency].source for currency in by_currency if currency in rates})
+        base_total = round(converted_total, 4) if valuation_available else None
+        items.append({
+            "rank": None, "symbol": symbol,
+            "position_status": "open" if symbol in open_symbols else "closed",
+            "total_pnl": base_total, "base_currency_total_pnl": base_total,
+            **{key: (round(converted[key], 4) if valuation_available else None)
+               for key in component_fields if key != "total_pnl"},
+            "native_currency": native_currency,
+            "native_total_pnl": round(native_total, 4) if native_total is not None else None,
+            "valuation_available": valuation_available,
+            "fx_conversion_used": any(currency != portfolio.base_currency for currency in by_currency) and valuation_available,
+            "fx_rate_source": ", ".join(sources) or None,
+            "contribution_to_portfolio_return": None,
+            "data_completeness": 1.0 if valuation_available else 0.75,
+            "first_date": min((value["first_date"] for value in all_values if value["first_date"]), default=None),
+            "last_date": max((value["last_date"] for value in all_values if value["last_date"]), default=None),
+        })
+    items.sort(key=lambda item: (item["total_pnl"] is not None, item["total_pnl"] or 0.0), reverse=True)
+    rank = 0
+    for item in items:
+        if item["valuation_available"]:
+            rank += 1
+            item["rank"] = rank
+    warnings = []
+    if unconverted:
+        warnings.append("部分证券缺少汇率，已保留但不参与排名；未按 1:1 猜算")
+    if any(currency != portfolio.base_currency for currency in currencies):
+        warnings.append("跨币种历史盈亏按当前可用即期汇率折算，仅用于贡献排序，不等同于交易日汇率归因")
+        warnings.append("当前数据无法可靠拆分逐笔汇兑损益；fx_pnl 不单独估算，外汇影响仅体现在基础币种折算中")
+    return {
+        "items": items, "base_currency": portfolio.base_currency,
+        "basis": "base_currency_economic_pnl",
+        "period": {
+            "start": min((item["first_date"] for item in items if item["first_date"]), default=start),
+            "end": max((item["last_date"] for item in items if item["last_date"]), default=end),
+        },
+        "coverage": {
+            "symbol_count": len(items), "ranked_count": rank,
+            "unconverted_symbols": sorted(unconverted),
+        },
+        "source": "ibkr_round_trips_dividends_positions_and_project_fx", "warnings": warnings,
+        "latest_sync_at": run.completed_at,
+    }
 
 
 def completed_trades(db: Session, portfolio: Portfolio, *, symbol: str | None = None) -> list[dict]:

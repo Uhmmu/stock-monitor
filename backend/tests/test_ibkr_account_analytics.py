@@ -24,6 +24,7 @@ from app.models import Portfolio, PortfolioPosition, Security, TradeTransaction,
 from app.services.portfolio.investment_ledger import (
     assert_manual_write_allowed,
     govern_manual_transactions,
+    overview,
     performance_series,
     position_summaries,
     transaction_events,
@@ -211,6 +212,78 @@ def test_performance_range_keeps_prior_contributions_in_capital_basis(db):
     assert len(result["items"]) == 1
     assert result["items"][0]["net_contributions"] == 1000
     assert result["items"][0]["investment_value"] == 100
+
+
+def test_external_deposit_uses_one_broker_base_currency_representation(db):
+    user, _, _, _, run = _setup_run(db, {"cash_transactions": 1, "cash_ledger": 2, "performance": 1})
+    cash_transaction = _record(
+        run, "cash_transactions", 0, sourceTag="CashTransaction",
+        type="Deposits/Withdrawals", amount="1000", currency="HKD",
+        description="CASH RECEIPTS / ELECTRONIC FUND TRANSFERS", fxRateToBase="0.12826",
+    )
+    base_row = _record(
+        run, "cash_ledger", 1, sourceTag="StatementOfFundsLine", activityCode="DEP",
+        amount="128.26", currency="USD", levelOfDetail="BaseCurrency", fxRateToBase="1",
+    )
+    currency_row = _record(
+        run, "cash_ledger", 2, sourceTag="StatementOfFundsLine", activityCode="DEP",
+        amount="1000", currency="HKD", levelOfDetail="Currency", fxRateToBase="0.12826",
+    )
+    performance = _record(
+        run, "performance", 3, sourceTag="EquitySummaryByReportDateInBase",
+        startingValue="0", endingValue="128.26", endingCash="128.26", reportDate="20260731",
+    )
+    db.add_all([cash_transaction, base_row, currency_row, performance])
+    db.flush()
+
+    rebuild_all_analytics(db, run)
+
+    flows = db.query(IbkrNormalizedCashFlow).all()
+    assert len(flows) == 1
+    assert flows[0].currency == "USD"
+    assert flows[0].amount == Decimal("128.26")
+    daily = db.query(IbkrAccountDailyPerformance).one()
+    assert daily.external_deposits == Decimal("128.26")
+    assert daily.net_external_cash_flow == Decimal("128.26")
+
+
+def test_overview_investment_pnl_is_nav_minus_net_contributions(db, monkeypatch):
+    user, portfolio, _, _, run = _setup_run(db)
+    run.status = "completed"
+    run.normalized_record_count = 2
+    run.completed_at = datetime.now(UTC)
+    db.add_all([
+        IbkrAccountDailyPerformance(
+            user_id=user.id, account_id=run.account_id, performance_date=date(2026, 7, 1),
+            base_currency="USD", ending_nav=Decimal("1000"), ending_cash=Decimal("1000"),
+            net_external_cash_flow=Decimal("1000"), data_completeness=Decimal("1"),
+            source_sync_run_id=run.id, calculation_version=CALCULATION_VERSION,
+        ),
+        IbkrAccountDailyPerformance(
+            user_id=user.id, account_id=run.account_id, performance_date=date(2026, 7, 2),
+            base_currency="USD", ending_nav=Decimal("1300"), ending_cash=Decimal("300"),
+            net_external_cash_flow=Decimal("-100"), data_completeness=Decimal("1"),
+            source_sync_run_id=run.id, calculation_version=CALCULATION_VERSION,
+        ),
+    ])
+    market = {
+        "portfolio_id": portfolio.id, "base_currency": "USD", "position_count": 0,
+        "priced_count": 0, "total_market_value": 1000.0, "total_cost": 0.0,
+        "total_unrealized_pnl": 0.0, "total_unrealized_pnl_percent": None,
+        # Deliberately stale cash-report NAV; overview must combine current
+        # market value with the latest performance cash instead.
+        "total_net_liquidation": 1050.0, "has_unpriced_positions": False,
+        "has_unconverted_positions": False, "fx_conversion_used": False, "positions": [],
+    }
+    monkeypatch.setattr("app.services.portfolio.investment_ledger.build_market_summary", lambda *args, **kwargs: market)
+
+    result = overview(db, portfolio)
+
+    assert result["net_contributions"] == 900
+    assert result["cash"] == 300
+    assert result["net_asset_value"] == 1300
+    assert result["investment_pnl"] == 400
+    assert result["simple_cumulative_return"] == pytest.approx(400 / 900)
 
 
 def test_incomplete_report_does_not_close_existing_ibkr_position(db):

@@ -111,6 +111,67 @@ class TransactionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PortfolioPerformancePoint(BaseModel):
+    date: date
+    nav: float | None
+    net_contributions: float | None
+    investment_value: float | None
+    cash_flow_adjusted_index: float | None
+    daily_return: float | None
+    cumulative_return: float | None
+    drawdown: float | None
+    benchmark_return: float | None
+    data_completeness: float
+
+
+class PortfolioPerformanceResponse(BaseModel):
+    items: list[PortfolioPerformancePoint]
+    source: str | None
+    calculation_method: str
+    base_currency: str
+    period: dict
+    axes: dict
+    data_completeness: float
+    warnings: list[str]
+    latest_sync_at: datetime | None = None
+
+
+class PortfolioAttributionItem(BaseModel):
+    rank: int | None
+    symbol: str
+    position_status: str
+    # Compatibility field used by the first attribution UI. It is always in
+    # portfolio base currency when valuation_available is true.
+    total_pnl: float | None
+    base_currency_total_pnl: float | None
+    realized_pnl: float | None
+    unrealized_pnl: float | None
+    dividends: float | None
+    fees: float | None
+    taxes: float | None
+    fx_pnl: float | None
+    native_currency: str | None
+    native_total_pnl: float | None
+    valuation_available: bool
+    fx_conversion_used: bool
+    fx_rate_source: str | None
+    contribution_to_portfolio_return: float | None
+    data_completeness: float
+    first_date: date | None
+    last_date: date | None
+
+
+class PortfolioAttributionResponse(BaseModel):
+    items: list[PortfolioAttributionItem]
+    base_currency: str
+    basis: str
+    period: dict
+    coverage: dict
+    source: str | None
+    warnings: list[str]
+    latest_sync_at: datetime | None = None
+
+
 class PortfolioCoverageDimension(BaseModel):
     covered_weight: float
     uncovered_weight: float

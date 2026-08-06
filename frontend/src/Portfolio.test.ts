@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartPoints, fmtHealthScore, fmtMoney, fmtNum, fmtPercent } from './Portfolio'
+import { cashFlowAdjustedGrowth, chartPoints, fmtHealthScore, fmtMoney, fmtNum, fmtPercent } from './Portfolio'
 import { findSavedScenarioRun, type ScenarioHistoryRun } from './PortfolioScenarios'
 import { latestFreshAnalysis, requestsMatch, type PortfolioAnalysisRun } from './PortfolioAnalysisCache'
 
@@ -61,6 +61,16 @@ describe('portfolio ledger chart', () => {
     expect(points.split(' ')).toHaveLength(2)
     expect(points).toContain('0.0,50.0')
     expect(points).toContain('100.0,0.0')
+  })
+
+  it('expresses cash-flow-adjusted account growth around a 0% origin', () => {
+    const point = { cash_flow_adjusted_index: 112.5, cumulative_return: .08 } as Parameters<typeof cashFlowAdjustedGrowth>[0]
+    expect(cashFlowAdjustedGrowth(point)).toBe(12.5)
+  })
+
+  it('uses cumulative return only as a compatibility fallback for adjusted growth', () => {
+    const point = { cash_flow_adjusted_index: null, cumulative_return: -.075 } as Parameters<typeof cashFlowAdjustedGrowth>[0]
+    expect(cashFlowAdjustedGrowth(point)).toBe(-7.5)
   })
 })
 

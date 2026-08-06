@@ -20,10 +20,12 @@ from app.services.portfolio import (
     ManualPositionIn,
     PortfolioBenchmarkResponse,
     PortfolioBenchmarkUpdate,
+    PortfolioAttributionResponse,
     PortfolioHealthResponse,
     PortfolioInterpretationResponse,
     PortfolioStrategyProfileResponse,
     PortfolioStrategyProfileUpdate,
+    PortfolioPerformanceResponse,
     TransactionIn,
     TransactionOut,
     build_health,
@@ -75,7 +77,7 @@ def _range_start(value: str) -> date | None:
     }.get(value.upper())
 
 
-@router.get("/performance")
+@router.get("/performance", response_model=PortfolioPerformanceResponse)
 def portfolio_performance(
     range: str = Query("1Y", pattern="^(1M|3M|6M|YTD|1Y|ALL)$"),
     user: User = Depends(get_current_user), db: Session = Depends(get_db),
@@ -83,7 +85,7 @@ def portfolio_performance(
     return performance_series(db, _portfolio(db, user), start=_range_start(range))
 
 
-@router.get("/attribution")
+@router.get("/attribution", response_model=PortfolioAttributionResponse)
 def portfolio_attribution(
     start_date: date | None = None, end_date: date | None = None,
     user: User = Depends(get_current_user), db: Session = Depends(get_db),

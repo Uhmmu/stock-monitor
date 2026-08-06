@@ -133,16 +133,66 @@ def rebuild_cash_flows(db: Session, run: IbkrFlexSyncRun) -> int:
         IbkrNormalizedCashFlow.calculation_version == CALCULATION_VERSION,
     ))
     count = 0
-    for row in _source_rows(db, run.id, ("cash_ledger", "cash_transactions", "interest")):
+    source_rows = _source_rows(db, run.id, ("cash_ledger", "cash_transactions", "transfers", "interest"))
+    portfolio = db.scalar(select(Portfolio).where(Portfolio.user_id == run.user_id, Portfolio.slug == "default"))
+    base_currency = portfolio.base_currency if portfolio else None
+
+    # Flex commonly represents one external transfer three times: a detailed
+    # CashTransaction in the funding currency, a StatementOfFunds currency row,
+    # and a StatementOfFunds BaseCurrency row.  Keep exactly one authoritative
+    # representation per transfer, preferring the broker-provided base-currency
+    # row.  The group retains multiplicity, so two equal deposits on one day are
+    # still two deposits rather than one.
+    external_groups: dict[
+        tuple[date | None, str, Decimal | None],
+        dict[int, list[tuple[Any, Decimal | None, list[str]]]],
+    ] = defaultdict(lambda: defaultdict(list))
+    internal_rows: list[tuple[Any, str, bool, str, list[str], Decimal | None]] = []
+    for row in source_rows:
         fields = row.raw_payload or {}
         description = row.description or fields.get("activityDescription") or fields.get("description")
         category, external, rule, warnings = classify_cash_flow(fields, description)
         amount = row.amount if row.amount is not None else decimal_value(fields, "amount", "netCash", "netAmount", "credit", "debit")
+        if not external:
+            internal_rows.append((row, category, external, rule, warnings, amount))
+            continue
+        fx_rate = decimal_value(fields, "fxRateToBase")
+        level = str(fields.get("levelOfDetail") or "")
+        is_base_row = level == "BaseCurrency" and (not base_currency or row.currency == base_currency)
+        converted = amount if is_base_row or not base_currency or row.currency == base_currency else (
+            amount * fx_rate if amount is not None and fx_rate is not None else None
+        )
+        if converted is None and amount is not None and row.currency != base_currency:
+            warnings = [*warnings, "外部现金流缺少可审计的基础币种换算"]
+        signature_amount = converted.quantize(Decimal("0.000001")) if converted is not None else amount
+        signature = (row.report_date or date_value(fields, "settleDate", "date", "tradeDate"), category, signature_amount)
+        priority = 0 if is_base_row else 1 if str(fields.get("sourceTag") or "") == "CashTransaction" else 2
+        external_groups[signature][priority].append((row, converted, warnings))
+
+    normalized_rows = internal_rows
+    for (_, category, _), representations in external_groups.items():
+        priority = min(representations)
+        for row, converted, warnings in representations[priority]:
+            fields = row.raw_payload or {}
+            description = row.description or fields.get("activityDescription") or fields.get("description")
+            _, external, rule, _ = classify_cash_flow(fields, description)
+            normalized_rows.append((row, category, external, rule, warnings, converted))
+
+    normalized_rows.sort(key=lambda item: (
+        item[0].occurred_at or datetime.min.replace(tzinfo=UTC),
+        item[0].report_date or date.min,
+        item[0].source_index,
+    ))
+    for row, category, external, rule, warnings, amount in normalized_rows:
+        fields = row.raw_payload or {}
+        description = row.description or fields.get("activityDescription") or fields.get("description")
         db.add(IbkrNormalizedCashFlow(
             user_id=run.user_id, account_id=row.account_id or run.account_id,
             source_record_id=row.id, source_sync_run_id=run.id,
             flow_date=row.report_date or date_value(fields, "settleDate", "date", "tradeDate"),
-            occurred_at=row.occurred_at, currency=row.currency, amount=amount,
+            occurred_at=row.occurred_at,
+            currency=((base_currency or row.currency) if external and amount is not None else row.currency),
+            amount=amount,
             normalized_category=category, is_external=external, classification_rule=rule,
             original_type=str(fields.get("activityCode") or fields.get("type") or fields.get("transactionType") or "") or None,
             original_description=description, warnings=warnings, calculation_version=CALCULATION_VERSION,
