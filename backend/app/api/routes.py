@@ -787,6 +787,12 @@ def _news_out(item: NewsItem) -> dict:
         "ai_summary_model": item.ai_summary_model,
         "ai_summary_status": item.ai_summary_status,
         "ai_summary_requested_at": item.ai_summary_requested_at,
+        "ai_summary_error": (
+            "未能从原网页取得足够正文，没有使用新闻概要冒充全文。请稍后重试或打开原文确认访问限制。"
+            if item.ai_summary_status == "failed"
+            and (item.ai_summary_last_error or "").startswith("ArticleContentUnavailable:")
+            else None
+        ),
     }
 
 

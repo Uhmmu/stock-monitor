@@ -22,3 +22,16 @@ def test_extract_removes_common_recommendation_and_cookie_blocks():
     assert "Company revenue" in result
     assert "Related story" not in result
     assert "Cookie policy" not in result
+
+
+def test_extract_does_not_let_short_recommendation_article_shadow_body():
+    body = "Revenue increased and management explained the operating drivers in detail. " * 12
+    html = f'''<body>
+      <article><p>Short promoted card that must not be selected as the story body.</p></article>
+      <main><section class="entry-content"><p>{body}</p></section></main>
+    </body>'''
+
+    result = _extract_main_text(html)
+
+    assert result is not None
+    assert "operating drivers" in result

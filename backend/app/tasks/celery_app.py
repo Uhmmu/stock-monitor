@@ -76,6 +76,12 @@ from app.services.macro.sync import can_start_sync, run_macro_sync
 settings = get_settings()
 logger = logging.getLogger(__name__)
 NEWS_PER_TICKER = 12  # 每只股票入库上限；低信息时允许少于该值，避免用噪声补位。
+
+
+class ArticleContentUnavailable(RuntimeError):
+    pass
+
+
 celery_app = Celery("stock_monitor", broker=settings.redis_url, backend=settings.redis_url)
 celery_app.conf.timezone = "UTC"
 celery_app.conf.beat_schedule = {
@@ -238,14 +244,15 @@ def summarize_news_item(news_id: int, request_id: str, force: bool = False):
         item.ai_summary_last_error = None
         title = item.title
         url = item.url
-        stored_content = item.raw_content or item.summary or item.title
         existing_hash = item.ai_summary_input_hash
         has_summary = bool(item.ai_summary)
         db.commit()
 
     try:
         full_text = fetch_article_text(url)
-        content = full_text or stored_content
+        if not full_text:
+            raise ArticleContentUnavailable("未能从原网页取得足够的新闻正文")
+        content = full_text
         input_hash = hashlib.sha256(f"{title}\n{content}".encode("utf-8")).hexdigest()[:64]
         if has_summary and existing_hash == input_hash and not force:
             summary = model = None

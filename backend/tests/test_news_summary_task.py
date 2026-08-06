@@ -77,10 +77,25 @@ def test_news_summary_task_records_failure_for_retry(monkeypatch):
         news_id = item.id
 
     monkeypatch.setattr(tasks, "fetch_article_text", lambda _url: None)
-    monkeypatch.setattr(tasks, "summarize_news", lambda *_args: (_ for _ in ()).throw(TimeoutError("provider timeout")))
+    monkeypatch.setattr(tasks, "summarize_news", lambda *_args: (_ for _ in ()).throw(AssertionError("must not summarize a provider synopsis")))
 
     assert tasks.summarize_news_item.run(news_id, "request-1")["status"] == "failed"
     with Session(engine) as db:
         item = db.get(NewsItem, news_id)
         assert item.ai_summary_status == "failed"
-        assert "TimeoutError" in item.ai_summary_last_error
+        assert "ArticleContentUnavailable" in item.ai_summary_last_error
+
+
+def test_news_summary_task_does_not_treat_long_provider_content_as_fetched_article(monkeypatch):
+    engine = _database(monkeypatch)
+    with Session(engine) as db:
+        item = _news()
+        item.raw_content = "Long provider synopsis that is not proven to be the publisher article. " * 30
+        db.add(item)
+        db.commit()
+        news_id = item.id
+
+    monkeypatch.setattr(tasks, "fetch_article_text", lambda _url: None)
+    monkeypatch.setattr(tasks, "summarize_news", lambda *_args: (_ for _ in ()).throw(AssertionError("must not summarize cached provider content")))
+
+    assert tasks.summarize_news_item.run(news_id, "request-1")["status"] == "failed"
