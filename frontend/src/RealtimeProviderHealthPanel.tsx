@@ -44,6 +44,7 @@ export function RealtimeProviderHealthPanel() {
         const name = row.label || labels[row.provider.toLowerCase()] || row.provider
         return <article key={`${row.channel || 'market'}-${row.provider}-${row.feed || 'default'}-${row.last_success_at || row.last_message_at || index}`} className={`realtime-provider-health-row ${status.className}`}>
           <div className="realtime-provider-health-title"><span className="realtime-provider-health-dot"/><div><b>{name}</b><small>{row.feed || (row.channel === 'news' || row.provider.toLowerCase().includes('news') ? '新闻' : '行情')}</small></div><em>{status.text}</em></div>
+          {(row.auth_type||row.environment||row.market_data_endpoint||row.stream_endpoint)&&<p className="realtime-provider-health-endpoint">{row.auth_type||'认证方式未知'}{row.environment?` · ${row.environment}`:''}{row.market_data_endpoint?` · REST ${row.market_data_endpoint}`:''}{row.stream_endpoint?` · Stream ${row.stream_endpoint}`:''}</p>}
           <dl>
             <div><dt>最后消息</dt><dd>{displayTime(row.last_message_at || row.last_success_at)}</dd></div>
             <div><dt>订阅</dt><dd>{row.subscriptions.length ? row.subscriptions.slice(0, 3).join(', ') : '数据不足'}</dd></div>

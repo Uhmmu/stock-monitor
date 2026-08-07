@@ -43,6 +43,39 @@ export type RealtimeQuote = {
   alternate_quotes: RealtimeQuote[]
 }
 
+export type RealtimeBar = {
+  symbol: string
+  timestamp: string | null
+  interval: string
+  open: number | null
+  high: number | null
+  low: number | null
+  close: number | null
+  volume: number | null
+  vwap: number | null
+  trade_count: number | null
+  provider: string | null
+  feed: string | null
+  market_session: RealtimeMarketSession
+  received_at: string | null
+  is_partial: boolean | null
+  is_backfill: boolean | null
+}
+
+export type RealtimeMarketEvent = {
+  id: string | number | null
+  symbol: string
+  event_type: string
+  severity: 'info' | 'notice' | 'warning' | 'high' | string
+  value: number | null
+  threshold: number | null
+  timestamp: string | null
+  provider: string | null
+  feed: string | null
+  market_session: RealtimeMarketSession
+  metadata: Record<string, unknown>
+}
+
 export type RealtimeProviderHealth = {
   provider: string
   channel?: 'market' | 'news' | string
@@ -50,6 +83,10 @@ export type RealtimeProviderHealth = {
   connected: boolean | null
   status: string | null
   feed: string | null
+  auth_type: string | null
+  environment: string | null
+  market_data_endpoint: string | null
+  stream_endpoint: string | null
   last_message_at: string | null
   last_success_at: string | null
   last_error: string | null
@@ -129,6 +166,25 @@ const emptyQuote = (symbol: string): RealtimeQuote => ({
   alternate_quotes: [],
 })
 
+const emptyBar = (symbol: string): RealtimeBar => ({
+  symbol,
+  timestamp: null,
+  interval: '1m',
+  open: null,
+  high: null,
+  low: null,
+  close: null,
+  volume: null,
+  vwap: null,
+  trade_count: null,
+  provider: null,
+  feed: null,
+  market_session: 'unknown',
+  received_at: null,
+  is_partial: null,
+  is_backfill: null,
+})
+
 /** Normalize both the typed backend quote and tolerant provider-shaped fixtures. */
 export function normalizeRealtimeQuote(input: unknown, fallbackSymbol = ''): RealtimeQuote | null {
   const record = asRecord(input)
@@ -196,6 +252,79 @@ export function normalizeRealtimeQuote(input: unknown, fallbackSymbol = ''): Rea
     alternate_quotes: alternateQuotes,
   }
   return quote
+}
+
+export function normalizeRealtimeBar(input: unknown, fallbackSymbol = ''): RealtimeBar | null {
+  const record = asRecord(input)
+  if (!record) return null
+  const symbol = normalizeSymbol(first(record, ['symbol', 'ticker', 'ticker_symbol'])) || normalizeSymbol(fallbackSymbol)
+  if (!symbol) return null
+  const close = numberValue(first(record, ['close', 'price', 'last_price']))
+  if (close == null) return null
+  const bar = emptyBar(symbol)
+  return {
+    ...bar,
+    timestamp: stringValue(first(record, ['timestamp', 'market_timestamp', 'time'])),
+    interval: stringValue(first(record, ['interval', 'timeframe'])) || '1m',
+    open: numberValue(first(record, ['open', 'open_price'])) ?? close,
+    high: numberValue(first(record, ['high', 'day_high'])) ?? close,
+    low: numberValue(first(record, ['low', 'day_low'])) ?? close,
+    close,
+    volume: numberValue(first(record, ['volume', 'day_volume', 'total_volume'])),
+    vwap: numberValue(first(record, ['vwap', 'day_vwap'])),
+    trade_count: numberValue(first(record, ['trade_count', 'tradeCount'])),
+    provider: stringValue(first(record, ['provider', 'source'])),
+    feed: stringValue(first(record, ['feed', 'mode'])),
+    market_session: sessionValue(first(record, ['market_session', 'session'])),
+    received_at: stringValue(first(record, ['received_at', 'fetched_at', 'persisted_at'])),
+    is_partial: booleanValue(first(record, ['is_partial', 'partial'])),
+    is_backfill: booleanValue(first(record, ['is_backfill', 'backfill'])),
+  }
+}
+
+export function normalizeRealtimeMarketEvent(input: unknown, fallbackSymbol = ''): RealtimeMarketEvent | null {
+  const record = asRecord(input)
+  if (!record) return null
+  const symbol = normalizeSymbol(first(record, ['symbol', 'ticker', 'ticker_symbol'])) || normalizeSymbol(fallbackSymbol)
+  const eventType = stringValue(first(record, ['event_type', 'type', 'event']))
+  if (!symbol || !eventType) return null
+  return {
+    id: typeof record.id === 'string' || typeof record.id === 'number' ? record.id : null,
+    symbol,
+    event_type: eventType,
+    severity: stringValue(first(record, ['severity', 'level'])) || 'info',
+    value: numberValue(first(record, ['value', 'current_value'])),
+    threshold: numberValue(first(record, ['threshold', 'trigger_value'])),
+    timestamp: stringValue(first(record, ['timestamp', 'market_timestamp', 'time', 'created_at'])),
+    provider: stringValue(first(record, ['provider', 'source'])),
+    feed: stringValue(first(record, ['feed', 'mode'])),
+    market_session: sessionValue(first(record, ['market_session', 'session'])),
+    metadata: asRecord(record.metadata) || asRecord(record.metadata_json) || {},
+  }
+}
+
+export function normalizeRealtimeMarketEvents(payload: unknown): RealtimeMarketEvent[] {
+  const record = asRecord(payload)
+  const nested = record ? first(record, ['events', 'items', 'data', 'results']) : null
+  const candidates = Array.isArray(payload) ? payload : Array.isArray(nested) ? nested : []
+  return candidates.map(item => normalizeRealtimeMarketEvent(item)).filter((item): item is RealtimeMarketEvent => item !== null)
+}
+
+export function mergeRealtimeMarketEvents(...groups: RealtimeMarketEvent[][]): RealtimeMarketEvent[] {
+  const output = new Map<string, RealtimeMarketEvent>()
+  for (const group of groups) {
+    for (const event of group) {
+      const key = event.id != null ? String(event.id) : `${event.symbol}:${event.event_type}:${event.timestamp || ''}`
+      if (!output.has(key)) output.set(key, event)
+    }
+  }
+  return [...output.values()]
+    .sort((left, right) => {
+      const leftTimestamp = Date.parse(left.timestamp || '')
+      const rightTimestamp = Date.parse(right.timestamp || '')
+      return (Number.isFinite(rightTimestamp) ? rightTimestamp : 0) - (Number.isFinite(leftTimestamp) ? leftTimestamp : 0)
+    })
+    .slice(0, 50)
 }
 
 const isQuoteLike = (value: unknown): boolean => {
@@ -277,6 +406,10 @@ const parseProviderHealth = (provider: string, input: unknown, channel: 'market'
     connected,
     status: statusValue,
     feed: stringValue(first(record, ['feed', 'mode'])),
+    auth_type: stringValue(first(record, ['auth_type', 'authentication', 'auth'])),
+    environment: stringValue(first(record, ['environment', 'env'])),
+    market_data_endpoint: stringValue(first(record, ['market_data_endpoint', 'endpoint', 'base_url'])),
+    stream_endpoint: stringValue(first(record, ['stream_endpoint', 'stream_url'])),
     last_message_at: stringValue(first(record, ['last_message_at', 'last_update_at', 'last_received_at', 'last_fetch', 'updated_at'])),
     last_success_at: lastSuccess,
     last_error: stringValue(first(record, ['last_error', 'error', 'error_message'])),
@@ -333,6 +466,8 @@ export function parseSSEEvent(event: string, data: string): StreamEnvelope | nul
 
 type RealtimeHookResult = {
   quotes: Record<string, RealtimeQuote>
+  bars: Record<string, RealtimeBar>
+  events: RealtimeMarketEvent[]
   streamStatus: RealtimeStreamStatus
   streamError: Error | null
   lastUpdateAt: string | null
@@ -354,6 +489,8 @@ export function useRealtimeQuotes(symbols: string[], enabled = true): RealtimeHo
   const [streamStatus, setStreamStatus] = useState<RealtimeStreamStatus>(normalizedSymbols.length ? 'loading' : 'idle')
   const [streamError, setStreamError] = useState<Error | null>(null)
   const [streamQuotes, setStreamQuotes] = useState<Record<string, RealtimeQuote>>({})
+  const [streamBars, setStreamBars] = useState<Record<string, RealtimeBar>>({})
+  const [streamEvents, setStreamEvents] = useState<RealtimeMarketEvent[]>([])
   const [lastUpdateAt, setLastUpdateAt] = useState<string | null>(null)
   const query = useQuery({
     queryKey: ['market-realtime', normalizedSymbols],
@@ -368,6 +505,8 @@ export function useRealtimeQuotes(symbols: string[], enabled = true): RealtimeHo
     if (!enabled || !normalizedSymbols.length) {
       setStreamStatus('idle')
       setStreamQuotes({})
+      setStreamBars({})
+      setStreamEvents([])
       return
     }
     const controller = new AbortController()
@@ -375,7 +514,32 @@ export function useRealtimeQuotes(symbols: string[], enabled = true): RealtimeHo
     let reconnectTimer: number | undefined
     let stopped = false
 
-    const applyPayload = (payload: unknown) => {
+    const applyPayload = (eventName: string, payload: unknown) => {
+      if (eventName === 'bar_update') {
+        const bar = normalizeRealtimeBar(payload)
+        if (!bar) return
+        setStreamBars(previous => {
+          const current = previous[bar.symbol]
+          const nextTimestamp = Date.parse(bar.timestamp || bar.received_at || '')
+          const currentTimestamp = Date.parse(current?.timestamp || current?.received_at || '')
+          if (current && Number.isFinite(currentTimestamp) && Number.isFinite(nextTimestamp) && nextTimestamp < currentTimestamp) return previous
+          return { ...previous, [bar.symbol]: bar }
+        })
+        setLastUpdateAt(new Date().toISOString())
+        return
+      }
+      if (eventName === 'market_event') {
+        const marketEvent = normalizeRealtimeMarketEvent(payload)
+        if (!marketEvent) return
+        setStreamEvents(previous => mergeRealtimeMarketEvents([marketEvent], previous))
+        setLastUpdateAt(new Date().toISOString())
+        return
+      }
+      if (eventName === 'provider_status') {
+        const status = asRecord(payload)
+        if (status?.connected === false) setStreamStatus('fallback')
+        return
+      }
       const quotes = normalizeRealtimeQuotes(payload, normalizedSymbols)
       if (!quotes.length) return
       setStreamQuotes(previous => {
@@ -414,7 +578,7 @@ export function useRealtimeQuotes(symbols: string[], enabled = true): RealtimeHo
           const parsed = parseSSEEvent(event, dataLines.join('\n'))
           event = ''
           dataLines = []
-          if (parsed) applyPayload(parsed.data)
+          if (parsed) applyPayload(parsed.event, parsed.data)
         }
         while (!stopped) {
           const chunk = await reader.read()
@@ -454,7 +618,7 @@ export function useRealtimeQuotes(symbols: string[], enabled = true): RealtimeHo
     for (const quote of Object.values(streamQuotes)) if (isQuoteNewer(quote, merged[quote.symbol])) merged[quote.symbol] = quote
     return merged
   }, [query.data, normalizedSymbols, streamQuotes])
-  return { quotes, streamStatus, streamError, lastUpdateAt, query }
+  return { quotes, bars: streamBars, events: streamEvents, streamStatus, streamError, lastUpdateAt, query }
 }
 
 export function useRealtimeProviderHealth(enabled = true) {
@@ -466,5 +630,19 @@ export function useRealtimeProviderHealth(enabled = true) {
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
     select: normalizeProviderHealth,
+  })
+}
+
+export function useMarketEvents(symbols: string[], enabled = true) {
+  const normalizedSymbols = useMemo(() => [...new Set(symbols.map(normalizeSymbol).filter(Boolean))].sort(), [symbols.join(',')])
+  const symbolParam = normalizedSymbols.join(',')
+  return useQuery({
+    queryKey: ['market-events', normalizedSymbols],
+    queryFn: () => api<unknown>(`/market/events?symbols=${encodeURIComponent(symbolParam)}&limit=50`),
+    enabled: enabled && normalizedSymbols.length > 0,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    select: normalizeRealtimeMarketEvents,
   })
 }

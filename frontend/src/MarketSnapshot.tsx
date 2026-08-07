@@ -2,7 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 
 import { api } from './api'
 import { RealtimeQuoteCard } from './RealtimeMarketCard'
-import { useRealtimeQuotes } from './realtime'
+import { RealtimeBarSummary, RealtimeMarketEventList } from './RealtimeMarketEvents'
+import { mergeRealtimeMarketEvents, useMarketEvents, useRealtimeQuotes } from './realtime'
 
 export type PriceSnapshot = {
   id:number
@@ -105,6 +106,9 @@ export function MarketSnapshotState({state}:{state:'loading'|'error'|'empty'}) {
 
 export function MarketSnapshot({symbol}:{symbol:string}) {
   const realtime=useRealtimeQuotes([symbol])
+  const eventHistory=useMarketEvents([symbol])
+  const events=mergeRealtimeMarketEvents(realtime.events,eventHistory.data||[])
+  const latestBar=realtime.bars[symbol.toUpperCase()]
   const result=useQuery({
     queryKey:['price-snapshot',symbol],
     queryFn:()=>api<PriceSnapshot>(`/stocks/${encodeURIComponent(symbol)}/price-snapshot/latest`),
@@ -113,6 +117,8 @@ export function MarketSnapshot({symbol}:{symbol:string}) {
   })
   return <div className="market-snapshot-stack">
     <RealtimeQuoteCard symbol={symbol} quote={realtime.quotes[symbol.toUpperCase()]} streamStatus={realtime.streamStatus} lastUpdateAt={realtime.lastUpdateAt}/>
+    <RealtimeBarSummary bar={latestBar}/>
+    <RealtimeMarketEventList events={events} />
     {result.isLoading&&<MarketSnapshotState state="loading"/>}
     {result.isError&&<MarketSnapshotState state="error"/>}
     {!result.isLoading&&!result.isError&&!result.data&&<MarketSnapshotState state="empty"/>}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AreaSeries, ColorType, LineSeries, createChart, type IChartApi, type Time } from 'lightweight-charts'
 import { api, post } from './api'
@@ -10,7 +10,8 @@ import { MonteCarloView } from './PortfolioMonteCarlo'
 import { PortfolioOptimizationView } from './PortfolioOptimization'
 import { PortfolioAnalysisHistory } from './PortfolioAnalysisHistory'
 import { RealtimeQuoteCard } from './RealtimeMarketCard'
-import { useRealtimeQuotes } from './realtime'
+import { RealtimeMarketEventList } from './RealtimeMarketEvents'
+import { mergeRealtimeMarketEvents, useMarketEvents, useRealtimeQuotes, type RealtimeQuote } from './realtime'
 
 // ── 持仓模块类型 ──────────────────────────────────────────────
 export type PositionView = {
@@ -87,6 +88,108 @@ export type PortfolioSummary = {
   has_unconverted_positions:boolean
   fx_conversion_used:boolean
   positions:PositionView[]
+}
+
+export type LivePositionView = PositionView & {
+  live_quote: RealtimeQuote|null
+  live_is_realtime:boolean
+  live_price:number|null
+  live_market_value:number|null
+  live_unrealized_pnl:number|null
+  live_unrealized_pnl_percent:number|null
+  live_daily_pnl:number|null
+  live_daily_pnl_percent:number|null
+  live_base_currency_market_value:number|null
+  live_base_currency_unrealized_pnl:number|null
+  live_base_currency_daily_pnl:number|null
+  live_portfolio_weight:number|null
+}
+
+export type LivePortfolioView = Omit<PortfolioSummary,'positions'> & {
+  positions:LivePositionView[]
+  live_quote_count:number
+  live_daily_pnl:number|null
+  live_daily_pnl_percent:number|null
+  live_last_quote_at:string|null
+}
+
+const finiteNumber = (value:unknown):value is number => typeof value==='number' && Number.isFinite(value)
+
+/**
+ * Revalue only the fields supported by a fresh server-normalized quote. FX is
+ * never guessed: a live local-currency price can update a position card while
+ * base-currency totals continue to use the last converted value when its FX
+ * rate is unavailable.
+ */
+export function deriveLivePortfolio(summary:PortfolioSummary|undefined, quotes:Record<string,RealtimeQuote>):LivePortfolioView|undefined {
+  if(!summary) return undefined
+  const rows=summary.positions.map((position):LivePositionView=>{
+    const quote=quotes[position.symbol.toUpperCase()]||null
+    const freshPrice=quote&&quote.is_stale!==true&&finiteNumber(quote.price)?quote.price:null
+    const livePriceAvailable=freshPrice!=null
+    const livePrice=freshPrice??position.current_price
+    const liveMarketValue=freshPrice!=null?freshPrice*position.total_quantity:position.market_value
+    const liveUnrealized=freshPrice!=null?freshPrice*position.total_quantity-position.total_cost:position.unrealized_pnl
+    const previousClose=quote&&quote.is_stale!==true&&finiteNumber(quote.previous_close)&&quote.previous_close>0?quote.previous_close:null
+    const liveDailyPnl=freshPrice!=null&&previousClose!=null?((freshPrice-previousClose)*position.total_quantity):null
+    const liveDailyPercent=livePriceAvailable
+      ? (finiteNumber(quote!.change_percent)?quote!.change_percent:(previousClose!=null?(freshPrice!-previousClose)/previousClose*100:null))
+      : (position.daily_change_percent??null)
+    const fx=finiteNumber(position.fx_rate)?position.fx_rate:null
+    const liveBaseMarketValue=freshPrice!=null&&liveMarketValue!=null&&fx!=null?liveMarketValue*fx:position.base_currency_market_value
+    const liveBaseUnrealized=freshPrice!=null&&liveUnrealized!=null&&fx!=null?liveUnrealized*fx:position.base_currency_unrealized_pnl
+    const liveBaseDailyPnl=liveDailyPnl!=null&&fx!=null?liveDailyPnl*fx:null
+    return {
+      ...position,
+      live_quote:quote,
+      live_is_realtime:livePriceAvailable&&quote!.is_delayed!==true,
+      live_price:livePrice,
+      live_market_value:liveMarketValue,
+      live_unrealized_pnl:liveUnrealized,
+      live_unrealized_pnl_percent:liveUnrealized!=null&&position.total_cost>0?liveUnrealized/position.total_cost*100:position.unrealized_pnl_percent,
+      live_daily_pnl:liveDailyPnl,
+      live_daily_pnl_percent:liveDailyPercent,
+      live_base_currency_market_value:liveBaseMarketValue,
+      live_base_currency_unrealized_pnl:liveBaseUnrealized,
+      live_base_currency_daily_pnl:liveBaseDailyPnl,
+      live_portfolio_weight:position.portfolio_weight,
+    }
+  })
+  const valued=rows.map(row=>row.live_base_currency_market_value).filter(finiteNumber)
+  const unrealized=rows.map(row=>row.live_base_currency_unrealized_pnl).filter(finiteNumber)
+  const daily=rows.map(row=>row.live_base_currency_daily_pnl).filter(finiteNumber)
+  const dailyBase=rows.map(row=>{
+    const quote=row.live_quote
+    if(!quote||quote.is_stale===true||!finiteNumber(quote.price)||!finiteNumber(quote.previous_close)||quote.previous_close<=0||!finiteNumber(row.fx_rate)) return null
+    return quote.previous_close*row.total_quantity*row.fx_rate
+  }).filter(finiteNumber)
+  const totalMarketValue=valued.length?valued.reduce((sum,value)=>sum+value,0):summary.total_market_value
+  const totalUnrealized=unrealized.length?unrealized.reduce((sum,value)=>sum+value,0):summary.total_unrealized_pnl
+  const totalDailyPnl=daily.length?daily.reduce((sum,value)=>sum+value,0):null
+  const totalDailyPnlPercent=totalDailyPnl!=null&&dailyBase.length&&dailyBase.reduce((sum,value)=>sum+value,0)>0
+    ? totalDailyPnl/dailyBase.reduce((sum,value)=>sum+value,0)*100
+    : null
+  const netAssetValue=finiteNumber(summary.cash)&&valued.length?totalMarketValue+summary.cash:summary.net_asset_value
+  const investmentPnl=netAssetValue!=null&&summary.net_contributions!=null?netAssetValue-summary.net_contributions:summary.investment_pnl
+  const simpleReturn=investmentPnl!=null&&summary.net_contributions!=null&&summary.net_contributions>0?investmentPnl/summary.net_contributions:summary.simple_cumulative_return
+  const weightedTotal=totalMarketValue>0?totalMarketValue:null
+  for(const row of rows) row.live_portfolio_weight=row.live_base_currency_market_value!=null&&weightedTotal!=null?row.live_base_currency_market_value/weightedTotal*100:row.portfolio_weight
+  const latest=rows.map(row=>row.live_quote?.timestamp||row.live_quote?.received_at||null).filter((value):value is string=>!!value).sort().at(-1)||null
+  return {
+    ...summary,
+    positions:rows,
+    total_market_value:totalMarketValue,
+    invested_market_value:totalMarketValue,
+    total_unrealized_pnl:totalUnrealized,
+    total_unrealized_pnl_percent:summary.total_cost>0?totalUnrealized/summary.total_cost*100:summary.total_unrealized_pnl_percent,
+    net_asset_value:netAssetValue,
+    investment_pnl:investmentPnl,
+    simple_cumulative_return:simpleReturn,
+    live_quote_count:rows.filter(row=>row.live_quote&&finiteNumber(row.live_quote.price)&&row.live_quote.is_stale!==true).length,
+    live_daily_pnl:totalDailyPnl,
+    live_daily_pnl_percent:totalDailyPnlPercent,
+    live_last_quote_at:latest,
+  }
 }
 type PriceLevelZone = {
   zone_type:string
@@ -336,6 +439,7 @@ export function PortfolioModule() {
 
   const summary = useQuery({queryKey:['portfolio-summary'],queryFn:()=>api<PortfolioSummary>('/portfolio/summary'),staleTime:20_000,refetchInterval:30_000,refetchIntervalInBackground:true})
   const realtime = useRealtimeQuotes(summary.data?.positions.map(row=>row.symbol)||[])
+  const eventHistory = useMarketEvents(summary.data?.positions.map(row=>row.symbol)||[])
   const strategy = useQuery({queryKey:['portfolio-strategy-profile'],queryFn:()=>api<StrategyProfileResponse>('/portfolio/strategy-profile'),staleTime:60_000})
   const benchmark = useQuery({queryKey:['portfolio-benchmark'],queryFn:()=>api<PortfolioBenchmark>('/portfolio/benchmark'),enabled:subtab==='overview',staleTime:15*60_000,refetchInterval:15*60_000})
   const performance = useQuery({queryKey:['portfolio-performance',performanceRange],queryFn:()=>api<PerformanceSeries>(`/portfolio/performance?range=${performanceRange}`),enabled:subtab==='overview',staleTime:30_000})
@@ -408,9 +512,12 @@ export function PortfolioModule() {
   })
 
   const s = summary.data
+  const live = useMemo(()=>deriveLivePortfolio(s,realtime.quotes),[s,realtime.quotes])
+  const displayPositions = live?.positions||[]
+  const liveEvents = mergeRealtimeMarketEvents(realtime.events,eventHistory.data||[])
   const subtabs:[PortfolioTab,string][] = [['overview','组合中心'],['health','风险体检'],['stress','压力测试'],['scenario','情景分析'],['monte-carlo','蒙特卡洛'],['optimization','组合优化'],['history','交易历史']]
   const openTab = (key:PortfolioTab) => {
-    if(key==='technical'&&!detailSymbol&&s?.positions[0]) setDetailSymbol(s.positions[0].symbol)
+    if(key==='technical'&&!detailSymbol&&live?.positions[0]) setDetailSymbol(live.positions[0].symbol)
     setSubtab(key)
   }
   const openTechnical = (symbol:string) => {
@@ -421,9 +528,9 @@ export function PortfolioModule() {
     {detailSymbol&&ledgerDetail.isLoading&&<div className="empty">正在读取账户持仓事实…</div>}
     {detailSymbol&&ledgerDetail.data&&<PositionAccountPanel data={ledgerDetail.data}/>}
     <div className="portfolio-technical">
-    <div className="portfolio-technical-list">{s?.positions.map(p=><button key={p.symbol} className={detailSymbol===p.symbol?'active':''} onClick={()=>setDetailSymbol(p.symbol)}>
-      <b>{p.symbol}</b><span>{p.price_available?fmtMoney(p.current_price,p.currency):'数据不足'}</span>
-    </button>)}{!s?.positions.length&&<div className="empty">还没有持仓可供技术分析。</div>}</div>
+    <div className="portfolio-technical-list">{live?.positions.map(p=><button key={p.symbol} className={detailSymbol===p.symbol?'active':''} onClick={()=>setDetailSymbol(p.symbol)}>
+      <b>{p.symbol}</b><span>{p.live_price!=null?fmtMoney(p.live_price,p.currency):'数据不足'}</span>
+    </button>)}{!live?.positions.length&&<div className="empty">还没有持仓可供技术分析。</div>}</div>
     <div className="portfolio-technical-detail">
       {!detailSymbol&&<div className="empty">选择一个持仓查看技术位置。</div>}
       {detailSymbol&&detail.isLoading&&<div className="empty">正在读取技术位置…</div>}
@@ -433,7 +540,7 @@ export function PortfolioModule() {
   </div>
   const healthContent = <PortfolioHealthView health={health.data} loading={health.isLoading} currency={s?.base_currency||'USD'} interpretation={interpretation.data} interpretationLoading={interpretation.isLoading}/>
   const strategyLabel = strategy.data?.choices.strategy_type?.find(row=>row.value===strategy.data?.profile.strategy_type)?.label||'质量成长'
-  const positionSheet = s?.positions.find(row=>row.symbol===positionSheetSymbol)
+  const positionSheet = live?.positions.find(row=>row.symbol===positionSheetSymbol)
   const openPosition = (symbol:string) => {
     if(window.matchMedia('(max-width: 700px)').matches) setPositionSheetSymbol(symbol)
     else openTechnical(symbol)
@@ -454,50 +561,52 @@ export function PortfolioModule() {
     {subtab==='overview'&&<div className="portfolio-overview">
       {summary.isLoading&&<div className="empty">正在读取持仓数据…</div>}
       {!summary.isLoading&&s&&<>
-        <section className="portfolio-account-source"><span>账户数据：{s.account_data_source==='ibkr_flex'?'IBKR':'手动账本'}</span><span>市场价格：项目行情系统</span><span>最近同步：{s.latest_sync_at?new Date(s.latest_sync_at).toLocaleString('zh-CN'):'尚未同步'}</span></section>
+        <section className="portfolio-account-source"><span>账户数据：{s.account_data_source==='ibkr_flex'?'IBKR':'手动账本'}</span><span>市场价格：{live?.live_quote_count?`实时行情 · ${live.live_quote_count}/${s.positions.length}`:'项目行情系统'}</span><span>最近同步：{s.latest_sync_at?new Date(s.latest_sync_at).toLocaleString('zh-CN'):'尚未同步'}</span></section>
         <div className="metric-card-row portfolio-metrics ledger-metrics">
-          <div className="metric-card portfolio-value-card"><span>组合净值</span><strong>{fmtMoney(s.net_asset_value,s.base_currency)}</strong><small>持仓 {fmtMoney(s.invested_market_value,s.base_currency)} · 现金 {fmtMoney(s.cash,s.base_currency)}</small>{(s.has_unpriced_positions||s.has_unconverted_positions)&&<small className="portfolio-gap-hint">部分持仓暂未计入汇总</small>}</div>
-          <div className="metric-card"><span>累计投资盈亏</span><strong className={(s.investment_pnl||0)>=0?'positive':'negative'}>{fmtMoney(s.investment_pnl,s.base_currency)}</strong><small>账户净值 {fmtMoney(s.net_asset_value,s.base_currency)} − 累计净入金 {fmtMoney(s.net_contributions,s.base_currency)}<br/>简单累计收益率 {fmtRatio(s.simple_cumulative_return)}</small></div>
+          <div className="metric-card portfolio-value-card"><span>组合净值</span><strong>{fmtMoney(live?.net_asset_value??s.net_asset_value,s.base_currency)}</strong><small>持仓 {fmtMoney(live?.invested_market_value??s.invested_market_value,s.base_currency)} · 现金 {fmtMoney(s.cash,s.base_currency)}</small>{(s.has_unpriced_positions||s.has_unconverted_positions)&&<small className="portfolio-gap-hint">部分持仓暂未计入汇总</small>}</div>
+          <div className="metric-card"><span>累计投资盈亏</span><strong className={(live?.investment_pnl||0)>=0?'positive':'negative'}>{fmtMoney(live?.investment_pnl??s.investment_pnl,s.base_currency)}</strong><small>账户净值 {fmtMoney(live?.net_asset_value??s.net_asset_value,s.base_currency)} − 累计净入金 {fmtMoney(s.net_contributions,s.base_currency)}<br/>简单累计收益率 {fmtRatio(live?.simple_cumulative_return??s.simple_cumulative_return)}</small></div>
           <div className="metric-card"><span>时间加权收益率</span><strong className={(s.time_weighted_return||0)>=0?'positive':'negative'}>{fmtRatio(s.time_weighted_return)}</strong><small>今日 {fmtRatio(s.latest_daily_return)} · 本月 {fmtRatio(s.month_return)} · 年内 {fmtRatio(s.year_return)}</small></div>
-          <div className="metric-card"><span>盈亏构成</span><strong>{fmtMoney(s.realized_pnl+s.total_unrealized_pnl+s.dividend_income-s.fees-s.taxes,s.base_currency)}</strong><small>已实现 {fmtMoney(s.realized_pnl,s.base_currency)} · 未实现 {fmtMoney(s.total_unrealized_pnl,s.base_currency)}</small></div>
+          <div className="metric-card"><span>实时日内盈亏</span><strong className={(live?.live_daily_pnl||0)>=0?'positive':'negative'}>{fmtMoney(live?.live_daily_pnl??null,s.base_currency)}</strong><small>{live?.live_daily_pnl_percent==null?'需要新鲜前收与汇率数据':`日内 ${fmtPercent(live.live_daily_pnl_percent)}`} · 仅统计可实时重算持仓</small></div>
+          <div className="metric-card"><span>盈亏构成</span><strong>{fmtMoney(s.realized_pnl+(live?.total_unrealized_pnl??s.total_unrealized_pnl)+s.dividend_income-s.fees-s.taxes,s.base_currency)}</strong><small>已实现 {fmtMoney(s.realized_pnl,s.base_currency)} · 未实现 {fmtMoney(live?.total_unrealized_pnl??s.total_unrealized_pnl,s.base_currency)}</small></div>
           <div className="metric-card"><span>股息与费用</span><strong>{fmtMoney(s.dividend_income-s.fees-s.taxes,s.base_currency)}</strong><small>股息 {fmtMoney(s.dividend_income,s.base_currency)} · 费用税费 {fmtMoney(s.fees+s.taxes,s.base_currency)}</small></div>
           <div className="metric-card"><span>最大回撤</span><strong className="negative">{fmtRatio(s.max_drawdown)}</strong><small>现金流调整后账户曲线</small></div>
         </div>
-        <MobilePerformanceOverview summary={s} benchmark={benchmark.data}/>
+        <MobilePerformanceOverview summary={live||s} benchmark={benchmark.data}/>
+        <RealtimeMarketEventList events={liveEvents} title="组合盘中事件" subtitle="持仓的突破、VWAP、放量与指标事件" compact/>
         <PortfolioPerformanceChart data={performance.data} loading={performance.isLoading} error={performance.isError} range={performanceRange} onRange={setPerformanceRange} currency={s.base_currency}/>
-        <ReturnAttributionPreview data={attribution.data} positions={s.positions} currency={s.base_currency} loading={attribution.isLoading}/>
+        <ReturnAttributionPreview data={attribution.data} positions={live?.positions||s.positions} currency={s.base_currency} loading={attribution.isLoading}/>
         <PortfolioBenchmarkSection data={benchmark.data} loading={benchmark.isLoading} saving={saveBenchmark.isPending} error={saveBenchmark.error} onSave={payload=>saveBenchmark.mutate(payload)}/>
         <div className="table portfolio-table">
           <div className="table-head portfolio-row"><span>证券</span><span>市值</span><span>权重</span><span>平均成本</span><span>未实现盈亏</span><span>总收益</span><span>来源</span></div>
-          {s.positions.map(p=><button key={p.symbol} className="table-row portfolio-row" onClick={()=>openPosition(p.symbol)}>
+          {displayPositions.map(p=><button key={p.symbol} className="table-row portfolio-row" onClick={()=>openPosition(p.symbol)}>
             <span className="toggle">{p.symbol}</span>
-            <span data-label="本币市值">{p.price_available?fmtMoney(p.market_value,p.currency):'数据不足'}</span>
-            <span data-label={`${s.base_currency} 占比`}>{p.portfolio_weight==null?'—':`${p.portfolio_weight.toFixed(1)}%`}</span>
+            <span data-label="本币市值">{p.live_price!=null?fmtMoney(p.live_market_value,p.currency):p.price_available?fmtMoney(p.market_value,p.currency):'数据不足'}</span>
+            <span data-label={`${s.base_currency} 占比`}>{p.live_portfolio_weight==null?p.portfolio_weight==null?'—':`${p.portfolio_weight.toFixed(1)}%`:`${p.live_portfolio_weight.toFixed(1)}%`}</span>
             <span data-label="平均成本">{fmtMoney(p.average_cost,p.currency)}<small>{fmtNum(p.total_quantity)} 股</small></span>
-            <span data-label="浮动盈亏" className={(p.unrealized_pnl||0)>=0?'positive':'negative'}>{p.price_available?`${fmtMoney(p.unrealized_pnl,p.currency)} (${fmtPercent(p.unrealized_pnl_percent)})`:'数据不足'}{p.daily_change_percent!=null&&<small className={(p.daily_change_percent||0)>=0?'positive':'negative'}>今日 {fmtPercent(p.daily_change_percent)}</small>}</span>
+            <span data-label="浮动盈亏" className={((p.live_unrealized_pnl??p.unrealized_pnl)||0)>=0?'positive':'negative'}>{p.live_price!=null?`${fmtMoney(p.live_unrealized_pnl,p.currency)} (${fmtPercent(p.live_unrealized_pnl_percent)})`:p.price_available?`${fmtMoney(p.unrealized_pnl,p.currency)} (${fmtPercent(p.unrealized_pnl_percent)})`:'数据不足'}{(p.live_daily_pnl_percent??p.daily_change_percent)!=null&&<small className={((p.live_daily_pnl_percent??p.daily_change_percent)||0)>=0?'positive':'negative'}>今日 {fmtPercent(p.live_daily_pnl_percent??p.daily_change_percent??null)}</small>}</span>
             <span data-label="总收益" className={(p.total_pnl||0)>=0?'positive':'negative'}>{fmtMoney(p.total_pnl,p.currency)} ({fmtPercent(p.total_return_pct)})</span>
             <span data-label="账户来源">{p.authority_source==='ibkr_flex'?'IBKR':'手动'}<small>{p.data_completeness==='complete'?'完整':'部分数据'}</small></span>
           </button>)}
-          {!s.positions.length&&<div className="empty">还没有持仓，点击右上角添加第一笔买入记录。</div>}
+          {!displayPositions.length&&<div className="empty">还没有持仓，点击右上角添加第一笔买入记录。</div>}
         </div>
       </>}
     </div>}
 
     {subtab==='positions'&&<div className="portfolio-positions">
-      {s?.positions.map(p=><article key={p.symbol} className="position-card">
+      {displayPositions.map(p=><article key={p.symbol} className="position-card">
         <div className="position-card-header"><b>{p.symbol}</b><span>{p.currency}</span></div>
         <div className="position-card-grid">
           <div><span>持仓数量</span><b>{fmtNum(p.total_quantity)}</b></div>
           <div><span>平均成本</span><b>{fmtMoney(p.average_cost,p.currency)}</b></div>
           <div><span>总成本</span><b>{fmtMoney(p.total_cost,p.currency)}</b></div>
-          <div><span>当前价格</span><b>{p.price_available?fmtMoney(p.current_price,p.currency):'数据不足'}</b></div>
+          <div><span>当前价格</span><b>{p.live_price!=null?fmtMoney(p.live_price,p.currency):p.price_available?fmtMoney(p.current_price,p.currency):'数据不足'}</b></div>
           <div><span>最近交易</span><b>{p.last_transaction_at||'—'}</b></div>
-          <div><span>数据来源</span><b>{p.price_available?(p.price_source==='snapshot'?'实时快照':p.price_source==='fmp'?'FMP 日线':'Yahoo 日线'):'数据不足'}</b></div>
+          <div><span>数据来源</span><b>{p.live_is_realtime?'实时行情':p.price_available?(p.price_source==='snapshot'?'已入库快照':p.price_source==='fmp'?'FMP 日线':'Yahoo 日线'):'数据不足'}</b></div>
         </div>
         <RealtimeQuoteCard symbol={p.symbol} quote={realtime.quotes[p.symbol.toUpperCase()]} streamStatus={realtime.streamStatus} lastUpdateAt={realtime.lastUpdateAt} compact/>
         <button className="position-detail-btn" onClick={()=>openTechnical(p.symbol)}>查看技术位置 →</button>
       </article>)}
-      {!s?.positions.length&&<div className="empty">还没有持仓明细。</div>}
+      {!displayPositions.length&&<div className="empty">还没有持仓明细。</div>}
     </div>}
 
     {subtab==='technical'&&technicalContent}
@@ -583,21 +692,21 @@ function MobilePerformanceOverview({summary,benchmark}:{summary:PortfolioSummary
   </section>
 }
 
-function MobilePositionDetail({position,baseCurrency,realtime,streamStatus,lastUpdateAt,onTechnical}:{position:PositionView;baseCurrency:string;realtime?:import('./realtime').RealtimeQuote;streamStatus:import('./realtime').RealtimeStreamStatus;lastUpdateAt:string|null;onTechnical:()=>void}) {
+function MobilePositionDetail({position,baseCurrency,realtime,streamStatus,lastUpdateAt,onTechnical}:{position:LivePositionView;baseCurrency:string;realtime?:import('./realtime').RealtimeQuote;streamStatus:import('./realtime').RealtimeStreamStatus;lastUpdateAt:string|null;onTechnical:()=>void}) {
   const fields = [
-    ['当前价格',position.price_available?fmtMoney(position.current_price,position.currency):'数据不足'],
+    ['当前价格',position.live_price!=null?fmtMoney(position.live_price,position.currency):position.price_available?fmtMoney(position.current_price,position.currency):'数据不足'],
     ['持仓数量',`${fmtNum(position.total_quantity)} 股`],
-    ['本币市值',position.price_available?fmtMoney(position.market_value,position.currency):'数据不足'],
-    [`${baseCurrency} 市值`,fmtMoney(position.base_currency_market_value,baseCurrency)],
-    ['组合权重',position.portfolio_weight==null?'—':`${position.portfolio_weight.toFixed(1)}%`],
+    ['本币市值',position.live_price!=null?fmtMoney(position.live_market_value,position.currency):position.price_available?fmtMoney(position.market_value,position.currency):'数据不足'],
+    [`${baseCurrency} 市值`,fmtMoney(position.live_base_currency_market_value,baseCurrency)],
+    ['组合权重',position.live_portfolio_weight==null?'—':`${position.live_portfolio_weight.toFixed(1)}%`],
     ['平均成本',fmtMoney(position.average_cost,position.currency)],
-    ['浮动盈亏',position.price_available?`${fmtMoney(position.unrealized_pnl,position.currency)} · ${fmtPercent(position.unrealized_pnl_percent)}`:'数据不足'],
-    ['今日涨跌',fmtPercent(position.daily_change_percent??null)],
+    ['浮动盈亏',position.live_price!=null?`${fmtMoney(position.live_unrealized_pnl,position.currency)} · ${fmtPercent(position.live_unrealized_pnl_percent)}`:position.price_available?`${fmtMoney(position.unrealized_pnl,position.currency)} · ${fmtPercent(position.unrealized_pnl_percent)}`:'数据不足'],
+    ['今日涨跌',fmtPercent(position.live_daily_pnl_percent??position.daily_change_percent??null)],
     ['总收益',`${fmtMoney(position.total_pnl,position.currency)} · ${fmtPercent(position.total_return_pct)}`],
     ['账户来源',position.authority_source==='ibkr_flex'?'IBKR 权威持仓':'手动账本'],
   ]
   return <article className="mobile-position-detail">
-    <header><div><small>{position.currency} · {position.authority_source==='ibkr_flex'?'IBKR SYNCED':'MANUAL'}</small><h2>{position.symbol}</h2></div><strong className={(position.unrealized_pnl||0)>=0?'positive':'negative'}>{fmtPercent(position.unrealized_pnl_percent)}</strong></header>
+    <header><div><small>{position.currency} · {position.authority_source==='ibkr_flex'?'IBKR SYNCED':'MANUAL'}</small><h2>{position.symbol}</h2></div><strong className={((position.live_unrealized_pnl??position.unrealized_pnl)||0)>=0?'positive':'negative'}>{fmtPercent(position.live_unrealized_pnl_percent??position.unrealized_pnl_percent)}</strong></header>
     <div>{fields.map(([label,value])=><section key={label}><span>{label}</span><b>{value}</b></section>)}</div>
     <RealtimeQuoteCard symbol={position.symbol} quote={realtime} streamStatus={streamStatus} lastUpdateAt={lastUpdateAt} compact/>
     <p>数量与成本取自最近成功同步的 IBKR 持仓事实；行情由项目价格快照自动更新，无需在 IBKR 页面手动刷新持仓列表。</p>

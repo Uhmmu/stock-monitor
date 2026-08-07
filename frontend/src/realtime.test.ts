@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
 
-import { normalizeProviderHealth, normalizeRealtimeQuote, normalizeRealtimeQuotes, parseSSEEvent } from './realtime'
+import { mergeRealtimeMarketEvents, normalizeProviderHealth, normalizeRealtimeBar, normalizeRealtimeMarketEvents, normalizeRealtimeQuote, normalizeRealtimeQuotes, parseSSEEvent } from './realtime'
 import { RealtimeQuoteCard } from './RealtimeMarketCard'
 
 describe('realtime market contract normalization', () => {
@@ -44,6 +44,17 @@ describe('realtime market contract normalization', () => {
     const envelope = normalizeRealtimeQuotes({ quotes: { MSFT: { authoritative_quote: { symbol: 'MSFT', price: 418 }, stale: false } } }, ['MSFT'])
     expect(envelope[0]).toMatchObject({ symbol: 'MSFT', price: 418, is_stale: false })
     expect(normalizeRealtimeQuotes({ data: { quotes: [{ symbol: 'AAPL', price: 3 }] } }, ['AAPL'])[0]?.price).toBe(3)
+  })
+
+  it('normalizes bar updates and deduplicates persisted/live market events', () => {
+    const bar = normalizeRealtimeBar({ symbol: 'nvda', timestamp: '2026-08-07T14:32:00Z', interval: '1m', open: 180, high: 183, low: 179, close: 182.36, volume: 1200, vwap: 181.5, provider: 'alpaca' })
+    expect(bar).toMatchObject({ symbol: 'NVDA', close: 182.36, high: 183, vwap: 181.5, provider: 'alpaca' })
+    const events = normalizeRealtimeMarketEvents({ events: [
+      { id: 7, symbol: 'NVDA', event_type: 'day_high_breakout', severity: 'notice', value: 182.36, threshold: 182, timestamp: '2026-08-07T14:32:00Z', metadata: {} },
+      { id: 8, symbol: 'NVDA', event_type: 'price_crosses_vwap', timestamp: '2026-08-07T14:31:00Z', metadata: { direction: 'above' } },
+    ] })
+    expect(events[0]?.symbol).toBe('NVDA')
+    expect(mergeRealtimeMarketEvents(events, [events[0]!])).toHaveLength(2)
   })
 })
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { cashFlowAdjustedGrowth, chartPoints, fmtHealthScore, fmtMoney, fmtNum, fmtPercent } from './Portfolio'
+import { cashFlowAdjustedGrowth, chartPoints, deriveLivePortfolio, fmtHealthScore, fmtMoney, fmtNum, fmtPercent, type PortfolioSummary, type PositionView } from './Portfolio'
+import { normalizeRealtimeQuote } from './realtime'
 import { findSavedScenarioRun, type ScenarioHistoryRun } from './PortfolioScenarios'
 import { latestFreshAnalysis, requestsMatch, type PortfolioAnalysisRun } from './PortfolioAnalysisCache'
 
@@ -71,6 +72,45 @@ describe('portfolio ledger chart', () => {
   it('uses cumulative return only as a compatibility fallback for adjusted growth', () => {
     const point = { cash_flow_adjusted_index: null, cumulative_return: -.075 } as Parameters<typeof cashFlowAdjustedGrowth>[0]
     expect(cashFlowAdjustedGrowth(point)).toBe(-7.5)
+  })
+})
+
+describe('live portfolio valuation', () => {
+  const position = {
+    symbol: 'AAPL', total_quantity: 10, average_cost: 100, total_cost: 1000, currency: 'USD',
+    price_available: true, current_price: 102, market_value: 1020, unrealized_pnl: 20, unrealized_pnl_percent: 2,
+    previous_close: 105, daily_change_amount: -3, daily_change_percent: -2.86, price_source: 'snapshot',
+    fx_rate: 1, fx_rate_source: 'identity', base_currency_market_value: 1020, base_currency_total_cost: 1000,
+    base_currency_unrealized_pnl: 20, base_currency_realized_pnl: 0, base_currency_dividend_income: 0,
+    base_currency_fees: 0, base_currency_taxes: 0, base_currency_total_pnl: 20, valuation_available: true,
+    portfolio_weight: 100, authority_source: 'manual', realized_pnl: 0, dividend_income: 0, fees: 0, taxes: 0,
+    fees_and_taxes: 0, total_pnl: 20, total_return_pct: 2, holding_days: 10, last_transaction_at: null,
+    first_trade_at: null, price_as_of: null, data_completeness: 'complete', security_id: null,
+  } as PositionView
+  const summary = {
+    base_currency: 'USD', total_market_value: 1020, invested_market_value: 1020, total_cost: 1000,
+    total_unrealized_pnl: 20, total_unrealized_pnl_percent: 2, net_asset_value: 1020, cash: 0,
+    net_contributions: 1000, investment_pnl: 20, simple_cumulative_return: .02, positions: [position],
+  } as PortfolioSummary
+
+  it('recalculates market value, unrealized P&L, and daily P&L from a fresh quote', () => {
+    const quote = normalizeRealtimeQuote({ symbol: 'AAPL', price: 110, previous_close: 105, is_stale: false })!
+    const result = deriveLivePortfolio(summary, { AAPL: quote })!
+    expect(result.positions[0]?.live_market_value).toBe(1100)
+    expect(result.positions[0]?.live_unrealized_pnl).toBe(100)
+    expect(result.positions[0]?.live_daily_pnl).toBe(50)
+    expect(result.total_market_value).toBe(1100)
+    expect(result.total_unrealized_pnl).toBe(100)
+    expect(result.live_daily_pnl).toBe(50)
+    expect(result.investment_pnl).toBe(100)
+  })
+
+  it('keeps the persisted valuation when the quote is stale', () => {
+    const quote = normalizeRealtimeQuote({ symbol: 'AAPL', price: 110, previous_close: 105, is_stale: true })!
+    const result = deriveLivePortfolio(summary, { AAPL: quote })!
+    expect(result.positions[0]?.live_price).toBe(102)
+    expect(result.positions[0]?.live_market_value).toBe(1020)
+    expect(result.live_daily_pnl).toBeNull()
   })
 })
 
