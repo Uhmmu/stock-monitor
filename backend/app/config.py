@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     perplexity_manual_refresh_cooldown_seconds: int = 60
     perplexity_evaluation_budget_usd: float = 2.0
     perplexity_live_evaluation_enabled: bool = False
+    # Exa Agent is the deep-research discovery engine. Financial Datasets is
+    # attached through Exa Connect; no separate provider credential is stored.
+    exa_api_key: str = ""
+    exa_agent_url: str = "https://api.exa.ai/agent/runs"
+    exa_agent_beta: str = "agent-2026-05-07"
+    exa_agent_effort: str = "high"
+    exa_agent_poll_interval_seconds: float = 4.0
+    exa_agent_timeout_seconds: int = 900
     # Adanos is server-only. The browser calls the authenticated FastAPI proxy.
     adanos_api_key: str = ""
     adanos_api_keys: str = ""

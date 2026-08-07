@@ -21,6 +21,7 @@ from app.models import (
     StockDiscoveryPortfolioSnapshot,
     StockDiscoverySettings,
     StockDiscoverySource,
+    StockDiscoveryUsage,
     User,
     WatchlistItem,
 )
@@ -29,6 +30,11 @@ from app.services.discovery.analysis import parse_opportunity_output
 from app.services.discovery.locks import discovery_lock
 from app.services.discovery.normalization import apply_filters, enrich_candidate, normalize_ticker
 from app.services.discovery.schemas import DiscoveryResult, OpportunityBatch
+from app.services.discovery.exa import (
+    ExaAgentResult,
+    build_request as build_exa_request,
+    parse_agent_response as parse_exa_agent_response,
+)
 from app.services.discovery.perplexity import AgentResult, build_request
 from app.services.discovery.search import build_search_queries, run_search
 from app.services.discovery.service import (
@@ -154,6 +160,48 @@ def test_agent_mode_keeps_finance_search_and_gpt54():
     assert "概要" in request["input"]
 
 
+def test_exa_mode_uses_agent_and_financial_datasets():
+    request = build_exa_request(
+        context={"local_news_summaries": [{"title": "Event", "summary": "概要"}]},
+        effort="high",
+    )
+    assert request["effort"] == "high"
+    assert request["dataSources"] == [{"provider": "financial_datasets"}]
+    assert request["outputSchema"]["title"] == "DiscoveryResult"
+    assert "概要" in request["query"]
+    assert "Financial Datasets" in request["systemPrompt"]
+    assert "finance_search" not in request["systemPrompt"]
+
+
+def test_exa_agent_response_preserves_grounding_usage_and_exact_cost():
+    payload = {
+        "status": "completed",
+        "output": {
+            "structured": _structured_result(),
+            "grounding": [{"field": "candidate_groups[0]", "citations": [
+                {"title": "SEC filing", "url": "https://www.sec.gov/example"},
+            ]}],
+        },
+        "usage": {
+            "searches": 4,
+            "dataSources": {"financial_datasets": 3},
+            "inputTokens": 100,
+            "outputTokens": 200,
+            "totalTokens": 300,
+        },
+        "costDollars": {"total": .56, "agentCompute": .51, "search": .02, "dataSources": {"financial_datasets": .03}},
+    }
+    result = parse_exa_agent_response(payload)
+    assert result.model == "exa-agent"
+    assert result.finance_data_calls == 3
+    assert result.web_search_calls == 4
+    assert result.total_tokens == 300
+    assert result.tool_cost_usd == pytest.approx(.05)
+    assert result.model_cost_usd == pytest.approx(.51)
+    assert result.total_cost_usd == pytest.approx(.56)
+    assert result.grounding[0]["citations"][0]["url"].startswith("https://www.sec.gov")
+
+
 def test_mode_specific_cost_estimate():
     local = StockDiscoverySettings(
         user_id=1, discovery_mode="search_local", model="openai/gpt-5.4",
@@ -163,8 +211,13 @@ def test_mode_specific_cost_estimate():
         user_id=1, discovery_mode="agent_finance", model="openai/gpt-5.4",
         max_steps=5, max_output_tokens=12000, enable_web_search=True,
     )
+    exa = StockDiscoverySettings(
+        user_id=1, discovery_mode="exa_finance", model="openai/gpt-5.4",
+        max_steps=5, max_output_tokens=12000, enable_web_search=True,
+    )
     assert estimate_max_cost({"holdings": []}, local) == pytest.approx(.005)
     assert estimate_max_cost({"holdings": []}, agent) > .1
+    assert estimate_max_cost({"holdings": []}, exa) == pytest.approx(.65)
 
 
 def test_raw_search_api_request_contains_no_model(monkeypatch):
@@ -362,6 +415,57 @@ def test_finance_agent_mode_executes_original_pipeline_and_writes_history(db, ow
     history = opportunity_history_list(db, user.id)[0]
     assert history["search_source"] == "perplexity_finance_agent"
     assert history["tickers"] == ["SPGI"]
+
+
+def test_exa_finance_mode_executes_agent_connect_pipeline(db, owner, monkeypatch):
+    user, portfolio = owner
+    settings = StockDiscoverySettings(
+        user_id=user.id, discovery_mode="exa_finance", model="openai/gpt-5.4",
+        max_steps=5, max_output_tokens=12000, enable_web_search=True,
+    )
+    run = StockDiscoveryRun(
+        user_id=user.id, portfolio_id=portfolio.id, idempotency_key="exa-agent-run",
+        trigger="manual", discovery_mode="exa_finance", status="pending",
+        stage="preparing_portfolio", requested_at=datetime.now(UTC),
+        model_requested="exa-agent", portfolio_snapshot_hash="e" * 64,
+    )
+    db.add_all([settings, run]); db.flush()
+    db.add(StockDiscoveryPortfolioSnapshot(
+        run_id=run.id, context_hash="e" * 64, payload={"holdings": [], "current_watchlist": []},
+    ))
+    db.commit()
+    parsed = DiscoveryResult.model_validate(_structured_result())
+    result = ExaAgentResult(
+        parsed=parsed,
+        raw_response={"id": "agent_run_1", "status": "completed"},
+        output_text="{}",
+        grounding=[{"field": "candidate_groups[0]", "citations": [
+            {"title": "SEC filing", "url": "https://www.sec.gov/example"},
+        ]}],
+        usage={"searches": 2},
+        finance_data_calls=3,
+        web_search_calls=2,
+        input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        tool_cost_usd=.05,
+        model_cost_usd=.50,
+        total_cost_usd=.55,
+    )
+    monkeypatch.setattr("app.services.discovery.service.build_local_research_context", lambda _db, context: context)
+    monkeypatch.setattr("app.services.discovery.service.run_exa_agent", lambda request: result)
+    monkeypatch.setattr("app.services.discovery.service._persist_candidates", lambda *_, **__: [])
+    completed = execute_discovery_run(db, run.id)
+    assert completed.status == "completed"
+    assert completed.model_used == "exa-agent"
+    history = opportunity_history_list(db, user.id)[0]
+    assert history["search_source"] == "exa_agent_financial_datasets"
+    usage = db.scalar(select(StockDiscoveryUsage).where(StockDiscoveryUsage.run_id == run.id))
+    assert usage.finance_search_calls == 3
+    assert usage.web_search_calls == 2
+    assert usage.total_cost_usd == pytest.approx(.55)
+    source = db.scalar(select(StockDiscoverySource).where(StockDiscoverySource.run_id == run.id))
+    assert source.source_origin == "exa_grounding"
 
 
 def test_candidate_persistence_deduplicates_groups_and_applies_local_verification(db, owner, monkeypatch):

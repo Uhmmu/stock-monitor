@@ -1883,6 +1883,7 @@ def sync_tracked_figures():
 @celery_app.task(bind=True, name="app.tasks.celery_app.run_stock_discovery", max_retries=3)
 def run_stock_discovery(self, run_id: int):
     from app.models import StockDiscoveryRun
+    from app.services.discovery.exa import ExaError
     from app.services.discovery.locks import discovery_lock
     from app.services.discovery.perplexity import PerplexityError
     from app.services.discovery.search import SearchError
@@ -1900,7 +1901,7 @@ def run_stock_discovery(self, run_id: int):
             with SessionLocal() as db:
                 run = execute_discovery_run(db, run_id)
                 return {"status": run.status, "run_id": run_id}
-        except (SearchError, PerplexityError) as exc:
+        except (SearchError, PerplexityError, ExaError) as exc:
             if exc.retryable and self.request.retries < self.max_retries:
                 countdown = min(300, 30 * (2 ** self.request.retries))
                 raise self.retry(exc=exc, countdown=countdown)

@@ -36,6 +36,7 @@ from app.models import (
 from .context import build_local_research_context, build_portfolio_context
 from .normalization import apply_filters, enrich_candidate, resolve_local_symbol
 from .analysis import AnalysisError, AnalysisResult, analyze_opportunities
+from .exa import ExaAgentResult, ExaError, build_request as build_exa_request, run_agent as run_exa_agent
 from .perplexity import AgentResult, PerplexityError, build_request, run_agent
 from .search import SearchError, SearchResult, build_search_queries, run_search
 from .schemas import (
@@ -61,6 +62,14 @@ GROUP_LABELS = {
 MODEL_PRICING_PER_MILLION = {
     "openai/gpt-5.4": (2.5, 15.0),
     "openai/gpt-5.4-mini": (.75, 4.5),
+}
+
+EXA_FIXED_EFFORT_COST = {
+    "minimal": .012,
+    "low": .025,
+    "medium": .10,
+    "high": .50,
+    "xhigh": 1.0,
 }
 
 
@@ -121,9 +130,13 @@ def settings_payload(db: Session, user_id: int) -> dict:
     values = {key: getattr(row, key) for key in _settings_defaults()}
     values.update({
         "api_key_configured": bool(get_settings().perplexity_api_key.strip()),
+        "exa_api_key_configured": bool(get_settings().exa_api_key.strip()),
         "analysis_api_key_configured": bool(get_settings().openai_api_key.strip()),
         "analysis_model": get_settings().model_important,
         "agent_model": row.model,
+        "exa_agent_model": "exa-agent",
+        "exa_agent_effort": get_settings().exa_agent_effort,
+        "exa_finance_provider": "financial_datasets",
         "search_source": "perplexity_search",
         "prompt_version": PROMPT_VERSION, "schema_version": SCHEMA_VERSION,
         "filter_version": FILTER_VERSION,
@@ -148,6 +161,11 @@ def monthly_spend(db: Session, user_id: int, now: datetime | None = None) -> flo
 def estimate_max_cost(context: dict, settings: StockDiscoverySettings) -> float:
     if settings.discovery_mode == "search_local":
         return 0.005
+    if settings.discovery_mode == "exa_finance":
+        # Fixed Agent effort plus a conservative allowance for Exa web-search
+        # and Financial Datasets provider calls during one discovery run.
+        effort_cost = EXA_FIXED_EFFORT_COST.get(get_settings().exa_agent_effort, 1.0)
+        return round(effort_cost + .15, 6)
     input_rate, output_rate = MODEL_PRICING_PER_MILLION.get(settings.model, (5.0, 30.0))
     input_tokens = max(1000, len(json.dumps(context, ensure_ascii=False, default=str)) // 3)
     model_cost = (
@@ -212,7 +230,7 @@ def create_discovery_run(db: Session, portfolio: Portfolio, user_id: int) -> tup
         model_requested=(
             get_settings().model_important
             if config.discovery_mode == "search_local"
-            else config.model
+            else ("exa-agent" if config.discovery_mode == "exa_finance" else config.model)
         ),
         portfolio_snapshot_hash=context_hash,
         prompt_version=PROMPT_VERSION, schema_version=SCHEMA_VERSION, filter_version=FILTER_VERSION,
@@ -274,6 +292,45 @@ def _persist_agent_usage(db: Session, run_id: int, result: AgentResult) -> None:
         total_cost_usd=result.total_cost_usd,
         raw_usage=result.usage,
     ))
+
+
+def _persist_exa_usage(db: Session, run_id: int, result: ExaAgentResult) -> None:
+    db.add(StockDiscoveryUsage(
+        run_id=run_id,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        total_tokens=result.total_tokens,
+        # Retain the legacy columns while recording the exact Exa semantics in
+        # raw_usage. The frontend labels these by engine.
+        finance_search_calls=result.finance_data_calls,
+        web_search_calls=result.web_search_calls,
+        tool_cost_usd=result.tool_cost_usd,
+        model_cost_usd=result.model_cost_usd,
+        total_cost_usd=result.total_cost_usd,
+        raw_usage={
+            **result.usage,
+            "provider": "exa",
+            "financial_data_calls": result.finance_data_calls,
+            "web_search_calls": result.web_search_calls,
+        },
+    ))
+
+
+def _persist_exa_grounding(db: Session, run_id: int, grounding: list[dict]) -> None:
+    seen: set[str] = set()
+    for item in grounding:
+        for citation in item.get("citations") or []:
+            url = str(citation.get("url") or "")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            db.add(StockDiscoverySource(
+                run_id=run_id,
+                title=str(citation.get("title") or ""),
+                url=url,
+                source_type="finance" if "financial" in str(item.get("field") or "").lower() else "other",
+                source_origin="exa_grounding",
+            ))
 
 
 def _persist_tool_sources(db: Session, run_id: int, tool_results: list[dict]) -> None:
@@ -491,6 +548,7 @@ def _persist_metrics(
     local: dict,
     *,
     include_raw: bool = True,
+    raw_source: str = "perplexity_finance",
 ) -> None:
     financial = raw.get("financial_snapshot") or {}
     raw_period = _bounded_metric_period(", ".join(financial.get("data_periods") or []))
@@ -500,7 +558,7 @@ def _persist_metrics(
                 continue
             db.add(StockDiscoveryCandidateMetric(candidate_id=candidate.id, metric_key=key,
                 value=float(value) if isinstance(value, (int, float)) else None,
-                text_value=value if isinstance(value, str) else None, source="perplexity_finance",
+                text_value=value if isinstance(value, str) else None, source=raw_source,
                 data_period=raw_period,
                 is_preferred=local.get(key) is None, has_discrepancy=_metric_discrepancy(value, local.get(key))))
     for key in ("price", "market_cap", "average_volume", "pe_trailing", "pe_forward", "price_to_sales",
@@ -512,7 +570,7 @@ def _persist_metrics(
         raw_metric = db.scalar(select(StockDiscoveryCandidateMetric).where(
             StockDiscoveryCandidateMetric.candidate_id == candidate.id,
             StockDiscoveryCandidateMetric.metric_key == key,
-            StockDiscoveryCandidateMetric.source == "perplexity_finance",
+            StockDiscoveryCandidateMetric.source == raw_source,
         ))
         if raw_metric:
             raw_metric.is_preferred = False
@@ -524,7 +582,14 @@ def _persist_metrics(
             is_preferred=True, has_discrepancy=discrepancy))
 
 
-def _persist_candidates(db: Session, run: StockDiscoveryRun, parsed: DiscoveryResult, config: StockDiscoverySettings) -> list[str]:
+def _persist_candidates(
+    db: Session,
+    run: StockDiscoveryRun,
+    parsed: DiscoveryResult,
+    config: StockDiscoverySettings,
+    *,
+    raw_source: str = "perplexity_finance",
+) -> list[str]:
     held = set(db.scalars(select(PortfolioPosition.symbol).where(
         PortfolioPosition.portfolio_id == run.portfolio_id, PortfolioPosition.total_quantity > 0)).all())
     watched = set(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
@@ -537,7 +602,7 @@ def _persist_candidates(db: Session, run: StockDiscoveryRun, parsed: DiscoveryRe
             summary=group.group_summary, display_order=order)
         db.add(row); db.flush(); groups[group.group_id] = row
     avoid_group = StockDiscoveryCandidateGroup(run_id=run.id, group_id="avoid_or_overheated",
-        group_name="已过滤与过热候选", group_type="watch_only", summary="Perplexity 原始规避或过热清单", display_order=len(groups))
+        group_name="已过滤与过热候选", group_type="watch_only", summary="上游引擎原始规避或过热清单", display_order=len(groups))
     db.add(avoid_group); db.flush(); groups[avoid_group.group_id] = avoid_group
     # Expose the Agent-produced grouping before potentially slow local/Yahoo
     # verification. A previous successful result still remains the primary
@@ -570,13 +635,18 @@ def _persist_candidates(db: Session, run: StockDiscoveryRun, parsed: DiscoveryRe
                 db.add(candidate); db.flush(); canonical[key] = candidate
                 db.add(StockDiscoveryFilterResult(candidate_id=candidate.id, status=decision.status,
                     reasons=decision.reasons, details=decision.details, filter_version=FILTER_VERSION))
-                _persist_metrics(db, candidate, raw, {})
+                _persist_metrics(db, candidate, raw, {}, raw_source=raw_source)
                 for source in raw.get("sources") or []:
                     url = source.get("url")
                     if url:
                         db.add(StockDiscoverySource(run_id=run.id, candidate_id=candidate.id,
                             title=source.get("title") or "", url=url, source_type=source.get("source_type") or "other",
-                            source_origin="perplexity_finance" if source.get("source_type") == "finance" else "perplexity_web"))
+                            source_origin=(
+                                "exa_financial_datasets" if raw_source == "exa_finance" and source.get("source_type") == "finance"
+                                else ("exa_web" if raw_source == "exa_finance" else (
+                                    "perplexity_finance" if source.get("source_type") == "finance" else "perplexity_web"
+                                ))
+                            )))
             appearances = list(candidate.raw_data.get("appearances") or [])
             appearances.append({"group_id": group.group_id, "group_type": group.group_type,
                                 "reason": raw.get("discovery_reason"), "raw_order": position})
@@ -604,10 +674,10 @@ def _persist_candidates(db: Session, run: StockDiscoveryRun, parsed: DiscoveryRe
                 filter_row.status = decision.status
                 filter_row.reasons = decision.reasons
                 filter_row.details = decision.details
-                # The Perplexity metrics were committed above. Persist only the
+                # The upstream metrics were committed above. Persist only the
                 # preferred local facts here so the source uniqueness constraint
                 # remains an audit aid rather than a retry hazard.
-                _persist_metrics(db, candidate, raw, local, include_raw=False)
+                _persist_metrics(db, candidate, raw, local, include_raw=False, raw_source=raw_source)
                 db.commit()
                 if verification != "verified":
                     warnings.append(f"{ticker} 本地数据仅部分验证")
@@ -627,7 +697,7 @@ def _persist_candidates(db: Session, run: StockDiscoveryRun, parsed: DiscoveryRe
                 verification_status="pending", raw_data={**raw, "is_avoid": True, "appearances": []}, normalized_data={"ticker": ticker}, local_data={})
             db.add(candidate); db.flush(); canonical[key] = candidate
             db.add(StockDiscoveryFilterResult(candidate_id=candidate.id, status="watch_only",
-                reasons=[raw.get("reason") or "Perplexity 标记为规避或过热"], details={"reconsideration_condition": raw.get("reconsideration_condition")}, filter_version=FILTER_VERSION))
+                reasons=[raw.get("reason") or "上游引擎标记为规避或过热"], details={"reconsideration_condition": raw.get("reconsideration_condition")}, filter_version=FILTER_VERSION))
         db.add(StockDiscoveryCandidateGroupMembership(candidate_id=candidate.id, group_id=avoid_group.id,
             original_reason=raw.get("reason") or "", raw_order=position))
         db.commit()
@@ -648,7 +718,28 @@ def execute_discovery_run(db: Session, run_id: int) -> StockDiscoveryRun:
     run.status = "running"; run.stage = "preparing_local_data"; run.started_at = run.started_at or _now(); db.commit()
     try:
         local_context = build_local_research_context(db, snapshot.payload)
-        if run.discovery_mode == "agent_finance":
+        if run.discovery_mode == "exa_finance":
+            run.stage = "running_exa_finance_agent"; db.commit()
+            exa = run_exa_agent(build_exa_request(
+                context=local_context,
+                effort=get_settings().exa_agent_effort,
+            ))
+            parsed = exa.parsed
+            history_batch = _legacy_to_opportunity_batch(parsed)
+            queries = []
+            run.model_used = exa.model
+            db.add(StockDiscoveryRawPayload(
+                run_id=run.id,
+                response_json=exa.raw_response,
+                output_text=exa.output_text,
+                parsed_json=parsed.model_dump(mode="json"),
+                tool_results=exa.grounding,
+            ))
+            _persist_exa_usage(db, run.id, exa)
+            _persist_exa_grounding(db, run.id, exa.grounding)
+            history_source = "exa_agent_financial_datasets"
+            measured_cost = exa.total_cost_usd
+        elif run.discovery_mode == "agent_finance":
             run.stage = "running_finance_agent"; db.commit()
             request = build_request(
                 context=local_context,
@@ -724,7 +815,11 @@ def execute_discovery_run(db: Session, run_id: int) -> StockDiscoveryRun:
         _persist_diagnosis(db, run.id, parsed)
         db.commit()
         run.stage = "local_verification"; db.commit()
-        warnings = _persist_candidates(db, run, parsed, config)
+        warnings = (
+            _persist_candidates(db, run, parsed, config, raw_source="exa_finance")
+            if run.discovery_mode == "exa_finance"
+            else _persist_candidates(db, run, parsed, config)
+        )
         db.add(OpportunityHistory(
             user_id=run.user_id,
             run_id=run.id,
@@ -747,7 +842,7 @@ def execute_discovery_run(db: Session, run_id: int) -> StockDiscoveryRun:
         run.status = "completed_with_warnings" if warnings else "completed"
         run.stage = "completed"; run.completed_at = _now(); run.next_scheduled_at = None
         db.commit(); db.refresh(run); return run
-    except (AnalysisError, SearchError, PerplexityError) as exc:
+    except (AnalysisError, SearchError, PerplexityError, ExaError) as exc:
         db.rollback(); run = db.get(StockDiscoveryRun, run_id)
         if exc.retryable:
             run.status = "pending"; run.stage = "retrying"; run.failure_code = exc.code
@@ -939,10 +1034,14 @@ def latest_discovery_payload(db: Session, user_id: int) -> dict:
         "current_run": _run_payload(current), "result": display,
         "using_previous_result": bool(success and current and success.id != current.id and current.status in ACTIVE_STATUSES | {"failed", "blocked_by_budget"}),
         "api_key_configured": bool(
-            get_settings().perplexity_api_key.strip()
-            and (
-                config.discovery_mode == "agent_finance"
-                or get_settings().openai_api_key.strip()
+            get_settings().exa_api_key.strip()
+            if config.discovery_mode == "exa_finance"
+            else (
+                get_settings().perplexity_api_key.strip()
+                and (
+                    config.discovery_mode == "agent_finance"
+                    or get_settings().openai_api_key.strip()
+                )
             )
         ),
         "discovery_mode": config.discovery_mode,

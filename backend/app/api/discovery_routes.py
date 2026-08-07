@@ -93,7 +93,9 @@ def discovery_refresh(payload: RefreshIn, user: User = Depends(get_current_user)
     settings = get_settings()
     config = discovery_settings(db, user.id)
     missing = []
-    if not settings.perplexity_api_key.strip():
+    if config.discovery_mode == "exa_finance" and not settings.exa_api_key.strip():
+        missing.append("Exa API Key")
+    elif config.discovery_mode != "exa_finance" and not settings.perplexity_api_key.strip():
         missing.append("Perplexity API Key")
     if config.discovery_mode == "search_local" and not settings.openai_api_key.strip():
         missing.append("OPENAI_API_KEY")

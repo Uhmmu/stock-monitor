@@ -45,6 +45,21 @@ describe('机会发现候选展示', () => {
     expect(discoveryStatusText(result.status)).toBe('已完成')
   })
 
+  it('为 Exa 引擎显示 Financial Datasets 调用语义', () => {
+    const result={
+      id:2,status:'completed',stage:'completed',trigger:'manual',requested_at:'2026-08-07T00:00:00Z',started_at:'2026-08-07T00:00:01Z',completed_at:'2026-08-07T00:01:00Z',analysis_date:'2026-08-07',next_scheduled_at:null,
+      model_requested:'exa-agent',model_used:'exa-agent',prompt_version:'stock-discovery-prompt-v0.6',schema_version:'stock-discovery-schema-v0.6',filter_version:'stock-discovery-filter-v0.4',warnings:[],failure_code:null,failure_reason:null,previous_successful_run_id:null,
+      discovery_mode:'exa_finance' as const,
+      usage:{input_tokens:0,output_tokens:0,total_tokens:0,finance_search_calls:3,web_search_calls:4,tool_cost_usd:.05,model_cost_usd:.5,total_cost_usd:.55},
+      market_context:{},portfolio_diagnosis:{overweight:[],missing:[],strength:[],vulnerability:[]},capital_flows:{strong:[],early:[]},groups:[],raw_candidates:[],filtered_candidates:[],counts:{raw:0,accepted:0,watch_only:0,rejected:0},portfolio_actions:[],limitations:[],
+    }
+    const html=renderToStaticMarkup(<DiscoveryRunMetadata result={result}/>)
+    expect(html).toContain('Exa Agent + Financial Datasets')
+    expect(html).toContain('Financial Datasets 调用')
+    expect(html).toContain('>3</dd>')
+    expect(html).toContain('$0.5500')
+  })
+
   it('在原始候选区保留本地过滤状态', () => {
     const candidate={id:7,raw_ticker:'APP',normalized_ticker:'APP',company_name:'AppLovin',priority:'low',
       display_status:'watch_only',groups:[{id:'hot',name:'过热观察',type:'watch_only',reason:'动量过热'}]} as DiscoveryCandidate

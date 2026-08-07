@@ -161,7 +161,7 @@ class DiscoveryResult(StrictModel):
 
 
 class DiscoverySettingsUpdate(BaseModel):
-    discovery_mode: Literal["search_local", "agent_finance"] | None = None
+    discovery_mode: Literal["search_local", "agent_finance", "exa_finance"] | None = None
     max_output_tokens: int | None = Field(default=None, ge=2048, le=32000)
     monthly_budget_usd: float | None = Field(default=None, ge=0, le=1000)
     max_run_cost_usd: float | None = Field(default=None, ge=0.01, le=100)
