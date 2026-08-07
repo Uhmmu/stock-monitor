@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { api } from './api'
+import { RealtimeQuoteCard } from './RealtimeMarketCard'
+import { useRealtimeQuotes } from './realtime'
 
 export type PriceSnapshot = {
   id:number
@@ -47,7 +49,7 @@ export function priceRangePosition(snapshot:Pick<PriceSnapshot,'last_price'|'day
 const sessionLabel:Record<PriceSnapshot['market_session'],string>={
   pre_market:'盘前',regular:'常规交易',after_hours:'盘后',closed:'已休市',unknown:'阶段未知',
 }
-const providerLabel:Record<string,string>={yfinance:'Yahoo Finance',finnhub:'Finnhub'}
+const providerLabel:Record<string,string>={yfinance:'Yahoo Finance',yahoo:'Yahoo Finance',finnhub:'Finnhub',alpaca:'Alpaca',tiingo:'Tiingo'}
 const number=(value:number|null,maximumFractionDigits=2)=>value==null?'--':value.toLocaleString('zh-CN',{maximumFractionDigits})
 const money=(value:number|null,currency:string|null)=>value==null?'--':new Intl.NumberFormat('zh-CN',{style:'currency',currency:currency||'USD',maximumFractionDigits:2}).format(value)
 const exactTime=(value:string|null)=>value?new Date(value).toLocaleString('zh-CN',{timeZoneName:'short'}):'--'
@@ -102,14 +104,18 @@ export function MarketSnapshotState({state}:{state:'loading'|'error'|'empty'}) {
 }
 
 export function MarketSnapshot({symbol}:{symbol:string}) {
+  const realtime=useRealtimeQuotes([symbol])
   const result=useQuery({
     queryKey:['price-snapshot',symbol],
     queryFn:()=>api<PriceSnapshot>(`/stocks/${encodeURIComponent(symbol)}/price-snapshot/latest`),
     enabled:!!symbol,
     staleTime:30_000,
   })
-  if(result.isLoading)return <MarketSnapshotState state="loading"/>
-  if(result.isError)return <MarketSnapshotState state="error"/>
-  if(!result.data)return <MarketSnapshotState state="empty"/>
-  return <MarketSnapshotContent snapshot={result.data}/>
+  return <div className="market-snapshot-stack">
+    <RealtimeQuoteCard symbol={symbol} quote={realtime.quotes[symbol.toUpperCase()]} streamStatus={realtime.streamStatus} lastUpdateAt={realtime.lastUpdateAt}/>
+    {result.isLoading&&<MarketSnapshotState state="loading"/>}
+    {result.isError&&<MarketSnapshotState state="error"/>}
+    {!result.isLoading&&!result.isError&&!result.data&&<MarketSnapshotState state="empty"/>}
+    {result.data&&<MarketSnapshotContent snapshot={result.data}/>}
+  </div>
 }

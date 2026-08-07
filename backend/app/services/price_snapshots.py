@@ -47,6 +47,8 @@ class PriceSnapshotInput:
     is_delayed: bool | None = None
     delay_seconds: int | None = None
     raw_payload: dict[str, Any] | None = None
+    feed: str | None = None
+    provider_role: str = PROVIDER_ROLE
 
 
 def _number(value: Any) -> float | None:
@@ -226,6 +228,9 @@ def collect_price_snapshot(db: Session, symbol: str) -> PriceSnapshotInput:
             Security.display_symbol == value,
         )).limit(1)
     )
+    realtime = _cached_realtime_snapshot(value, security=security)
+    if realtime is not None:
+        return realtime
     return fetch_standardized_price_snapshot(
         value,
         yahoo_symbol=(security.yahoo_symbol if security else value),
@@ -233,6 +238,51 @@ def collect_price_snapshot(db: Session, symbol: str) -> PriceSnapshotInput:
         exchange=(security.exchange_name if security else None),
         currency=(security.currency if security else None),
     )
+
+
+def _cached_realtime_snapshot(symbol: str, *, security: Security | None) -> PriceSnapshotInput | None:
+    """Use only fresh server-owned Redis state; never calls a provider here."""
+    try:
+        import redis
+        client = redis.Redis.from_url(
+            get_settings().redis_url, decode_responses=True,
+            socket_connect_timeout=.3, socket_timeout=.3,
+        )
+        raw = client.get(f"market:realtime:{symbol}")
+        envelope = json.loads(raw) if raw else None
+        quote = envelope.get("authoritative_quote") if isinstance(envelope, dict) and isinstance(envelope.get("authoritative_quote"), dict) else envelope
+        if not isinstance(quote, dict):
+            return None
+        timestamp = datetime.fromisoformat(str(quote.get("timestamp")).replace("Z", "+00:00"))
+        timestamp = _utc(timestamp)
+        if timestamp is None or (datetime.now(UTC) - timestamp).total_seconds() > max(1, get_settings().realtime_stale_seconds):
+            return None
+        price = _positive(quote.get("price"))
+        if price is None:
+            return None
+        session = {
+            "premarket": "pre_market", "afterhours": "after_hours",
+        }.get(str(quote.get("market_session") or "unknown"), str(quote.get("market_session") or "unknown"))
+        if session not in VALID_SESSIONS:
+            session = "unknown"
+        provider = str(quote.get("provider") or "realtime")[:32]
+        return validate_snapshot_input(PriceSnapshotInput(
+            symbol=symbol, provider=provider, provider_symbol=symbol,
+            last_price=price, fetched_at=datetime.now(UTC), market_timestamp=timestamp,
+            trading_date=timestamp.astimezone(ZoneInfo(get_settings().market_timezone)).date(),
+            market_session=session, timestamp_source="provider",
+            exchange=(quote.get("exchange") or (security.exchange_name if security else None)),
+            currency=(quote.get("currency") or (security.currency if security else None)),
+            open_price=_positive(quote.get("open")), day_high=_positive(quote.get("high")),
+            day_low=_positive(quote.get("low")), previous_close=_positive(quote.get("previous_close")),
+            day_volume=int(quote["volume"]) if quote.get("volume") is not None else None,
+            is_delayed=quote.get("is_delayed"), delay_seconds=quote.get("delayed_seconds"),
+            raw_payload={"feed": quote.get("feed"), "source_role": quote.get("source_role")},
+            feed=quote.get("feed"),
+            provider_role="realtime_market_data" if provider == "alpaca" else "reference_market_data",
+        ))
+    except Exception:
+        return None
 
 
 def _snapshot_key(value: PriceSnapshotInput) -> str:
@@ -294,8 +344,9 @@ def persist_price_snapshot(
         currency=value.currency,
         source_type=SOURCE_TYPE,
         provider=value.provider,
+        feed=value.feed,
         provider_symbol=value.provider_symbol,
-        provider_role=PROVIDER_ROLE,
+        provider_role=value.provider_role,
         last_price=value.last_price,
         open_price=value.open_price,
         day_high=value.day_high,
@@ -408,6 +459,7 @@ def price_snapshot_out(
         "currency": row.currency,
         "source_type": row.source_type,
         "provider": row.provider,
+        "feed": row.feed,
         "provider_symbol": row.provider_symbol,
         "provider_role": row.provider_role,
         "last_price": row.last_price,

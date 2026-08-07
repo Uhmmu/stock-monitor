@@ -43,6 +43,16 @@ def _position_view(pos: PortfolioPosition, price: PriceInfo | None) -> dict:
         "previous_close": price.previous_close if price else None,
         "daily_change_amount": None,
         "daily_change_percent": None,
+        "day_high": price.day_high if price else None,
+        "day_low": price.day_low if price else None,
+        "day_open": price.open if price else None,
+        "vwap": price.vwap if price else None,
+        "day_volume": price.volume if price else None,
+        "market_session": price.market_session if price else None,
+        "price_is_delayed": price.is_delayed if price else None,
+        "price_feed": price.feed if price else None,
+        "distance_from_high_percent": None,
+        "distance_from_low_percent": None,
         "price_source": price.source if price else ("ibkr_flex_fallback" if pos.ibkr_market_price is not None else None),
         "price_as_of": price.as_of.isoformat() if price and price.as_of else (pos.ibkr_report_date.isoformat() if pos.ibkr_report_date else None),
         "price_is_report_fallback": price is None and pos.ibkr_market_price is not None,
@@ -72,6 +82,10 @@ def _position_view(pos: PortfolioPosition, price: PriceInfo | None) -> dict:
         if previous_close is not None and previous_close > 0:
             view["daily_change_amount"] = round(effective_price - previous_close, 4)
             view["daily_change_percent"] = round((effective_price - previous_close) / previous_close * 100, 4)
+        if price is not None and price.day_high:
+            view["distance_from_high_percent"] = round((effective_price - price.day_high) / price.day_high * 100, 4)
+        if price is not None and price.day_low:
+            view["distance_from_low_percent"] = round((effective_price - price.day_low) / price.day_low * 100, 4)
     return view
 
 

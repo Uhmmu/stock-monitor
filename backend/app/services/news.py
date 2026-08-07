@@ -11,6 +11,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 MARKET_TICKER = "__MARKET__"  # storage sentinel; never exposed as a security/ticker.
@@ -35,7 +36,9 @@ _SOURCE_ALIASES = {
     "zacks": "zacks.com", "benzinga": "benzinga.com", "tipranks": "tipranks.com",
     "stocktwits": "stocktwits.com",
 }
-HARD_NOISE = ("coupon", "giveaway", "buy now", "subscribe now")
+# Promotional noise is hard-filtered; investment-listicle language remains
+# visible but is down-ranked by LOW_QUALITY so useful context is not discarded.
+HARD_NOISE = ("coupon", "giveaway", "subscribe now")
 LOW_QUALITY = ("stocks to buy", "best stocks", "millionaire maker", "could soar", "should you buy", "is this stock a buy", "price prediction")
 MARKET_TOPICS = {
     "宏观经济": ("cpi", "ppi", "pce", "inflation", "gdp", "pmi", "retail sales", "unemployment", "jobless claims", "payroll", "recession"),
@@ -73,6 +76,14 @@ class NewsDTO:
     importance_score: float = 0.0
     quality_score: float = 0.0
     cluster_key: str | None = None
+    # Provider-specific metadata is kept on the DTO even though the current
+    # NewsItem schema has no dedicated columns for it.  Tiingo, in particular,
+    # exposes both the publisher time and the time it discovered the article;
+    # callers must never silently substitute one for the other.
+    crawl_at: datetime | None = None
+    tags: list[str] = field(default_factory=list)
+    provider_sources: list[str] = field(default_factory=list)
+    canonical_story_id: str | None = None
 
     @property
     def fingerprint(self) -> str:
@@ -97,14 +108,30 @@ def is_blacklisted_news_source(source: str | None) -> bool:
 
 
 def normalize_url(url: str) -> str:
-    parts = urlsplit((url or "").strip())
+    try:
+        parts = urlsplit((url or "").strip())
+    except ValueError:
+        return ""
     query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True)
              if key.lower() not in _TRACKING_KEYS and not key.lower().startswith(_TRACKING_PREFIXES)]
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/") or "/", urlencode(sorted(query)), ""))
+    # URL identity is intentionally provider-agnostic.  The hostname and
+    # default ports are normalised so a Reuters link copied through two feeds
+    # does not become two stories merely because one includes ``www``.
+    hostname = (parts.hostname or "").lower().removeprefix("www.")
+    try:
+        port = parts.port
+    except ValueError:
+        # Keep malformed provider URLs filterable instead of allowing one row
+        # to abort a combined provider batch.
+        port = None
+    netloc = hostname
+    if port is not None and not ((parts.scheme or "").lower() == "http" and port == 80) and not ((parts.scheme or "").lower() == "https" and port == 443):
+        netloc = f"{hostname}:{port}"
+    return urlunsplit((parts.scheme.lower(), netloc, parts.path.rstrip("/") or "/", urlencode(sorted(query)), ""))
 
 
 def normalize_title(title: str) -> str:
-    value = unicodedata.normalize("NFKC", title or "").lower().replace("’", "'").replace("–", "-")
+    value = unicodedata.normalize("NFKC", title or "").lower().replace("’", "'").replace("–", "-").replace("—", "-")
     value = re.sub(r"^(?:breaking|update)\s*:\s*", "", value)
     value = re.sub(r"\s+-\s+(?:reuters|bloomberg|cnbc)$", "", value)
     return re.sub(r"[^\w\s.-]+|\s+", " ", value).strip()
@@ -113,6 +140,144 @@ def normalize_title(title: str) -> str:
 def news_fingerprint(provider: str, external_id: str | None, url: str, title: str) -> str:
     basis = f"{provider}:{external_id}" if external_id else f"{normalize_url(url)}|{normalize_title(title)}"
     return hashlib.sha256(basis.encode()).hexdigest()[:64]
+
+
+def canonical_story_id(dto: NewsDTO) -> str:
+    """Return a stable, provider-independent identity for a news story.
+
+    URLs are preferred because they survive small title edits made by feed
+    providers.  A title fallback still gives title-only feeds a useful
+    identity; the time-window check in :func:`deduplicate` prevents unrelated
+    same-title articles from being merged.
+    """
+    normalized_url = normalize_url(dto.url)
+    basis = f"url:{normalized_url}" if normalized_url else f"title:{normalize_title(dto.title)}"
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:40]
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _story_time(dto: NewsDTO) -> datetime | None:
+    # crawl_at is deliberately only a fallback for feeds that omit publication
+    # time; it is not used to overwrite published_at or to claim publication.
+    return _as_utc(dto.published_at) or _as_utc(dto.crawl_at)
+
+
+def _within_story_window(left: NewsDTO, right: NewsDTO) -> bool:
+    left_time, right_time = _story_time(left), _story_time(right)
+    if left_time is None or right_time is None:
+        return False
+    return abs((left_time - right_time).total_seconds()) <= 48 * 3600
+
+
+def _normalise_values(values: Any) -> list[str]:
+    if not isinstance(values, (list, tuple, set, frozenset)):
+        return []
+    result: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            result.add(text)
+    return sorted(result, key=str.casefold)
+
+
+def _provider_record(dto: NewsDTO) -> dict[str, Any]:
+    """Build a JSON-safe provenance record for a merged story."""
+    payload = dict(dto.raw_payload or {}) if isinstance(dto.raw_payload, dict) else {}
+    payload.setdefault("provider", dto.provider)
+    if dto.external_id and not payload.get("id") and not payload.get("uuid"):
+        payload["id"] = dto.external_id
+    if dto.crawl_at and not payload.get("crawlDate"):
+        payload["crawlDate"] = _as_utc(dto.crawl_at).isoformat()
+    if dto.published_at and not payload.get("publishedDate"):
+        payload["publishedDate"] = _as_utc(dto.published_at).isoformat()
+    if dto.tags and not payload.get("tags"):
+        payload["tags"] = list(dto.tags)
+    if dto.symbols and not payload.get("tickers"):
+        payload["tickers"] = list(dto.symbols)
+    return payload
+
+
+def _merge_payload(left: NewsDTO, right: NewsDTO, *, story_id: str) -> dict[str, Any]:
+    """Keep each provider's original payload while exposing merged metadata."""
+    left_payload = dict(left.raw_payload or {}) if isinstance(left.raw_payload, dict) else {}
+    records: list[dict[str, Any]] = []
+    existing_records = left_payload.pop("_provider_records", None)
+    if isinstance(existing_records, list):
+        records.extend(row for row in existing_records if isinstance(row, dict))
+    else:
+        records.append(_provider_record(left))
+    right_payload = dict(right.raw_payload or {}) if isinstance(right.raw_payload, dict) else {}
+    right_records = right_payload.pop("_provider_records", None)
+    if isinstance(right_records, list):
+        records.extend(row for row in right_records if isinstance(row, dict))
+    else:
+        records.append(_provider_record(right))
+
+    providers = _normalise_values([left.provider, right.provider, *left.provider_sources, *right.provider_sources])
+    tags = _normalise_values([*left.tags, *right.tags])
+    merged = left_payload
+    if len(records) > 1:
+        merged["_provider_records"] = records
+    if providers:
+        merged["_provider_sources"] = providers
+    if tags:
+        merged["_news_tags"] = tags
+    merged["_canonical_story_id"] = story_id
+    return merged
+
+
+def _merge_news_dto(left: NewsDTO, right: NewsDTO) -> NewsDTO:
+    """Merge provider metadata instead of discarding it during dedupe."""
+    story_id = left.canonical_story_id or canonical_story_id(left)
+    published_candidates = [value for value in (_as_utc(left.published_at), _as_utc(right.published_at)) if value]
+    crawl_candidates = [value for value in (_as_utc(left.crawl_at), _as_utc(right.crawl_at)) if value]
+    summary = left.summary if len((left.summary or "").strip()) >= len((right.summary or "").strip()) else right.summary
+    source = left.source or right.source
+    symbols = _normalise_values([*left.symbols, *right.symbols])
+    tags = _normalise_values([*left.tags, *right.tags])
+    providers = _normalise_values([left.provider, right.provider, *left.provider_sources, *right.provider_sources])
+    topic = left.topic if left.topic != "其他" else right.topic
+    return replace(
+        left,
+        external_id=left.external_id or right.external_id,
+        source=source,
+        summary=summary,
+        raw_content=left.raw_content or right.raw_content,
+        image_url=left.image_url or right.image_url,
+        published_at=min(published_candidates) if published_candidates else None,
+        crawl_at=min(crawl_candidates) if crawl_candidates else None,
+        symbols=symbols,
+        tags=tags,
+        provider_sources=providers,
+        topic=topic,
+        importance_score=max(left.importance_score, right.importance_score),
+        quality_score=max(left.quality_score, right.quality_score),
+        raw_payload=_merge_payload(left, right, story_id=story_id),
+        canonical_story_id=story_id,
+    )
+
+
+def _same_story(left: NewsDTO, right: NewsDTO) -> bool:
+    if left.scope != right.scope:
+        return False
+    if left.provider == right.provider and left.external_id and right.external_id and left.external_id == right.external_id:
+        return True
+    left_url, right_url = normalize_url(left.url), normalize_url(right.url)
+    if left_url and right_url and left_url == right_url:
+        return True
+    left_title, right_title = normalize_title(left.title), normalize_title(right.title)
+    if not left_title or not right_title or not _within_story_window(left, right):
+        return False
+    if left_title == right_title:
+        return True
+    return title_similarity(left.title, right.title) >= 0.86
 
 
 def _text(dto: NewsDTO) -> str:
@@ -130,7 +295,11 @@ def classify_topic(dto: NewsDTO) -> str:
 def filter_news(dto: NewsDTO, now: datetime | None = None) -> bool:
     now = now or datetime.now(UTC)
     title, url = (dto.title or "").strip(), (dto.url or "").strip()
-    if not title or not url or not urlsplit(url).scheme:
+    try:
+        parsed_url = urlsplit(url)
+    except ValueError:
+        return False
+    if not title or not url or not parsed_url.scheme:
         return False
     if dto.published_at:
         published = dto.published_at if dto.published_at.tzinfo else dto.published_at.replace(tzinfo=UTC)
@@ -178,11 +347,19 @@ def score_news_item(dto: NewsDTO, now: datetime | None = None) -> NewsDTO:
 
 
 def deduplicate(items: list[NewsDTO]) -> list[NewsDTO]:
-    seen: set[tuple[str, str]] = set(); result: list[NewsDTO] = []
+    """Deduplicate within and across providers while retaining provenance.
+
+    A provider article id is only authoritative inside that provider.  URL
+    identity is global, and title similarity is considered only inside a
+    bounded publication/discovery window to avoid collapsing recurring stories.
+    """
+    result: list[NewsDTO] = []
     for item in items:
-        key = (item.provider, item.external_id) if item.external_id else ("url", normalize_url(item.url))
-        if key not in seen:
-            seen.add(key); result.append(item)
+        match_index = next((index for index, old in enumerate(result) if _same_story(old, item)), None)
+        if match_index is None:
+            result.append(replace(item, canonical_story_id=item.canonical_story_id or canonical_story_id(item)))
+        else:
+            result[match_index] = _merge_news_dto(result[match_index], item)
     return result
 
 
@@ -190,9 +367,12 @@ def cluster_news(items: list[NewsDTO]) -> tuple[list[NewsDTO], int]:
     """Select a representative inside a 48h event window, retaining no data deletion."""
     selected: list[NewsDTO] = []; clustered = 0
     for item in sorted(items, key=lambda row: row.importance_score + row.quality_score, reverse=True):
-        match = next((old for old in selected if title_similarity(item.title, old.title) >= .5 and
-                      (not item.published_at or not old.published_at or abs((item.published_at - old.published_at).total_seconds()) <= 48 * 3600)), None)
-        if match: clustered += 1; continue
+        match_index = next((index for index, old in enumerate(selected) if title_similarity(item.title, old.title) >= .8 and
+                            (not _story_time(item) or not _story_time(old) or _within_story_window(item, old))), None)
+        if match_index is not None:
+            selected[match_index] = _merge_news_dto(selected[match_index], item)
+            clustered += 1
+            continue
         selected.append(item)
     return selected, clustered
 
@@ -221,9 +401,15 @@ def diversify(items: list[NewsDTO], limit: int) -> list[NewsDTO]:
 
 def prepare_news(items: list[NewsDTO], *, scope: str, now: datetime | None = None, limit: int = 20) -> tuple[list[NewsDTO], dict[str, int]]:
     scoped = [replace(item, scope=scope) for item in items]
-    accepted = [score_news_item(item, now) for item in deduplicate(scoped) if filter_news(item, now)]
+    scored = [score_news_item(item, now) for item in scoped]
+    canonical = deduplicate(scored)
+    # Cross-provider canonical merges are part of clustering from the caller's
+    # perspective even when they occur before scoring.  Counting them keeps
+    # ingestion metrics stable while still retaining the merged provenance.
+    canonical_merges = sum(max(len(item.provider_sources) - 1, 0) for item in canonical)
+    accepted = [item for item in canonical if filter_news(item, now)]
     clustered, clustered_count = cluster_news(accepted)
-    return diversify(clustered, limit), {"fetched": len(items), "accepted": len(accepted), "filtered": len(scoped) - len(accepted), "clustered": clustered_count}
+    return diversify(clustered, limit), {"fetched": len(items), "accepted": len(accepted), "filtered": len(scoped) - len(accepted), "clustered": clustered_count + canonical_merges}
 
 
 def collect_ticker_news(ticker: str, context: str = "latest company news", days: int = 7, finnhub_symbol: str | None = None) -> list[NewsDTO]:

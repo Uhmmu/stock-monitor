@@ -7,6 +7,7 @@ from sqlalchemy import delete, or_, select
 
 import hashlib
 import asyncio
+import json
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -23,6 +24,7 @@ from app.models import (
     InvestmentCalendarSyncRun,
     MacroSyncRun,
     NewsItem,
+    NewsProviderState,
     PortfolioPosition,
     QuarterlyFinancial,
     Report,
@@ -60,6 +62,7 @@ from app.services.technical_analysis_engine import generate_for_symbol, sync_fal
 from app.services.company_profile_translation import translate_description
 from app.services.news import MARKET_TICKER, collect_ticker_news, prepare_news
 from app.services.news_store import news_for_day, persist_news
+from app.services.news_tiingo import fetch_tiingo_news
 from app.services.article_fetch import fetch_article_text
 from app.services.search import search_ticker_news
 from app.services.title_translation import title_input_hash, translate_title
@@ -76,6 +79,28 @@ from app.services.macro.sync import can_start_sync, run_macro_sync
 settings = get_settings()
 logger = logging.getLogger(__name__)
 NEWS_PER_TICKER = 12  # 每只股票入库上限；低信息时允许少于该值，避免用噪声补位。
+
+
+def _record_news_provider_health(
+    provider: str, *, connected: bool, last_success: datetime | None = None,
+    articles: int = 0, requests: int = 0, errors: list[str] | None = None,
+) -> None:
+    """Best-effort diagnostics only; provider failure never fails news ingestion."""
+    try:
+        import redis
+        client = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=1, socket_timeout=1)
+        client.setex(
+            f"news:provider:{provider}:health", 7 * 86400,
+            json.dumps({
+                "provider": provider, "connected": connected,
+                "last_fetch": datetime.now(UTC).isoformat(),
+                "last_success": last_success.isoformat() if last_success else None,
+                "articles_fetched": articles, "request_count": requests,
+                "errors": (errors or [])[:10],
+            }, separators=(",", ":")),
+        )
+    except Exception:
+        logger.debug("news provider health cache unavailable provider=%s", provider)
 
 
 class ArticleContentUnavailable(RuntimeError):
@@ -660,12 +685,19 @@ def poll_news(ticker: str | None = None):
     parsed = datetime.fromisoformat(market_date).date()
     with SessionLocal() as db:
         items = db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all()
+        tracked = {item.ticker.upper() for item in items}
+        tracked.update(value.upper() for value in db.scalars(
+            select(PortfolioPosition.symbol).where(PortfolioPosition.total_quantity > 0)
+        ).all())
+        tracked.update(value.upper() for value in referenced_tickers(db))
         # A manually requested ticker is intentionally not promoted into the watchlist.
         if ticker:
-            items = [item for item in items if item.ticker == ticker] or [type("SnapshotTicker", (), {"ticker": ticker.upper()})()]
+            tracked = {ticker.upper()}
+        items = [type("TrackedTicker", (), {"ticker": value})() for value in sorted(tracked)]
         total = 0
         now = datetime.now(UTC)
         marketaux_items: dict[str, list] = {}
+        tiingo_items: dict[str, list] = {}
         # Manual single-ticker refreshes retain their old behavior and do not
         # consume a batch request. Scheduled full polls fetch exactly one batch.
         if ticker is None:
@@ -678,8 +710,37 @@ def poll_news(ticker: str | None = None):
             except Exception as exc:
                 db.rollback()
                 logger.error("Marketaux scheduler integration failed: %s", type(exc).__name__)
+        try:
+            tiingo_result = fetch_tiingo_news([item.ticker for item in items], config=settings, now=now)
+            tiingo_items = tiingo_result.items_by_ticker
+            state = db.get(NewsProviderState, "tiingo")
+            if state is None:
+                state = NewsProviderState(
+                    provider="tiingo", quota_utc_date=now.date(),
+                    request_count=0, next_batch_index=0,
+                )
+                db.add(state)
+            if state.quota_utc_date != now.date():
+                state.quota_utc_date = now.date(); state.request_count = 0
+            state.request_count += len(tiingo_result.batches)
+            state.last_execution_at = now
+            if len(tiingo_result.failed_batches) < len(tiingo_result.batches):
+                state.last_successful_fetch = now
+            _record_news_provider_health(
+                "tiingo", connected=not bool(tiingo_result.failed_batches),
+                last_success=state.last_successful_fetch,
+                articles=tiingo_result.returned, requests=len(tiingo_result.batches),
+                errors=list(tiingo_result.errors),
+            )
+        except Exception as exc:
+            logger.warning("Tiingo News scheduler integration failed: %s", type(exc).__name__)
+            _record_news_provider_health("tiingo", connected=False, errors=[type(exc).__name__])
         for item in items:
-            dtos = collect_ticker_news(item.ticker, finnhub_symbol=provider_symbol(db, item.ticker, "finnhub")) + marketaux_items.get(item.ticker.upper(), [])
+            dtos = (
+                collect_ticker_news(item.ticker, finnhub_symbol=provider_symbol(db, item.ticker, "finnhub"))
+                + marketaux_items.get(item.ticker.upper(), [])
+                + tiingo_items.get(item.ticker.upper(), [])
+            )
             final, stats = prepare_news(dtos, scope="company", now=now, limit=NEWS_PER_TICKER)
             if not final:
                 continue

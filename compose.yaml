@@ -73,6 +73,13 @@ services:
     healthcheck:
       disable: true
 
+  market-stream:
+    <<: *backend
+    command: python -m app.services.realtime_market.runner
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+
   frontend:
     build:
       context: .

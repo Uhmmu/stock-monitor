@@ -14,6 +14,7 @@ import { OwnershipSection } from './Ownership'
 import { AIChatPage } from './features/ai-chat'
 import { InvestmentDecisionsPage } from './features/ai-memory'
 import { MarketSnapshot } from './MarketSnapshot'
+import { RealtimeProviderHealthPanel } from './RealtimeProviderHealthPanel'
 import { IbkrIntegrationTest } from './IbkrIntegrationTest'
 import { IbkrAccount } from './IbkrAccount'
 import { MacroDataSourcePanel, MacroFundamentals } from './MacroFundamentals'
@@ -512,7 +513,7 @@ export default function App() {
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='congress'&&<CongressCenter/>}
       {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
-      {tab==='settings'&&<>{settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}<MacroDataSourcePanel isAdmin={authUser.role==='admin'}/><DiscoverySettingsPanel/>{authUser.role==='admin'&&<AdminPanel/>}</> }
+      {tab==='settings'&&<>{settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}<RealtimeProviderHealthPanel/><MacroDataSourcePanel isAdmin={authUser.role==='admin'}/><DiscoverySettingsPanel/>{authUser.role==='admin'&&<AdminPanel/>}</> }
       {tab==='ibkr-test'&&authUser.role==='admin'&&<IbkrIntegrationTest/>}
       </div>
     </main>

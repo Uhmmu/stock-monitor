@@ -9,6 +9,8 @@ import { ScenarioAnalysisView, StressTestView } from './PortfolioScenarios'
 import { MonteCarloView } from './PortfolioMonteCarlo'
 import { PortfolioOptimizationView } from './PortfolioOptimization'
 import { PortfolioAnalysisHistory } from './PortfolioAnalysisHistory'
+import { RealtimeQuoteCard } from './RealtimeMarketCard'
+import { useRealtimeQuotes } from './realtime'
 
 // ── 持仓模块类型 ──────────────────────────────────────────────
 export type PositionView = {
@@ -333,6 +335,7 @@ export function PortfolioModule() {
   const [historyView,setHistoryView] = useState<'activity'|'completed'|'lots'>('activity')
 
   const summary = useQuery({queryKey:['portfolio-summary'],queryFn:()=>api<PortfolioSummary>('/portfolio/summary'),staleTime:20_000,refetchInterval:30_000,refetchIntervalInBackground:true})
+  const realtime = useRealtimeQuotes(summary.data?.positions.map(row=>row.symbol)||[])
   const strategy = useQuery({queryKey:['portfolio-strategy-profile'],queryFn:()=>api<StrategyProfileResponse>('/portfolio/strategy-profile'),staleTime:60_000})
   const benchmark = useQuery({queryKey:['portfolio-benchmark'],queryFn:()=>api<PortfolioBenchmark>('/portfolio/benchmark'),enabled:subtab==='overview',staleTime:15*60_000,refetchInterval:15*60_000})
   const performance = useQuery({queryKey:['portfolio-performance',performanceRange],queryFn:()=>api<PerformanceSeries>(`/portfolio/performance?range=${performanceRange}`),enabled:subtab==='overview',staleTime:30_000})
@@ -491,6 +494,7 @@ export function PortfolioModule() {
           <div><span>最近交易</span><b>{p.last_transaction_at||'—'}</b></div>
           <div><span>数据来源</span><b>{p.price_available?(p.price_source==='snapshot'?'实时快照':p.price_source==='fmp'?'FMP 日线':'Yahoo 日线'):'数据不足'}</b></div>
         </div>
+        <RealtimeQuoteCard symbol={p.symbol} quote={realtime.quotes[p.symbol.toUpperCase()]} streamStatus={realtime.streamStatus} lastUpdateAt={realtime.lastUpdateAt} compact/>
         <button className="position-detail-btn" onClick={()=>openTechnical(p.symbol)}>查看技术位置 →</button>
       </article>)}
       {!s?.positions.length&&<div className="empty">还没有持仓明细。</div>}
@@ -555,7 +559,7 @@ export function PortfolioModule() {
       />
     </Sheet>
     <Sheet open={positionSheet!==undefined} onClose={()=>setPositionSheetSymbol(null)} title={positionSheet?`${positionSheet.symbol} 持仓详情`:'持仓详情'}>
-      {positionSheet&&<MobilePositionDetail position={positionSheet} baseCurrency={s?.base_currency||positionSheet.currency} onTechnical={()=>{setPositionSheetSymbol(null);openTechnical(positionSheet.symbol)}}/>}
+      {positionSheet&&<MobilePositionDetail position={positionSheet} baseCurrency={s?.base_currency||positionSheet.currency} realtime={realtime.quotes[positionSheet.symbol.toUpperCase()]} streamStatus={realtime.streamStatus} lastUpdateAt={realtime.lastUpdateAt} onTechnical={()=>{setPositionSheetSymbol(null);openTechnical(positionSheet.symbol)}}/>}
     </Sheet>
   </div>
 }
@@ -579,7 +583,7 @@ function MobilePerformanceOverview({summary,benchmark}:{summary:PortfolioSummary
   </section>
 }
 
-function MobilePositionDetail({position,baseCurrency,onTechnical}:{position:PositionView;baseCurrency:string;onTechnical:()=>void}) {
+function MobilePositionDetail({position,baseCurrency,realtime,streamStatus,lastUpdateAt,onTechnical}:{position:PositionView;baseCurrency:string;realtime?:import('./realtime').RealtimeQuote;streamStatus:import('./realtime').RealtimeStreamStatus;lastUpdateAt:string|null;onTechnical:()=>void}) {
   const fields = [
     ['当前价格',position.price_available?fmtMoney(position.current_price,position.currency):'数据不足'],
     ['持仓数量',`${fmtNum(position.total_quantity)} 股`],
@@ -595,6 +599,7 @@ function MobilePositionDetail({position,baseCurrency,onTechnical}:{position:Posi
   return <article className="mobile-position-detail">
     <header><div><small>{position.currency} · {position.authority_source==='ibkr_flex'?'IBKR SYNCED':'MANUAL'}</small><h2>{position.symbol}</h2></div><strong className={(position.unrealized_pnl||0)>=0?'positive':'negative'}>{fmtPercent(position.unrealized_pnl_percent)}</strong></header>
     <div>{fields.map(([label,value])=><section key={label}><span>{label}</span><b>{value}</b></section>)}</div>
+    <RealtimeQuoteCard symbol={position.symbol} quote={realtime} streamStatus={streamStatus} lastUpdateAt={lastUpdateAt} compact/>
     <p>数量与成本取自最近成功同步的 IBKR 持仓事实；行情由项目价格快照自动更新，无需在 IBKR 页面手动刷新持仓列表。</p>
     <button onClick={onTechnical}>查看技术位置与账户时间线 <span>→</span></button>
   </article>

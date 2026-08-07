@@ -13,6 +13,7 @@ from app.api.auth_routes import router as auth_router
 from app.api.discovery_routes import router as discovery_router
 from app.api.investment_routes import router as investment_router
 from app.api.macro_routes import admin_router as macro_admin_router, router as macro_router
+from app.api.market_routes import router as market_router
 from app.api.portfolio_analysis_routes import router as portfolio_analysis_router
 from app.api.portfolio_routes import router as portfolio_router
 from app.api.routes import public_router, router
@@ -80,6 +81,7 @@ app.include_router(sentiment_router)
 app.include_router(investment_router)
 app.include_router(macro_router)
 app.include_router(macro_admin_router)
+app.include_router(market_router)
 app.include_router(research_router)
 app.include_router(ai_tools_router)
 app.include_router(ai_router)

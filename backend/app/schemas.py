@@ -58,6 +58,7 @@ class PriceSnapshotOut(BaseModel):
     currency: str | None
     source_type: str
     provider: str
+    feed: str | None
     provider_symbol: str | None
     provider_role: str | None
     last_price: float

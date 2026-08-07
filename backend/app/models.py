@@ -168,6 +168,7 @@ class PriceSnapshot(Base):
     currency: Mapped[str | None] = mapped_column(String(12))
     source_type: Mapped[str] = mapped_column(String(32), default="price_snapshot")
     provider: Mapped[str] = mapped_column("source", String(32), default="yfinance")
+    feed: Mapped[str | None] = mapped_column(String(32))
     provider_symbol: Mapped[str | None] = mapped_column(String(32))
     provider_role: Mapped[str | None] = mapped_column(String(32), default="market_data_aggregator")
 
@@ -204,6 +205,61 @@ class PriceSnapshot(Base):
     price = synonym("last_price")
     volume = synonym("day_volume")
     source = synonym("provider")
+
+
+class IntradayBar(Base):
+    """Normalized intraday OHLCV. Realtime ticks remain ephemeral in Redis."""
+    __tablename__ = "intraday_bars"
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol", "timestamp", "interval", "provider", "feed",
+            name="uq_intraday_bars_source_minute",
+        ),
+        Index("ix_intraday_bars_symbol_interval_timestamp", "symbol", "interval", "timestamp"),
+        CheckConstraint("interval IN ('1m', '5m', '15m')", name="ck_intraday_bars_interval"),
+        CheckConstraint("high >= low", name="ck_intraday_bars_high_low"),
+        CheckConstraint("volume IS NULL OR volume >= 0", name="ck_intraday_bars_volume"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    interval: Mapped[str] = mapped_column(String(8), default="1m")
+    open: Mapped[float] = mapped_column(Numeric(20, 8))
+    high: Mapped[float] = mapped_column(Numeric(20, 8))
+    low: Mapped[float] = mapped_column(Numeric(20, 8))
+    close: Mapped[float] = mapped_column(Numeric(20, 8))
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    vwap: Mapped[float | None] = mapped_column(Numeric(20, 8))
+    trade_count: Mapped[int | None] = mapped_column(Integer)
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    feed: Mapped[str] = mapped_column(String(32), default="unknown")
+    market_session: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
+    is_backfill: Mapped[bool] = mapped_column(Boolean, default=False)
+    raw_payload: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class MarketMonitorEvent(Base):
+    """Cooldown-controlled deterministic intraday monitor event."""
+    __tablename__ = "market_monitor_events"
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_market_monitor_events_event_key"),
+        Index("ix_market_monitor_events_symbol_timestamp", "symbol", "timestamp"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_key: Mapped[str] = mapped_column(String(160))
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    severity: Mapped[str] = mapped_column(String(16), default="info", index=True)
+    value: Mapped[float | None] = mapped_column(Float)
+    threshold: Mapped[float | None] = mapped_column(Float)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    provider: Mapped[str | None] = mapped_column(String(32))
+    feed: Mapped[str | None] = mapped_column(String(32))
+    market_session: Mapped[str] = mapped_column(String(16), default="unknown")
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class PriceAlert(Base):
@@ -294,6 +350,9 @@ class NewsItem(Base):
     importance_score: Mapped[float | None] = mapped_column(Float, index=True)
     quality_score: Mapped[float | None] = mapped_column(Float)
     cluster_key: Mapped[str | None] = mapped_column(String(64))
+    canonical_story_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    provider_sources: Mapped[list | None] = mapped_column(JSON)
+    provider_metadata: Mapped[dict | None] = mapped_column(JSON)
     title: Mapped[str] = mapped_column(String(512))
     translated_title: Mapped[str | None] = mapped_column(String(512))
     title_translation_model: Mapped[str | None] = mapped_column(String(128))
