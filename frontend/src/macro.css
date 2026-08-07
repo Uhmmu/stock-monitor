@@ -211,3 +211,78 @@
   .macro-detail .macro-chart-toolbar button{border-color:var(--ink-3);color:var(--ink)}
   .macro-detail .macro-chart-toolbar button.active{border-color:var(--accent);color:#fff}
 }
+
+/* ===== Dark mode (Apple system palette) — overlay only, light untouched ===== */
+[data-theme="dark"] .macro-page-heading p:not(.eyebrow){color:#8e8e93}
+[data-theme="dark"] .macro-page-heading h2{color:#f5f5f7}
+[data-theme="dark"] .macro-outline-btn{background:var(--solid);border-color:var(--line);color:#6cb6ff}
+[data-theme="dark"] .macro-status-banner{background:rgba(48,209,144,.12);border-color:rgba(48,209,144,.22)}
+[data-theme="dark"] .macro-status-banner.macro-status-warning{background:rgba(255,159,10,.12);border-color:rgba(255,159,10,.22)}
+[data-theme="dark"] .macro-status-banner.macro-status-unconfigured{background:rgba(44,44,46,.72);border-color:rgba(255,255,255,.10)}
+[data-theme="dark"] .macro-status-dot{background:#30d158;box-shadow:0 0 0 4px rgba(48,209,144,.18)}
+[data-theme="dark"] .macro-status-warning .macro-status-dot{background:#ff9f0a;box-shadow:0 0 0 4px rgba(255,159,10,.18)}
+[data-theme="dark"] .macro-status-unconfigured .macro-status-dot{background:#8e8e93;box-shadow:none}
+[data-theme="dark"] .macro-status-banner b{color:#f5f5f7}
+[data-theme="dark"] .macro-status-banner p{color:#a1a1a6}
+[data-theme="dark"] .macro-quota{color:#e5e5ea}
+[data-theme="dark"] .macro-quota small{color:#8e8e93}
+[data-theme="dark"] .macro-summary-chip{background:var(--solid);border-color:var(--line);color:#f5f5f7}
+[data-theme="dark"] .macro-summary-chip>span{color:#8e8e93}
+[data-theme="dark"] .macro-summary-chip small{color:#8e8e93}
+[data-theme="dark"] .macro-summary-chip.positive{background:rgba(48,209,144,.12);border-color:rgba(48,209,144,.24)}
+[data-theme="dark"] .macro-summary-chip.negative{background:rgba(255,69,58,.12);border-color:rgba(255,69,58,.24)}
+[data-theme="dark"] .macro-summary-chip.macro-mixed{background:rgba(255,159,10,.12);border-color:rgba(255,159,10,.24)}
+[data-theme="dark"] .macro-summary-chip>i{color:#6cb6ff}
+[data-theme="dark"] .macro-section-heading p,[data-theme="dark"] .macro-panel-heading p{color:#8e8e93}
+[data-theme="dark"] .macro-section-heading h3,[data-theme="dark"] .macro-panel-heading h3{color:#f5f5f7}
+[data-theme="dark"] .macro-section-heading>span,[data-theme="dark"] .macro-panel-heading>span{color:#8e8e93}
+[data-theme="dark"] .macro-card{background:var(--solid);border-color:var(--line);color:#f5f5f7}
+[data-theme="dark"] .macro-card-top>span{color:#8e8e93}
+[data-theme="dark"] .macro-freshness{background:rgba(255,255,255,.08);color:#8e8e93}
+[data-theme="dark"] .macro-freshness.normal{color:#30d158;background:rgba(48,209,144,.14)}
+[data-theme="dark"] .macro-freshness.stale,[data-theme="dark"] .macro-freshness.expired{color:#ff9f0a;background:rgba(255,159,10,.14)}
+[data-theme="dark"] .macro-card h4{color:#f5f5f7}
+[data-theme="dark"] .macro-card-meta{color:#8e8e93}
+[data-theme="dark"] .macro-card footer{border-top-color:var(--line-2);color:#8e8e93}
+[data-theme="dark"] .macro-card footer i{color:#6cb6ff}
+[data-theme="dark"] .macro-curve-panel,[data-theme="dark"] .macro-data-notes{background:var(--solid);border-color:var(--line)}
+[data-theme="dark"] .macro-curve-labels small{color:#e5e5ea}
+[data-theme="dark"] .macro-curve-labels span{color:#8e8e93}
+[data-theme="dark"] .macro-derived-note{color:#8e8e93}
+[data-theme="dark"] .macro-data-notes dt{color:#8e8e93}
+[data-theme="dark"] .macro-data-notes dd{color:#e5e5ea}
+[data-theme="dark"] .macro-data-notes dl>div{border-top-color:var(--line-2)}
+[data-theme="dark"] .macro-warning-text{background:rgba(255,159,10,.14);color:#ff9f0a}
+[data-theme="dark"] .macro-disclaimer{color:#8e8e93}
+[data-theme="dark"] .macro-loading,[data-theme="dark"] .macro-empty-panel{border-color:var(--line);color:#8e8e93;background:var(--solid)}
+[data-theme="dark"] .macro-detail>header>p:last-child{color:#a1a1a6}
+[data-theme="dark"] .macro-detail-facts{background:rgba(44,44,46,.7)}
+[data-theme="dark"] .macro-detail-facts>div{border-right-color:var(--line-2)}
+[data-theme="dark"] .macro-detail-facts span,[data-theme="dark"] .macro-detail-facts small{color:#8e8e93}
+[data-theme="dark"] .macro-detail-facts b{color:#f5f5f7}
+[data-theme="dark"] .macro-chart-toolbar button{border-color:var(--line);color:#a1a1a6}
+[data-theme="dark"] .macro-chart-toolbar button.active{background:#0a84ff;color:#fff;border-color:transparent}
+[data-theme="dark"] .macro-history-chart{background:rgba(44,44,46,.5);border-color:var(--line-2)}
+[data-theme="dark"] .macro-chart-axis{color:#8e8e93}
+[data-theme="dark"] .macro-chart-empty{border-color:var(--line);color:#8e8e93}
+[data-theme="dark"] .macro-detail section{border-top-color:var(--line-2)}
+[data-theme="dark"] .macro-detail section p,[data-theme="dark"] .macro-detail li{color:#a1a1a6}
+[data-theme="dark"] .macro-impact-list>div{border-color:var(--line-2)}
+[data-theme="dark"] .macro-impact-list span{color:#6cb6ff}
+[data-theme="dark"] .macro-judgment{background:rgba(10,132,255,.10)}
+[data-theme="dark"] .macro-judgment b{color:#f5f5f7}
+[data-theme="dark"] .macro-judgment small{color:#8e8e93}
+[data-theme="dark"] .macro-summary-detail>p{color:#a1a1a6}
+[data-theme="dark"] .macro-summary-detail li{border-color:var(--line-2)}
+[data-theme="dark"] .macro-summary-detail li span{color:#a1a1a6}
+[data-theme="dark"] .macro-summary-detail li small{color:#8e8e93}
+[data-theme="dark"] .macro-rule-note{color:#a1a1a6}
+[data-theme="dark"] .macro-settings-panel{background:var(--solid);border-color:var(--line);box-shadow:var(--shadow-s)}
+[data-theme="dark"] .macro-settings-panel .section-title>span{color:#8e8e93}
+[data-theme="dark"] .macro-settings-grid>div{background:rgba(44,44,46,.7)}
+[data-theme="dark"] .macro-settings-grid span{color:#8e8e93}
+[data-theme="dark"] .macro-settings-actions small{color:#8e8e93}
+[data-theme="dark"] .macro-detail-error{border-color:var(--line);color:#a1a1a6}
+[data-theme="dark"] .macro-detail-error b{color:#f5f5f7}
+[data-theme="dark"] .macro-chart-line{stroke:#0a84ff}
+[data-theme="dark"] .macro-axis-line,[data-theme="dark"] .macro-zero-line{stroke:rgba(235,235,245,.22)}

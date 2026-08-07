@@ -16,6 +16,7 @@ import {
   type Time,
 } from 'lightweight-charts'
 import { api, getToken, post } from './api'
+import { chartThemeTokens, getResolvedTheme, subscribeTheme, type ThemeMode } from './theme'
 
 export type WeeklyCandle = {
   time:string
@@ -250,6 +251,8 @@ export function TechnicalChart({
   const [priceAlerts,setPriceAlerts]=useState(initialPriceAlerts)
   const [alertStatus,setAlertStatus]=useState('')
   const [mobileStatic,setMobileStatic]=useState(()=>typeof window!=='undefined'&&window.matchMedia('(max-width: 640px)').matches)
+  const [themeMode,setThemeMode]=useState<ThemeMode>(()=>getResolvedTheme())
+  useEffect(()=>subscribeTheme(setThemeMode),[])
   const selected=series[timeframe]||{candles:[],moving_averages:EMPTY_MA}
   const data = useMemo(()=>prepareTechnicalChartData(selected.candles,selected.moving_averages),[selected])
   const volumeProfile=useMemo(()=>buildVolumeProfile(selected.candles),[selected.candles])
@@ -271,23 +274,24 @@ export function TechnicalChart({
     try{
       const reducedMotion=window.matchMedia('(prefers-reduced-motion: reduce)').matches
       const chartHeight=host.clientWidth<640?420:520
+      const tokens=chartThemeTokens()
       chart=createChart(host,{
         width:host.clientWidth,
         height:chartHeight,
         layout:{
-          background:{type:ColorType.Solid,color:'#10131d'},
-          textColor:'#8990a7',
+          background:{type:ColorType.Solid,color:tokens.background},
+          textColor:tokens.text,
           fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Text','Noto Sans SC',sans-serif",
-          panes:{separatorColor:'rgba(137,144,167,.14)',separatorHoverColor:'rgba(117,167,255,.35)',enableResize:true},
+          panes:{separatorColor:tokens.paneSeparator,separatorHoverColor:'rgba(117,167,255,.35)',enableResize:true},
         },
-        grid:{vertLines:{color:'rgba(137,144,167,.07)'},horzLines:{color:'rgba(137,144,167,.07)'}},
+        grid:{vertLines:{color:tokens.grid},horzLines:{color:tokens.grid}},
         crosshair:{
           mode:CrosshairMode.Normal,
-          vertLine:{color:'rgba(232,233,242,.35)',labelBackgroundColor:'#323848'},
-          horzLine:{color:'rgba(232,233,242,.25)',labelBackgroundColor:'#323848'},
+          vertLine:{color:tokens.crosshair,labelBackgroundColor:tokens.crosshairLabel},
+          horzLine:{color:tokens.crosshair,labelBackgroundColor:tokens.crosshairLabel},
         },
-        rightPriceScale:{borderColor:'rgba(137,144,167,.16)',scaleMargins:{top:.12,bottom:.08}},
-        timeScale:{borderColor:'rgba(137,144,167,.16)',rightOffset:3,barSpacing:timeframe==='day'?6:timeframe==='week'?7:9,minBarSpacing:3,timeVisible:false},
+        rightPriceScale:{borderColor:tokens.border,scaleMargins:{top:.12,bottom:.08}},
+        timeScale:{borderColor:tokens.border,rightOffset:3,barSpacing:timeframe==='day'?6:timeframe==='week'?7:9,minBarSpacing:3,timeVisible:false},
         handleScroll:{mouseWheel:true,pressedMouseMove:true,horzTouchDrag:true,vertTouchDrag:false},
         handleScale:{axisPressedMouseMove:true,mouseWheel:true,pinch:true},
         kineticScroll:{mouse:!reducedMotion,touch:!reducedMotion},
@@ -295,9 +299,9 @@ export function TechnicalChart({
       })
       chartRef.current=chart
       const candles=chart.addSeries(CandlestickSeries,{
-        upColor:'#53c7a2',downColor:'#ef7186',borderVisible:false,
-        wickUpColor:'#53c7a2',wickDownColor:'#ef7186',
-        priceLineVisible:true,priceLineColor:'rgba(243,244,250,.42)',
+        upColor:tokens.candleUp,downColor:tokens.candleDown,borderVisible:false,
+        wickUpColor:tokens.candleUp,wickDownColor:tokens.candleDown,
+        priceLineVisible:true,priceLineColor:tokens.priceLine,
       })
       candleRef.current=candles
       const ma20=chart.addSeries(LineSeries,{color:'#d9a7ff',lineWidth:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false,visible:layers.ma})
@@ -373,7 +377,7 @@ export function TechnicalChart({
       candleRef.current=null
       setFailed(true)
     }
-  },[data,layers.ma,symbol,timeframe])
+  },[data,layers.ma,symbol,timeframe,themeMode])
 
   const toChartPoint=(clientX:number,clientY:number):ChartPoint|null=>{
     const stage=stageRef.current

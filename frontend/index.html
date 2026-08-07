@@ -24,6 +24,22 @@
     <title>Market Signal</title>
   </head>
   <body>
+    <script>(() => {
+      try {
+        const key = 'stock-monitor-theme';
+        const stored = localStorage.getItem(key);
+        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const theme = stored === 'dark' || stored === 'light' ? stored : (prefersDark ? 'dark' : 'light');
+        const root = document.documentElement;
+        root.setAttribute('data-theme', theme);
+        root.style.colorScheme = theme;
+        const metaColor = theme === 'dark' ? '#000000' : '#f5f5f7';
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', metaColor);
+        document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', theme);
+        document.querySelector('meta[name="msapplication-TileColor"]')?.setAttribute('content', metaColor);
+        document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')?.setAttribute('content', theme === 'dark' ? 'black-translucent' : 'default');
+      } catch (e) { /* private mode, ignore */ }
+    })();</script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

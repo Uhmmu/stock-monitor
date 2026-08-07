@@ -8,6 +8,7 @@ import { PortfolioRiskAnalysis } from './PortfolioAnalysis'
 import { ScenarioAnalysisView, StressTestView } from './PortfolioScenarios'
 import { MonteCarloView } from './PortfolioMonteCarlo'
 import { PortfolioOptimizationView } from './PortfolioOptimization'
+import { chartThemeTokens, getResolvedTheme, subscribeTheme, type ThemeMode } from './theme'
 import { PortfolioAnalysisHistory } from './PortfolioAnalysisHistory'
 import { RealtimeQuoteCard } from './RealtimeMarketCard'
 import { RealtimeMarketEventList } from './RealtimeMarketEvents'
@@ -728,12 +729,7 @@ function chartPointsDomain(values:(number|null)[],min:number,max:number,width=72
 }
 
 function chartTheme() {
-  const styles=getComputedStyle(document.documentElement)
-  return {
-    text:styles.getPropertyValue('--ink-4').trim()||'#718096',
-    grid:styles.getPropertyValue('--line-2').trim()||'rgba(100,116,139,.09)',
-    border:styles.getPropertyValue('--line').trim()||'rgba(100,116,139,.2)',
-  }
+  return chartThemeTokens()
 }
 
 function observeChart(host:HTMLDivElement,chart:IChartApi) {
@@ -752,6 +748,8 @@ type PerformanceChartMode = 'return'|'assets_raw'|'assets_adjusted'
 function PerformanceChartCanvas({points,mode,currency}:{points:PerformancePoint[];mode:PerformanceChartMode;currency:string}) {
   const mainRef=useRef<HTMLDivElement>(null)
   const drawdownRef=useRef<HTMLDivElement>(null)
+  const [themeMode,setThemeMode]=useState<ThemeMode>(()=>getResolvedTheme())
+  useEffect(()=>subscribeTheme(setThemeMode),[])
   useEffect(()=>{
     if(!mainRef.current||points.length<2)return
     const theme=chartTheme()
@@ -768,13 +766,13 @@ function PerformanceChartCanvas({points,mode,currency}:{points:PerformancePoint[
     if(mode==='return'||mode==='assets_adjusted'){
       const isReturn=mode==='return'
       const values=points.map(row=>({time:row.date as Time,value:isReturn?(row.cumulative_return==null?null:row.cumulative_return*100):cashFlowAdjustedGrowth(row)})).filter((row):row is {time:Time;value:number}=>row.value!=null)
-      const series=chart.addSeries(AreaSeries,{lineColor:'#397bd8',lineWidth:2,topColor:'rgba(57,123,216,.24)',bottomColor:'rgba(57,123,216,.025)',priceFormat:{type:'percent',precision:2,minMove:.01},title:''})
-      const zero=chart.addSeries(LineSeries,{color:'rgba(82,96,116,.9)',lineWidth:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false,title:''})
+      const series=chart.addSeries(AreaSeries,{lineColor:theme.accent,lineWidth:2,topColor:theme.accentSoft,bottomColor:theme.accentFaint,priceFormat:{type:'percent',precision:2,minMove:.01},title:''})
+      const zero=chart.addSeries(LineSeries,{color:theme.zeroLine,lineWidth:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false,title:''})
       series.setData(values)
       zero.setData(points.map(row=>({time:row.date as Time,value:0})))
     }else{
-      const nav=chart.addSeries(AreaSeries,{lineColor:'#397bd8',lineWidth:2,topColor:'rgba(57,123,216,.23)',bottomColor:'rgba(57,123,216,.02)',priceFormat:{type:'custom',formatter:(value:number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency,notation:'compact',maximumFractionDigits:1}).format(value)},title:''})
-      const contributions=chart.addSeries(LineSeries,{color:'#8794a6',lineWidth:2,lineStyle:2,priceFormat:{type:'custom',formatter:(value:number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency,notation:'compact',maximumFractionDigits:1}).format(value)},title:''})
+      const nav=chart.addSeries(AreaSeries,{lineColor:theme.accent,lineWidth:2,topColor:theme.accentSoft,bottomColor:theme.accentFaint,priceFormat:{type:'custom',formatter:(value:number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency,notation:'compact',maximumFractionDigits:1}).format(value)},title:''})
+      const contributions=chart.addSeries(LineSeries,{color:theme.textStrong,lineWidth:2,lineStyle:2,priceFormat:{type:'custom',formatter:(value:number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency,notation:'compact',maximumFractionDigits:1}).format(value)},title:''})
       nav.setData(points.filter(row=>row.nav!=null).map(row=>({time:row.date as Time,value:row.nav!})))
       contributions.setData(points.filter(row=>row.net_contributions!=null).map(row=>({time:row.date as Time,value:row.net_contributions!})))
     }
@@ -785,15 +783,15 @@ function PerformanceChartCanvas({points,mode,currency}:{points:PerformancePoint[
     let drawdownObserver:ResizeObserver|null=null
     if(mode==='return'&&drawdownRef.current){
       drawdownChart=createChart(drawdownRef.current,{...common,height:145,rightPriceScale:{...common.rightPriceScale,minimumWidth:72,scaleMargins:{top:.12,bottom:.12}}})
-      const underwater=drawdownChart.addSeries(AreaSeries,{lineColor:'#d1606d',lineWidth:2,topColor:'rgba(209,96,109,.04)',bottomColor:'rgba(209,96,109,.30)',invertFilledArea:true,priceFormat:{type:'percent',precision:2,minMove:.01},title:''})
-      const zero=drawdownChart.addSeries(LineSeries,{color:'rgba(82,96,116,.9)',lineWidth:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false})
+      const underwater=drawdownChart.addSeries(AreaSeries,{lineColor:theme.down,lineWidth:2,topColor:theme.downSoft,bottomColor:theme.downFill,invertFilledArea:true,priceFormat:{type:'percent',precision:2,minMove:.01},title:''})
+      const zero=drawdownChart.addSeries(LineSeries,{color:theme.zeroLine,lineWidth:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false})
       underwater.setData(points.filter(row=>row.drawdown!=null).map(row=>({time:row.date as Time,value:row.drawdown!*100})))
       zero.setData(points.map(row=>({time:row.date as Time,value:0})))
       drawdownChart.timeScale().fitContent()
       drawdownObserver=observeChart(drawdownRef.current,drawdownChart)
     }
     return()=>{mainObserver.disconnect();drawdownObserver?.disconnect();chart.remove();drawdownChart?.remove()}
-  },[points,mode,currency])
+  },[points,mode,currency,themeMode])
   const isPercent=mode!=='assets_raw'
   return <div className="performance-chart-stack">
     <div className="performance-axis-title">{mode==='return'?'累计收益率（%）':mode==='assets_adjusted'?'排除现金流后的资产涨幅（%，区间起点 = 0）':`账户金额（${currency}）`}</div>

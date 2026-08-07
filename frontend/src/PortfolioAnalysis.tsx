@@ -4,6 +4,7 @@ import { AreaSeries, ColorType, LineSeries, createChart, type Time } from 'light
 import { post } from './api'
 import { Sheet } from './Sheet'
 import { cacheTimeLabel, latestFreshAnalysis, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
+import { chartThemeTokens, getResolvedTheme, subscribeTheme, type ThemeMode } from './theme'
 
 export type RiskPoint={date:string;value:number}
 export type RiskContribution={symbol:string;weight:number;risk_contribution:number;contribution_amount:number}
@@ -24,18 +25,21 @@ const money=(value:number,currency='USD')=>new Intl.NumberFormat('zh-CN',{style:
 
 function RiskLineChart({curve,drawdown=false}:{curve:RiskPoint[];drawdown?:boolean}){
   const ref=useRef<HTMLDivElement>(null)
+  const [themeMode,setThemeMode]=useState<ThemeMode>(()=>getResolvedTheme())
+  useEffect(()=>subscribeTheme(setThemeMode),[])
   useEffect(()=>{
     if(!ref.current||!curve.length)return
-    const chart=createChart(ref.current,{height:250,width:ref.current.clientWidth,layout:{background:{type:ColorType.Solid,color:'transparent'},textColor:'#718096'},grid:{vertLines:{color:'rgba(100,116,139,.09)'},horzLines:{color:'rgba(100,116,139,.09)'}},rightPriceScale:{borderVisible:false},timeScale:{borderVisible:false}})
+    const tokens=chartThemeTokens()
+    const chart=createChart(ref.current,{height:250,width:ref.current.clientWidth,layout:{background:{type:ColorType.Solid,color:'transparent'},textColor:tokens.text},grid:{vertLines:{color:tokens.grid},horzLines:{color:tokens.grid}},rightPriceScale:{borderVisible:false},timeScale:{borderVisible:false}})
     const series=drawdown
-      ? chart.addSeries(AreaSeries,{lineColor:'#d64f5f',topColor:'rgba(214,79,95,.24)',bottomColor:'rgba(214,79,95,.02)',priceFormat:{type:'percent'}})
-      : chart.addSeries(LineSeries,{color:'#3677d8',lineWidth:2})
+      ? chart.addSeries(AreaSeries,{lineColor:tokens.down,topColor:tokens.downSoft,bottomColor:tokens.downFill,priceFormat:{type:'percent'}})
+      : chart.addSeries(LineSeries,{color:tokens.accent,lineWidth:2})
     series.setData(curve.map(row=>({time:row.date as Time,value:drawdown?row.value*100:row.value})))
     chart.timeScale().fitContent()
     const observer=new ResizeObserver(entries=>chart.applyOptions({width:entries[0].contentRect.width}))
     observer.observe(ref.current)
     return()=>{observer.disconnect();chart.remove()}
-  },[curve,drawdown])
+  },[curve,drawdown,themeMode])
   return <div className="risk-line-chart" ref={ref}/>
 }
 

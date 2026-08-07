@@ -18,6 +18,8 @@ import { RealtimeProviderHealthPanel } from './RealtimeProviderHealthPanel'
 import { IbkrIntegrationTest } from './IbkrIntegrationTest'
 import { IbkrAccount } from './IbkrAccount'
 import { MacroDataSourcePanel, MacroFundamentals } from './MacroFundamentals'
+import { ThemeToggle } from './ThemeToggle'
+import { subscribeTheme, getResolvedTheme, type ThemeMode } from './theme'
 import './macro.css'
 import {
   TechnicalChart,
@@ -213,6 +215,9 @@ function ProfileLogo({symbol,url,className='' }:{symbol:string;url?:string|null;
 
 function TradingViewStockHeatmap() {
   const widgetRef = useRef<HTMLDivElement>(null)
+  const [theme,setTheme]=useState<ThemeMode>(()=>getResolvedTheme())
+
+  useEffect(()=>subscribeTheme(setTheme),[])
 
   useEffect(()=>{
     const host = widgetRef.current
@@ -232,7 +237,7 @@ function TradingViewStockHeatmap() {
       blockColor:'change',
       locale:'zh_CN',
       symbolUrl:'',
-      colorTheme:'light',
+      colorTheme:theme==='dark'?'dark':'light',
       hasTopBar:false,
       isDataSetEnabled:false,
       isZoomEnabled:true,
@@ -244,7 +249,7 @@ function TradingViewStockHeatmap() {
     host.replaceChildren(widget,script)
 
     return ()=>host.replaceChildren()
-  },[])
+  },[theme])
 
   return <section className="overview-heatmap">
     <div className="section-title">
@@ -477,7 +482,7 @@ export default function App() {
   return <div className="app">
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
     <aside className={mobileNavOpen?'mobile-open':''}>
-      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div><div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{groupInvestigations(investigations.data).length}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
+      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div><ThemeToggle className="brand-theme-toggle"/><div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{groupInvestigations(investigations.data).length}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
       <nav className="desktop-nav" aria-label="主导航">{desktopNavGroups.map(group=><div className="desktop-nav-group" key={group.title}><p>{group.title}</p>{group.items.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>selectTab(key)} key={key}><NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</div>)}</nav>
       <nav className="mobile-nav" aria-label="主导航">{mobileTabs.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>selectTab(key)} key={key}>{key==='journal'&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
       <div className="account-card"><span className="account-avatar">{authUser.username.slice(0,1)}</span><span><b>{demoMode?'演示空间':authUser.username}</b><small>{demoMode?'本地预览模式':'已安全连接'}</small></span><i className={viewDashboard?.market.is_open?'online':''}/></div>
@@ -1011,7 +1016,7 @@ function AuthGate({setToken,setAuthUser,onPreview}:{setToken:(t:string)=>void;se
     <div className="auth-aurora auth-aurora-one"/><div className="auth-aurora auth-aurora-two"/>
     <div className="auth-intro"><span className="auth-kicker">MARKET INTELLIGENCE</span><h1>Stock<br/>Monitor。</h1><p><br/></p><div className="auth-signal"><span><i/> AAPL</span><b>214.37</b><em>+1.51%</em></div></div>
     <div className="auth-card">
-      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div><strong>小日向美香</strong><small>欢迎回来</small></div></div>
+      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div><strong>小日向美香</strong><small>欢迎回来</small></div><ThemeToggle className="auth-theme-toggle"/></div>
       <div className="auth-tabs">
         <button className={mode==='login'?'active':''} onClick={()=>{setMode('login');setMsg('');setOk(false)}}>登录</button>
         <button className={mode==='register'?'active':''} onClick={()=>{setMode('register');setMsg('');setOk(false)}}>申请注册</button>

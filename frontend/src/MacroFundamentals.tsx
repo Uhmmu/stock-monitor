@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ColorType, LineSeries, createChart, type IChartApi, type Time } from 'lightweight-charts'
 import { api, post } from './api'
 import { Sheet } from './Sheet'
+import { chartThemeTokens, getResolvedTheme, subscribeTheme, type ThemeMode } from './theme'
 
 type ValuePoint = { observation_date: string; value: number | null; last_fetched_at?: string | null; is_derived?: boolean }
 type Freshness = { status: string; label_zh: string; age_days?: number; last_fetched_at?: string | null }
@@ -62,6 +63,8 @@ function MacroHistoryChart({ detail, range, mode }: { detail: SeriesDetail; rang
   const raw = (mode === 'raw' ? detail.observations : detail.derived_series?.[mode] || detail.observations) || []
   const cutoff = useMemo(() => days[range] == null ? null : Date.now() - days[range]! * 86_400_000, [range])
   const chartHostRef = useRef<HTMLDivElement>(null)
+  const [theme,setTheme]=useState<ThemeMode>(()=>getResolvedTheme())
+  useEffect(()=>subscribeTheme(setTheme),[])
   const chartRows = useMemo(() => {
     const rows = raw.filter(row => {
       if (!row || typeof row.observation_date !== 'string') return false
@@ -78,18 +81,19 @@ function MacroHistoryChart({ detail, range, mode }: { detail: SeriesDetail; rang
     let chart: IChartApi | null = null
     let observer: ResizeObserver | null = null
     try {
+      const tokens = chartThemeTokens()
       chart = createChart(host, {
         width: Math.max(host.clientWidth, 1),
         height: host.clientWidth < 600 ? 250 : 320,
         layout: {
           background: { type: ColorType.Solid, color: 'transparent' },
-          textColor: '#718096',
+          textColor: tokens.text,
           fontFamily: 'inherit',
           fontSize: 11,
         },
         grid: {
-          vertLines: { color: 'rgba(100,116,139,.09)' },
-          horzLines: { color: 'rgba(100,116,139,.09)' },
+          vertLines: { color: tokens.grid },
+          horzLines: { color: tokens.grid },
         },
         rightPriceScale: { borderVisible: false, scaleMargins: { top: .08, bottom: .1 } },
         timeScale: { borderVisible: false, timeVisible: false, secondsVisible: false, rightOffset: 1, fixLeftEdge: true, fixRightEdge: true },
@@ -97,7 +101,7 @@ function MacroHistoryChart({ detail, range, mode }: { detail: SeriesDetail; rang
         localization: { locale: 'zh-CN' },
       })
       const series = chart.addSeries(LineSeries, {
-        color: '#397bd8',
+        color: tokens.accent,
         lineWidth: 2,
         priceLineVisible: false,
         lastValueVisible: false,
@@ -110,7 +114,7 @@ function MacroHistoryChart({ detail, range, mode }: { detail: SeriesDetail; rang
 
       // Preserve the old zero baseline without adding another endpoint label.
       const zero = chart.addSeries(LineSeries, {
-        color: 'rgba(86,105,128,.22)',
+        color: tokens.zeroLine,
         lineWidth: 1,
         lineStyle: 2,
         priceLineVisible: false,
@@ -134,7 +138,7 @@ function MacroHistoryChart({ detail, range, mode }: { detail: SeriesDetail; rang
       chart?.remove()
       chart = null
     }
-  }, [chartRows])
+  }, [chartRows, theme])
 
   if (chartRows.length < 2) return <div className="macro-chart-empty">这个范围内的历史数据不足，系统不会用直线填补缺失日期。</div>
   return <div className="macro-history-chart"><div className="macro-history-canvas" ref={chartHostRef} role="img" aria-label={`宏观指标历史图：${detail.display_name_zh}`}/><div className="macro-chart-axis"><span>{chartRows[0]?.observation_date}</span><span>{chartRows[chartRows.length - 1]?.observation_date}</span></div></div>
