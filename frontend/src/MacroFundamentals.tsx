@@ -1,5 +1,6 @@
-import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from 'react'
+import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ColorType, LineSeries, createChart, type IChartApi, type Time } from 'lightweight-charts'
 import { api, post } from './api'
 import { Sheet } from './Sheet'
 
@@ -59,20 +60,84 @@ function Sparkline({ values, color = '#397bd8', height = 42 }: { values: (number
 function MacroHistoryChart({ detail, range, mode }: { detail: SeriesDetail; range: string; mode: string }) {
   const days: Record<string, number | null> = { '1y': 365, '3y': 365 * 3, '5y': 365 * 5, '10y': 365 * 10, all: null }
   const raw = (mode === 'raw' ? detail.observations : detail.derived_series?.[mode] || detail.observations) || []
-  const cutoff = days[range] == null ? null : Date.now() - days[range]! * 86_400_000
-  const rows = raw.filter(row => {
-    if (!row || typeof row.observation_date !== 'string') return false
-    const observedAt = new Date(row.observation_date).getTime()
-    return Number.isFinite(observedAt) && (!cutoff || observedAt >= cutoff)
-  })
-  const chartRows = rows.filter((row): row is ValuePoint & { value: number } => typeof row.value === 'number' && Number.isFinite(row.value))
-  const values = chartRows.map(row => row.value)
-  if (values.length < 2) return <div className="macro-chart-empty">这个范围内的历史数据不足，系统不会用直线填补缺失日期。</div>
-  const min = Math.min(0, ...values); const max = Math.max(...values); const span = max - min || 1
-  const width = 720; const height = 230
-  const coords = chartRows.map((row, index, filtered) => `${(index / Math.max(filtered.length - 1, 1)) * width},${height - 20 - ((row.value! - min) / span) * (height - 38)}`).join(' ')
-  const titleRows = chartRows.length > 300 ? chartRows.filter((_, index) => index % Math.ceil(chartRows.length / 300) === 0) : chartRows
-  return <div className="macro-history-chart"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="宏观指标历史图"><line x1="0" x2={width} y1={height - 20 - ((0 - min) / span) * (height - 38)} y2={height - 20 - ((0 - min) / span) * (height - 38)} className="macro-zero-line"/><polyline points={coords} className="macro-chart-line"/><title>{titleRows.map(row => `${row.observation_date}: ${row.value}`).join('\n')}</title></svg><div className="macro-chart-axis"><span>{chartRows[0]?.observation_date}</span><span>{chartRows[chartRows.length - 1]?.observation_date}</span></div></div>
+  const cutoff = useMemo(() => days[range] == null ? null : Date.now() - days[range]! * 86_400_000, [range])
+  const chartHostRef = useRef<HTMLDivElement>(null)
+  const chartRows = useMemo(() => {
+    const rows = raw.filter(row => {
+      if (!row || typeof row.observation_date !== 'string') return false
+      const observedAt = new Date(row.observation_date).getTime()
+      return Number.isFinite(observedAt) && (!cutoff || observedAt >= cutoff)
+    })
+    return rows
+      .filter((row): row is ValuePoint & { value: number } => typeof row.value === 'number' && Number.isFinite(row.value))
+      .sort((left, right) => left.observation_date.localeCompare(right.observation_date))
+  }, [raw, cutoff])
+  useEffect(() => {
+    const host = chartHostRef.current
+    if (!host || chartRows.length < 2) return
+    let chart: IChartApi | null = null
+    let observer: ResizeObserver | null = null
+    try {
+      chart = createChart(host, {
+        width: Math.max(host.clientWidth, 1),
+        height: host.clientWidth < 600 ? 250 : 320,
+        layout: {
+          background: { type: ColorType.Solid, color: 'transparent' },
+          textColor: '#718096',
+          fontFamily: 'inherit',
+          fontSize: 11,
+        },
+        grid: {
+          vertLines: { color: 'rgba(100,116,139,.09)' },
+          horzLines: { color: 'rgba(100,116,139,.09)' },
+        },
+        rightPriceScale: { borderVisible: false, scaleMargins: { top: .08, bottom: .1 } },
+        timeScale: { borderVisible: false, timeVisible: false, secondsVisible: false, rightOffset: 1, fixLeftEdge: true, fixRightEdge: true },
+        crosshair: { vertLine: { labelVisible: true }, horzLine: { labelVisible: true } },
+        localization: { locale: 'zh-CN' },
+      })
+      const series = chart.addSeries(LineSeries, {
+        color: '#397bd8',
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: true,
+        // Keep the series name out of the right endpoint; the detail header identifies it.
+        title: '',
+      })
+      const lineData = chartRows.map(row => ({ time: row.observation_date as Time, value: row.value }))
+      series.setData(lineData)
+
+      // Preserve the old zero baseline without adding another endpoint label.
+      const zero = chart.addSeries(LineSeries, {
+        color: 'rgba(86,105,128,.22)',
+        lineWidth: 1,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        title: '',
+      })
+      zero.setData(lineData.map(row => ({ time: row.time, value: 0 })))
+      chart.timeScale().fitContent()
+
+      observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(entries => {
+        const width = entries[0]?.contentRect.width
+        if (width) chart?.applyOptions({ width, height: width < 600 ? 250 : 320 })
+      })
+      observer?.observe(host)
+    } catch (error) {
+      console.error('Macro history chart render failed', error)
+    }
+    return () => {
+      observer?.disconnect()
+      chart?.remove()
+      chart = null
+    }
+  }, [chartRows])
+
+  if (chartRows.length < 2) return <div className="macro-chart-empty">这个范围内的历史数据不足，系统不会用直线填补缺失日期。</div>
+  return <div className="macro-history-chart"><div className="macro-history-canvas" ref={chartHostRef} role="img" aria-label={`宏观指标历史图：${detail.display_name_zh}`}/><div className="macro-chart-axis"><span>{chartRows[0]?.observation_date}</span><span>{chartRows[chartRows.length - 1]?.observation_date}</span></div></div>
 }
 
 class MacroDetailErrorBoundary extends Component<{ children: ReactNode; resetKey: string | null; onClose: () => void }, { hasError: boolean }> {

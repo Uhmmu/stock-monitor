@@ -362,7 +362,7 @@ function TechnicalAnalysisCenter() {
         <time>{item.data_through}{item.stale?' · 已过期':''}</time>
       </>:<em className="tech-card-pending">分析{item.status==='pending'?'排队中':'暂不可用'}</em>}
     </button>)}{list.isLoading&&<div className="empty">正在读取技术分析缓存…</div>}{!list.isLoading&&!list.data?.length&&<div className="empty">自选列表为空。</div>}</div>
-    <Sheet open={selected!==null} onClose={()=>setSelected(null)} title={selected?`${selected} 技术分析`:'技术分析'}>
+    <Sheet open={selected!==null} onClose={()=>setSelected(null)} title={selected?`${selected} 技术分析`:'技术分析'} size="wide">
       {d?.status==='ready'&&a?<article className="technical-sheet">
         <header><ProfileLogo symbol={d.symbol} url={d.logo_url}/><div className="tech-sheet-id"><p className="eyebrow">WEEKLY TECHNICAL SNAPSHOT</p><h2>{d.symbol} <small>{d.company_name}</small></h2></div><strong>${a.latestClose.toFixed(2)}<small>数据截至 {d.data_through}{d.stale?' · 已过期':''}</small></strong></header>
         <div className="technical-metrics">

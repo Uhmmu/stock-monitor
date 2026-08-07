@@ -11,11 +11,12 @@ import {
 // · 释放接管手势速度(velocity handoff),按动量投影决定关闭 or 回弹
 // · 全程可打断:动画途中可再次抓住
 // · 背板毛玻璃随展开进度加深,体现前后级层次
-export function Sheet({ open, onClose, title, children }: {
+export function Sheet({ open, onClose, title, children, size = 'default' }: {
   open: boolean
   onClose: () => void
   title?: string
   children: ReactNode
+  size?: 'default' | 'wide'
 }) {
   const [mounted, setMounted] = useState(open)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -139,7 +140,7 @@ export function Sheet({ open, onClose, title, children }: {
   return createPortal(
     <div className="sheet-root" role="dialog" aria-modal="true">
       <div className="sheet-scrim" ref={scrimRef} onClick={() => runTo(height.current, 0, onClose)} />
-      <div className="sheet-panel" ref={panelRef}>
+      <div className={`sheet-panel${size === 'wide' ? ' sheet-panel-wide' : ''}`} ref={panelRef}>
         <div
           className="sheet-grip-zone"
           onPointerDown={onPointerDown}

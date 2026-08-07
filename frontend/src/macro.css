@@ -78,6 +78,7 @@
 .macro-detail .macro-chart-toolbar button:active{transform:scale(.97)}
 .macro-history-chart{min-height:260px;padding:16px 16px 12px;border-radius:18px;background:rgba(235,242,250,.46);box-shadow:inset 0 1px 0 rgba(255,255,255,.55)}
 .macro-history-chart svg{min-height:220px}
+.macro-history-canvas{width:100%;height:320px;min-width:0}
 .macro-chart-axis{padding:0 2px;margin-top:7px;font-size:10px;line-height:1.4}
 .macro-chart-empty{padding:58px 20px;font-size:12px;line-height:1.7}
 .macro-detail .macro-detail-section{margin-top:30px;padding-top:22px;border-top:1px solid var(--line-2)}
@@ -177,6 +178,7 @@
   .macro-detail .macro-chart-toolbar button{min-height:36px;padding:8px 11px}
   .macro-history-chart{min-height:0;padding:12px 10px 10px;border-radius:15px}
   .macro-history-chart svg{min-height:0}
+  .macro-history-canvas{height:250px}
   .macro-chart-axis{font-size:9px}
   .macro-detail .macro-detail-section{margin-top:25px;padding-top:18px}
   .macro-detail .macro-detail-reading{margin-top:28px}

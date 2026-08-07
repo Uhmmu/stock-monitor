@@ -241,7 +241,7 @@ export function TechnicalChart({
   const [failed,setFailed] = useState(false)
   const [dimensions,setDimensions]=useState<Dimensions>({width:0,height:0})
   const [layers,setLayers]=useState({
-    heatmap:true,ma:true,fibonacci:true,trend:true,events:true,volumeProfile:false,cost:true,
+    heatmap:true,ma:true,fibonacci:true,trend:true,events:false,volumeProfile:false,cost:true,
   })
   const [tool,setTool]=useState<DrawingTool>(null)
   const [drawings,setDrawings]=useState<Drawing[]>(()=>loadDrawings(symbol))

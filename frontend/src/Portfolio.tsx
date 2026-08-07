@@ -654,13 +654,13 @@ function PerformanceChartCanvas({points,mode,currency}:{points:PerformancePoint[
     if(mode==='return'||mode==='assets_adjusted'){
       const isReturn=mode==='return'
       const values=points.map(row=>({time:row.date as Time,value:isReturn?(row.cumulative_return==null?null:row.cumulative_return*100):cashFlowAdjustedGrowth(row)})).filter((row):row is {time:Time;value:number}=>row.value!=null)
-      const series=chart.addSeries(AreaSeries,{lineColor:'#397bd8',lineWidth:2,topColor:'rgba(57,123,216,.24)',bottomColor:'rgba(57,123,216,.025)',priceFormat:{type:'percent',precision:2,minMove:.01},title:isReturn?'累计收益率':'除权后涨幅'})
+      const series=chart.addSeries(AreaSeries,{lineColor:'#397bd8',lineWidth:2,topColor:'rgba(57,123,216,.24)',bottomColor:'rgba(57,123,216,.025)',priceFormat:{type:'percent',precision:2,minMove:.01},title:''})
       const zero=chart.addSeries(LineSeries,{color:'rgba(82,96,116,.9)',lineWidth:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false,title:''})
       series.setData(values)
       zero.setData(points.map(row=>({time:row.date as Time,value:0})))
     }else{
-      const nav=chart.addSeries(AreaSeries,{lineColor:'#397bd8',lineWidth:2,topColor:'rgba(57,123,216,.23)',bottomColor:'rgba(57,123,216,.02)',priceFormat:{type:'custom',formatter:(value:number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency,notation:'compact',maximumFractionDigits:1}).format(value)},title:'账户净资产'})
-      const contributions=chart.addSeries(LineSeries,{color:'#8794a6',lineWidth:2,lineStyle:2,priceFormat:{type:'custom',formatter:(value:number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency,notation:'compact',maximumFractionDigits:1}).format(value)},title:'累计净入金'})
+      const nav=chart.addSeries(AreaSeries,{lineColor:'#397bd8',lineWidth:2,topColor:'rgba(57,123,216,.23)',bottomColor:'rgba(57,123,216,.02)',priceFormat:{type:'custom',formatter:(value:number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency,notation:'compact',maximumFractionDigits:1}).format(value)},title:''})
+      const contributions=chart.addSeries(LineSeries,{color:'#8794a6',lineWidth:2,lineStyle:2,priceFormat:{type:'custom',formatter:(value:number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency,notation:'compact',maximumFractionDigits:1}).format(value)},title:''})
       nav.setData(points.filter(row=>row.nav!=null).map(row=>({time:row.date as Time,value:row.nav!})))
       contributions.setData(points.filter(row=>row.net_contributions!=null).map(row=>({time:row.date as Time,value:row.net_contributions!})))
     }
@@ -671,7 +671,7 @@ function PerformanceChartCanvas({points,mode,currency}:{points:PerformancePoint[
     let drawdownObserver:ResizeObserver|null=null
     if(mode==='return'&&drawdownRef.current){
       drawdownChart=createChart(drawdownRef.current,{...common,height:145,rightPriceScale:{...common.rightPriceScale,minimumWidth:72,scaleMargins:{top:.12,bottom:.12}}})
-      const underwater=drawdownChart.addSeries(AreaSeries,{lineColor:'#d1606d',lineWidth:2,topColor:'rgba(209,96,109,.04)',bottomColor:'rgba(209,96,109,.30)',invertFilledArea:true,priceFormat:{type:'percent',precision:2,minMove:.01},title:'距前高'})
+      const underwater=drawdownChart.addSeries(AreaSeries,{lineColor:'#d1606d',lineWidth:2,topColor:'rgba(209,96,109,.04)',bottomColor:'rgba(209,96,109,.30)',invertFilledArea:true,priceFormat:{type:'percent',precision:2,minMove:.01},title:''})
       const zero=drawdownChart.addSeries(LineSeries,{color:'rgba(82,96,116,.9)',lineWidth:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false})
       underwater.setData(points.filter(row=>row.drawdown!=null).map(row=>({time:row.date as Time,value:row.drawdown!*100})))
       zero.setData(points.map(row=>({time:row.date as Time,value:0})))
