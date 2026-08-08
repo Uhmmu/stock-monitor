@@ -32,6 +32,8 @@ export type PositionView = {
   unrealized_pnl_percent:number|null
   daily_change_amount?:number|null
   daily_change_percent?:number|null
+  daily_pnl?:number|null
+  base_currency_daily_pnl?:number|null
   price_as_of?:string|null
   fx_rate:number|null
   fx_rate_source:string|null
@@ -109,12 +111,27 @@ export type LivePositionView = PositionView & {
 export type LivePortfolioView = Omit<PortfolioSummary,'positions'> & {
   positions:LivePositionView[]
   live_quote_count:number
+  live_daily_pnl_count:number
   live_daily_pnl:number|null
   live_daily_pnl_percent:number|null
   live_last_quote_at:string|null
 }
 
 const finiteNumber = (value:unknown):value is number => typeof value==='number' && Number.isFinite(value)
+
+function resolvePreviousClose(position:PositionView, quote:RealtimeQuote|null, price:number|null):number|null {
+  if(price==null) return null
+  if(quote&&finiteNumber(quote.previous_close)&&quote.previous_close>0) return quote.previous_close
+  if(quote&&finiteNumber(quote.change)) {
+    const derived=price-quote.change
+    if(derived>0) return derived
+  }
+  if(quote&&finiteNumber(quote.change_percent)&&quote.change_percent>-100) {
+    const derived=price/(1+quote.change_percent/100)
+    if(derived>0) return derived
+  }
+  return finiteNumber(position.previous_close)&&position.previous_close>0?position.previous_close:null
+}
 
 /**
  * Revalue only the fields supported by a fresh server-normalized quote. FX is
@@ -131,15 +148,22 @@ export function deriveLivePortfolio(summary:PortfolioSummary|undefined, quotes:R
     const livePrice=freshPrice??position.current_price
     const liveMarketValue=freshPrice!=null?freshPrice*position.total_quantity:position.market_value
     const liveUnrealized=freshPrice!=null?freshPrice*position.total_quantity-position.total_cost:position.unrealized_pnl
-    const previousClose=quote&&quote.is_stale!==true&&finiteNumber(quote.previous_close)&&quote.previous_close>0?quote.previous_close:null
-    const liveDailyPnl=freshPrice!=null&&previousClose!=null?((freshPrice-previousClose)*position.total_quantity):null
+    const previousClose=resolvePreviousClose(position,quote&&quote.is_stale!==true?quote:null,freshPrice)
+    const persistedDailyPnl=finiteNumber(position.daily_pnl)
+      ? position.daily_pnl
+      : finiteNumber(position.daily_change_amount)?position.daily_change_amount*position.total_quantity:null
+    const liveDailyPnl=freshPrice!=null&&previousClose!=null
+      ? (freshPrice-previousClose)*position.total_quantity
+      : persistedDailyPnl
     const liveDailyPercent=livePriceAvailable
       ? (finiteNumber(quote!.change_percent)?quote!.change_percent:(previousClose!=null?(freshPrice!-previousClose)/previousClose*100:null))
       : (position.daily_change_percent??null)
     const fx=finiteNumber(position.fx_rate)?position.fx_rate:null
     const liveBaseMarketValue=freshPrice!=null&&liveMarketValue!=null&&fx!=null?liveMarketValue*fx:position.base_currency_market_value
     const liveBaseUnrealized=freshPrice!=null&&liveUnrealized!=null&&fx!=null?liveUnrealized*fx:position.base_currency_unrealized_pnl
-    const liveBaseDailyPnl=liveDailyPnl!=null&&fx!=null?liveDailyPnl*fx:null
+    const liveBaseDailyPnl=liveDailyPnl!=null&&fx!=null
+      ? liveDailyPnl*fx
+      : (finiteNumber(position.base_currency_daily_pnl)?position.base_currency_daily_pnl:null)
     return {
       ...position,
       live_quote:quote,
@@ -160,9 +184,10 @@ export function deriveLivePortfolio(summary:PortfolioSummary|undefined, quotes:R
   const unrealized=rows.map(row=>row.live_base_currency_unrealized_pnl).filter(finiteNumber)
   const daily=rows.map(row=>row.live_base_currency_daily_pnl).filter(finiteNumber)
   const dailyBase=rows.map(row=>{
-    const quote=row.live_quote
-    if(!quote||quote.is_stale===true||!finiteNumber(quote.price)||!finiteNumber(quote.previous_close)||quote.previous_close<=0||!finiteNumber(row.fx_rate)) return null
-    return quote.previous_close*row.total_quantity*row.fx_rate
+    const price=row.live_price
+    const previousClose=resolvePreviousClose(row,row.live_quote&&row.live_quote.is_stale!==true?row.live_quote:null,price)
+    if(price==null||previousClose==null||!finiteNumber(row.fx_rate)) return null
+    return previousClose*row.total_quantity*row.fx_rate
   }).filter(finiteNumber)
   const totalMarketValue=valued.length?valued.reduce((sum,value)=>sum+value,0):summary.total_market_value
   const totalUnrealized=unrealized.length?unrealized.reduce((sum,value)=>sum+value,0):summary.total_unrealized_pnl
@@ -187,6 +212,7 @@ export function deriveLivePortfolio(summary:PortfolioSummary|undefined, quotes:R
     investment_pnl:investmentPnl,
     simple_cumulative_return:simpleReturn,
     live_quote_count:rows.filter(row=>row.live_quote&&finiteNumber(row.live_quote.price)&&row.live_quote.is_stale!==true).length,
+    live_daily_pnl_count:daily.length,
     live_daily_pnl:totalDailyPnl,
     live_daily_pnl_percent:totalDailyPnlPercent,
     live_last_quote_at:latest,
@@ -567,9 +593,8 @@ export function PortfolioModule() {
           <div className="metric-card portfolio-value-card"><span>组合净值</span><strong>{fmtMoney(live?.net_asset_value??s.net_asset_value,s.base_currency)}</strong><small>持仓 {fmtMoney(live?.invested_market_value??s.invested_market_value,s.base_currency)} · 现金 {fmtMoney(s.cash,s.base_currency)}</small>{(s.has_unpriced_positions||s.has_unconverted_positions)&&<small className="portfolio-gap-hint">部分持仓暂未计入汇总</small>}</div>
           <div className="metric-card"><span>累计投资盈亏</span><strong className={(live?.investment_pnl||0)>=0?'positive':'negative'}>{fmtMoney(live?.investment_pnl??s.investment_pnl,s.base_currency)}</strong><small>账户净值 {fmtMoney(live?.net_asset_value??s.net_asset_value,s.base_currency)} − 累计净入金 {fmtMoney(s.net_contributions,s.base_currency)}<br/>简单累计收益率 {fmtRatio(live?.simple_cumulative_return??s.simple_cumulative_return)}</small></div>
           <div className="metric-card"><span>时间加权收益率</span><strong className={(s.time_weighted_return||0)>=0?'positive':'negative'}>{fmtRatio(s.time_weighted_return)}</strong><small>今日 {fmtRatio(s.latest_daily_return)} · 本月 {fmtRatio(s.month_return)} · 年内 {fmtRatio(s.year_return)}</small></div>
-          <div className="metric-card"><span>实时日内盈亏</span><strong className={(live?.live_daily_pnl||0)>=0?'positive':'negative'}>{fmtMoney(live?.live_daily_pnl??null,s.base_currency)}</strong><small>{live?.live_daily_pnl_percent==null?'需要新鲜前收与汇率数据':`日内 ${fmtPercent(live.live_daily_pnl_percent)}`} · 仅统计可实时重算持仓</small></div>
-          <div className="metric-card"><span>盈亏构成</span><strong>{fmtMoney(s.realized_pnl+(live?.total_unrealized_pnl??s.total_unrealized_pnl)+s.dividend_income-s.fees-s.taxes,s.base_currency)}</strong><small>已实现 {fmtMoney(s.realized_pnl,s.base_currency)} · 未实现 {fmtMoney(live?.total_unrealized_pnl??s.total_unrealized_pnl,s.base_currency)}</small></div>
-          <div className="metric-card"><span>股息与费用</span><strong>{fmtMoney(s.dividend_income-s.fees-s.taxes,s.base_currency)}</strong><small>股息 {fmtMoney(s.dividend_income,s.base_currency)} · 费用税费 {fmtMoney(s.fees+s.taxes,s.base_currency)}</small></div>
+          <div className="metric-card"><span>实时日内盈亏</span><strong className={(live?.live_daily_pnl||0)>=0?'positive':'negative'}>{fmtMoney(live?.live_daily_pnl??null,s.base_currency)}</strong><small>{live?.live_daily_pnl_percent==null?'需要最新价、前收与汇率数据':`日内 ${fmtPercent(live.live_daily_pnl_percent)}`} · 最新价减前收 · 覆盖 {live?.live_daily_pnl_count||0}/{s.positions.length}</small></div>
+          <div className="metric-card"><span>持仓盈亏</span><strong>{fmtMoney(s.realized_pnl+(live?.total_unrealized_pnl??s.total_unrealized_pnl),s.base_currency)}</strong><small>已实现 {fmtMoney(s.realized_pnl,s.base_currency)} · 未实现 {fmtMoney(live?.total_unrealized_pnl??s.total_unrealized_pnl,s.base_currency)}</small></div>
           <div className="metric-card"><span>最大回撤</span><strong className="negative">{fmtRatio(s.max_drawdown)}</strong><small>现金流调整后账户曲线</small></div>
         </div>
         <MobilePerformanceOverview summary={live||s} benchmark={benchmark.data}/>

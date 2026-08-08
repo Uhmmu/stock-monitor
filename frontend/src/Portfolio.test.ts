@@ -110,7 +110,22 @@ describe('live portfolio valuation', () => {
     const result = deriveLivePortfolio(summary, { AAPL: quote })!
     expect(result.positions[0]?.live_price).toBe(102)
     expect(result.positions[0]?.live_market_value).toBe(1020)
-    expect(result.live_daily_pnl).toBeNull()
+    expect(result.live_daily_pnl).toBe(-30)
+  })
+
+  it('uses the persisted previous close when a fresh quote only has a latest price', () => {
+    const quote = normalizeRealtimeQuote({ symbol: 'AAPL', price: 110, is_stale: false })!
+    const result = deriveLivePortfolio(summary, { AAPL: quote })!
+    expect(result.positions[0]?.live_daily_pnl).toBe(50)
+    expect(result.live_daily_pnl).toBe(50)
+    expect(result.live_daily_pnl_count).toBe(1)
+  })
+
+  it('derives the previous close from a realtime change when needed', () => {
+    const withoutPreviousClose = {...position, previous_close: null, daily_change_amount: null}
+    const quote = normalizeRealtimeQuote({ symbol: 'AAPL', price: 110, change: 4, is_stale: false })!
+    const result = deriveLivePortfolio({...summary, positions:[withoutPreviousClose]}, { AAPL: quote })!
+    expect(result.positions[0]?.live_daily_pnl).toBe(40)
   })
 })
 

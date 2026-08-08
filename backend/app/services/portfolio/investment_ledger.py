@@ -277,6 +277,11 @@ def position_summaries(db: Session, portfolio: Portfolio, *, cached_fx_only: boo
         total_pnl = unrealized + values["realized_pnl"] + values["dividend_income"] - values["fees"] - values["taxes"]
         fx_rate = item.get("fx_rate") if item.get("valuation_available") else None
         invested = item.get("total_cost") or 0.0
+        daily_pnl = (
+            item["daily_change_amount"] * item["total_quantity"]
+            if item.get("daily_change_amount") is not None
+            else None
+        )
         opened = first_trades.get(item["symbol"])
         opened_date = opened.date() if isinstance(opened, datetime) else opened
         item.update({
@@ -289,8 +294,9 @@ def position_summaries(db: Session, portfolio: Portfolio, *, cached_fx_only: boo
             "base_currency_taxes": round(values["taxes"] * fx_rate, 4) if fx_rate is not None else None,
             "base_currency_total_pnl": round(total_pnl * fx_rate, 4) if fx_rate is not None else None,
             "total_return_pct": round(total_pnl / invested * 100, 4) if invested > 0 else None,
-            "daily_pnl": None,
-            "daily_return_pct": None,
+            "daily_pnl": round(daily_pnl, 4) if daily_pnl is not None else None,
+            "base_currency_daily_pnl": round(daily_pnl * fx_rate, 4) if daily_pnl is not None and fx_rate is not None else None,
+            "daily_return_pct": item.get("daily_change_percent"),
             "holding_days": (today - opened_date).days if opened_date else None,
             "first_trade_at": _iso(opened),
             "authority_source": item.get("authority_source") or "manual",

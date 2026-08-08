@@ -8,7 +8,7 @@ app). Returns None when no price is known — callers surface an explicit gap
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 import json
 
@@ -122,8 +122,28 @@ def price_map(db: Session, symbols: list[str]) -> dict[str, PriceInfo]:
             PriceSnapshot.persisted_at.desc().nullslast(),
         )
     ).all()
+    seen_snapshot_symbols: set[str] = set()
     for row in snapshots:
-        if row.symbol not in result and row.last_price:
+        if row.symbol in seen_snapshot_symbols:
+            continue
+        seen_snapshot_symbols.add(row.symbol)
+        if row.symbol in result:
+            current = result[row.symbol]
+            # Realtime feeds are authoritative for the latest price but some
+            # omit session reference fields. Preserve the fresh price while
+            # filling those gaps from the latest persisted market snapshot.
+            result[row.symbol] = replace(
+                current,
+                previous_close=current.previous_close if current.previous_close is not None else row.previous_close,
+                open=current.open if current.open is not None else row.open_price,
+                day_high=current.day_high if current.day_high is not None else row.day_high,
+                day_low=current.day_low if current.day_low is not None else row.day_low,
+                volume=current.volume if current.volume is not None else row.day_volume,
+                market_session=current.market_session or row.market_session,
+                is_delayed=current.is_delayed if current.is_delayed is not None else row.is_delayed,
+                feed=current.feed or row.feed,
+            )
+        elif row.last_price:
             result[row.symbol] = PriceInfo(
                 price=float(row.last_price),
                 source="snapshot",

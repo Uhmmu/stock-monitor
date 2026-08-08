@@ -79,6 +79,22 @@ def test_position_total_pnl_is_converted_to_portfolio_base_currency(db, monkeypa
     assert result[0]["base_currency_total_pnl"] == pytest.approx(67)
 
 
+def test_position_daily_pnl_uses_latest_price_minus_previous_close(db, monkeypatch):
+    _, portfolio, _, _, _ = _setup_run(db)
+    fake_market = {"positions": [{
+        "symbol": "EXAMPLE", "total_quantity": 10, "daily_change_amount": 2.5,
+        "daily_change_percent": 2.0, "unrealized_pnl": 25.0, "total_cost": 1000.0,
+        "fx_rate": 1.0, "valuation_available": True, "authority_source": "manual",
+    }]}
+    monkeypatch.setattr("app.services.portfolio.investment_ledger.build_market_summary", lambda *args, **kwargs: fake_market)
+
+    result = position_summaries(db, portfolio)
+
+    assert result[0]["daily_pnl"] == 25.0
+    assert result[0]["base_currency_daily_pnl"] == 25.0
+    assert result[0]["daily_return_pct"] == 2.0
+
+
 @pytest.fixture
 def db():
     engine = create_engine("sqlite+pysqlite:///:memory:")

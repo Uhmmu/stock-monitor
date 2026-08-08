@@ -375,6 +375,24 @@ def test_build_summary_only_weights_priced_positions(db, portfolio):
     assert "total_realized_pnl" not in summary
 
 
+def test_build_summary_keeps_realtime_price_and_fills_missing_previous_close(db, portfolio, monkeypatch):
+    from app.services.portfolio.pricing import PriceInfo
+
+    create_manual_position(db, portfolio, ManualPositionIn(symbol="AAPL", price=100.0, quantity=10, trade_date=date(2026, 1, 1)))
+    db.add(PriceSnapshot(ticker="AAPL", quote_time=datetime.now(UTC), price=150.0, previous_close=140.0, volume=1, source="test"))
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.portfolio.pricing._realtime_prices",
+        lambda symbols: {"AAPL": PriceInfo(price=155.0, source="realtime:test")},
+    )
+
+    position = build_summary(db, portfolio)["positions"][0]
+
+    assert position["current_price"] == 155.0
+    assert position["previous_close"] == 140.0
+    assert position["daily_change_amount"] == 15.0
+
+
 def test_build_summary_converts_foreign_positions_to_base_currency(db, portfolio, monkeypatch):
     from app.services.portfolio.fx import FxQuote
 
