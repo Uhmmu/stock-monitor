@@ -466,13 +466,377 @@
 [data-theme="dark"] .realtime-event.notice{border-left-color:#ff9f0a;background:rgba(255,159,10,.10)}
 [data-theme="dark"] .realtime-event.high{border-left-color:#ff453a;background:rgba(255,69,58,.10)}
 
+/* Full-site dark surface coverage.
+   Several newer feature areas predate the semantic theme tokens and still use
+   translucent white materials directly. Keep those materials dark without
+   weakening the light theme or relying on the OS color-scheme preference. */
+[data-theme="dark"] .stock-manager,
+[data-theme="dark"] .cross-model{
+  --surface:rgba(28,28,30,.76);
+  --surface-strong:rgba(44,44,46,.88);
+  --hairline:rgba(255,255,255,.10);
+}
+
+/* Secondary AI controls and progress surfaces. */
+[data-theme="dark"] .ai-conversation-toggle,
+[data-theme="dark"] .ai-model-logo-shell,
+[data-theme="dark"] .ai-deep-progress{
+  background:rgba(44,44,46,.82);border-color:var(--line);color:#e5e5ea;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
+}
+[data-theme="dark"] .ai-model-logo-shell.gpt{color:#f5f5f7}
+[data-theme="dark"] .ai-model-logo-shell.other{background:#3a3a3c}
+
+/* Valuation and financial statements. */
+[data-theme="dark"] .cross-hero,
+[data-theme="dark"] .ai-opinion,
+[data-theme="dark"] .cross-weights,
+[data-theme="dark"] .peer-strip,
+[data-theme="dark"] .learn-block,
+[data-theme="dark"] .consensus-list,
+[data-theme="dark"] .graham-section,
+[data-theme="dark"] .graham-scenario-table,
+[data-theme="dark"] .graham-inputs,
+[data-theme="dark"] .graham-overrides,
+[data-theme="dark"] .weight-final,
+[data-theme="dark"] .statement-card,
+[data-theme="dark"] .frequency-toggle{
+  background:rgba(28,28,30,.68);border-color:var(--line);box-shadow:var(--shadow-s);
+}
+[data-theme="dark"] .cross-metric,
+[data-theme="dark"] .scenario-grid>div,
+[data-theme="dark"] .graham-summary>div,
+[data-theme="dark"] .reverse-dcf{
+  background:rgba(44,44,46,.66);border-color:var(--line);
+}
+[data-theme="dark"] .cross-model .cross-hero,
+[data-theme="dark"] .cross-model .ai-opinion{
+  background:linear-gradient(145deg,rgba(44,44,46,.86),rgba(28,28,30,.78));
+  border-color:var(--line);box-shadow:var(--shadow-m),inset 0 1px 0 rgba(255,255,255,.06);
+}
+[data-theme="dark"] .valuation-toolbar,
+[data-theme="dark"] .cross-model .scenario-section,
+[data-theme="dark"] .cross-model .consensus-section,
+[data-theme="dark"] .cross-model .signal-section,
+[data-theme="dark"] .cross-model .cross-weights{
+  background:rgba(28,28,30,.82);border-color:var(--line);
+  box-shadow:var(--shadow-s),inset 0 1px 0 rgba(255,255,255,.05);
+}
+[data-theme="dark"] .valuation-toolbar select,
+[data-theme="dark"] .cross-model .peer-editor>form input,
+[data-theme="dark"] .cross-model .peer-editor article,
+[data-theme="dark"] .cross-model .peer-editor article button{
+  background:#2c2c2e;border-color:var(--line);color:#f5f5f7;
+}
+[data-theme="dark"] .valuation-focus,
+[data-theme="dark"] .valuation-glance>div,
+[data-theme="dark"] .cross-model .tag-row span,
+[data-theme="dark"] .cross-model .cross-metric,
+[data-theme="dark"] .cross-model .scenario-grid>div,
+[data-theme="dark"] .cross-model .signal-grid>div{
+  background:rgba(44,44,46,.66);border-color:var(--line);box-shadow:var(--shadow-s);
+}
+[data-theme="dark"] .cross-group.pricing .cross-metric{background:linear-gradient(145deg,rgba(10,132,255,.15),rgba(44,44,46,.72))}
+[data-theme="dark"] .cross-group.growth .cross-metric{background:linear-gradient(145deg,rgba(48,209,88,.12),rgba(44,44,46,.72))}
+[data-theme="dark"] .cross-group.quality .cross-metric{background:linear-gradient(145deg,rgba(123,113,199,.16),rgba(44,44,46,.72))}
+[data-theme="dark"] .statement-toolbar{
+  background:linear-gradient(135deg,rgba(10,132,255,.14),rgba(123,113,199,.10)),rgba(28,28,30,.78);
+  border-color:var(--line);box-shadow:var(--shadow-s);
+}
+[data-theme="dark"] .financial-view-tabs button.active,
+[data-theme="dark"] .frequency-toggle button.active{background:#3a3a3c;color:#f5f5f7;box-shadow:0 2px 8px rgba(0,0,0,.35)}
+[data-theme="dark"] .graham-notes,[data-theme="dark"] .metric-warning{color:#ffb340;background:rgba(255,159,10,.10)}
+[data-theme="dark"] .missing-data{background:rgba(255,69,58,.10);border-color:rgba(255,69,58,.18)}
+[data-theme="dark"] .peer-strip b{color:#6cb6ff;background:rgba(10,132,255,.12)}
+[data-theme="dark"] .rg-tick small{color:#e5e5ea}
+
+/* Watchlist board. The local --surface declaration was the main cause of the
+   pale overview and form panels shown in dark mode. */
+[data-theme="dark"] .stock-manager-intro{
+  background:linear-gradient(145deg,rgba(44,44,46,.88),rgba(28,28,30,.72));
+  border-color:var(--line);box-shadow:var(--shadow-m),inset 0 1px 0 rgba(255,255,255,.06);
+}
+[data-theme="dark"] .stock-manager-intro dl div,
+[data-theme="dark"] .stock-manager .stock-section,
+[data-theme="dark"] .custom-group-admin>span:not(.group-admin-label){
+  background:rgba(44,44,46,.68);border-color:var(--line);box-shadow:none;
+}
+[data-theme="dark"] .stock-manager .stock-section{box-shadow:var(--shadow-s),inset 0 1px 0 rgba(255,255,255,.05)}
+[data-theme="dark"] .stock-manager .stock-section-head:hover{background:rgba(255,255,255,.06)}
+[data-theme="dark"] .managed-stock-note,
+[data-theme="dark"] .managed-stock-note.note-tone-1,
+[data-theme="dark"] .managed-stock-note.note-tone-2,
+[data-theme="dark"] .managed-stock-note.note-tone-3,
+[data-theme="dark"] .managed-stock-note.matched{
+  background:linear-gradient(145deg,rgba(58,58,60,.86),rgba(44,44,46,.72));
+  border-color:var(--line);box-shadow:0 .4rem 1rem rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.06);
+}
+[data-theme="dark"] .managed-stock-note.note-tone-1{background:linear-gradient(145deg,rgba(123,113,199,.22),rgba(44,44,46,.74))}
+[data-theme="dark"] .managed-stock-note.note-tone-2{background:linear-gradient(145deg,rgba(48,209,144,.15),rgba(44,44,46,.74))}
+[data-theme="dark"] .managed-stock-note.note-tone-3{background:linear-gradient(145deg,rgba(255,159,10,.14),rgba(44,44,46,.74))}
+
+/* Journals, company data, market snapshots and technical-analysis panels. */
+[data-theme="dark"] .journal-card,
+[data-theme="dark"] .company-profile-tabs>nav,
+[data-theme="dark"] .market-snapshot-card,
+[data-theme="dark"] .market-day-range,
+[data-theme="dark"] .technical-list>button,
+[data-theme="dark"] .technical-metrics>div,
+[data-theme="dark"] .technical-level-card,
+[data-theme="dark"] .technical-indicator-positions,
+[data-theme="dark"] .technical-indicator-groups>article,
+[data-theme="dark"] .technical-columns>section{
+  background:var(--solid);border-color:var(--line);box-shadow:var(--shadow-s);
+}
+[data-theme="dark"] .market-snapshot-state{background:rgba(44,44,46,.64);border-color:var(--line);color:#a1a1a6}
+[data-theme="dark"] .market-snapshot-metrics>div{background:rgba(44,44,46,.62);border-color:var(--line)}
+[data-theme="dark"] .technical-list>button:hover{background:rgba(10,132,255,.10)}
+
+/* Portfolio analysis, strategy and mobile/desktop ledgers. */
+[data-theme="dark"] .health-score-main{
+  background:linear-gradient(145deg,rgba(10,132,255,.16),rgba(28,28,30,.78));
+  border-color:rgba(10,132,255,.25);
+}
+[data-theme="dark"] .benchmark-grid article,
+[data-theme="dark"] .scenario-result-toolbar,
+[data-theme="dark"] .portfolio-strategy-entry,
+[data-theme="dark"] .portfolio-overview,
+[data-theme="dark"] .mobile-performance-overview,
+[data-theme="dark"] .mobile-return-strip,
+[data-theme="dark"] .mobile-benchmark-grid article{
+  background:rgba(28,28,30,.68);border-color:var(--line);box-shadow:var(--shadow-s);
+}
+[data-theme="dark"] .portfolio-metrics .metric-card,
+[data-theme="dark"] .portfolio-metrics .portfolio-value-card{
+  background:rgba(44,44,46,.66);border-color:var(--line);
+}
+[data-theme="dark"] .analysis-settings-fab{background:#2c2c2e;color:#f5f5f7;border-color:var(--line);box-shadow:var(--shadow-m)}
+[data-theme="dark"] .portfolio-txn-table .table-row.portfolio-txn-row,
+[data-theme="dark"] .portfolio-table .table-row.portfolio-row,
+[data-theme="dark"] .portfolio-txn-table .portfolio-txn-row{background:var(--solid);border-color:var(--line)}
+[data-theme="dark"] .position-technical-header{background:transparent}
+
+/* Opportunity discovery, including the newer Exa/engine selection views. */
+[data-theme="dark"] .discovery-banner,
+[data-theme="dark"] .opportunity-header{
+  background:linear-gradient(145deg,rgba(44,44,46,.86),rgba(28,28,30,.72));
+  border-color:var(--line);box-shadow:var(--shadow-m),inset 0 1px 0 rgba(255,255,255,.06);color:#f5f5f7;
+}
+[data-theme="dark"] .opportunity-header dl>div,
+[data-theme="dark"] .exposure-card,
+[data-theme="dark"] .flow-column,
+[data-theme="dark"] .flow-column:last-child,
+[data-theme="dark"] .raw-candidate-panel,
+[data-theme="dark"] .filtered-candidates,
+[data-theme="dark"] .discovery-run-metadata,
+[data-theme="dark"] .discovery-empty,
+[data-theme="dark"] .discovery-engine-selector{
+  background:rgba(28,28,30,.68);border-color:var(--line);box-shadow:var(--shadow-s);
+}
+[data-theme="dark"] .flow-tickers button,
+[data-theme="dark"] .candidate-group-tabs button,
+[data-theme="dark"] .raw-candidate-panel>div>button,
+[data-theme="dark"] .discovery-run-metadata dl>div,
+[data-theme="dark"] .discovery-mode-picker button{
+  background:rgba(44,44,46,.68);border-color:var(--line);color:#a1a1a6;
+}
+[data-theme="dark"] .candidate-group-tabs button.active,
+[data-theme="dark"] .discovery-mode-picker button.active{background:#0a84ff;border-color:#0a84ff;color:#fff}
+[data-theme="dark"] .discovery-skeleton{background:linear-gradient(90deg,#2c2c2e,#3a3a3c,#2c2c2e);background-size:200% 100%}
+[data-theme="dark"] .exposure-card small,[data-theme="dark"] .flow-column article>div:first-child span{color:#6cb6ff}
+
+/* Sentiment dashboard. */
+[data-theme="dark"] .sentiment-page{--sentiment-track:rgba(255,255,255,.10)}
+[data-theme="dark"] .sentiment-hero{
+  background:linear-gradient(145deg,rgba(10,132,255,.14),rgba(123,113,199,.13) 54%,rgba(28,28,30,.88));
+  border-color:var(--line);box-shadow:var(--shadow-m),inset 0 1px 0 rgba(255,255,255,.06);
+}
+[data-theme="dark"] .sentiment-ring:before{background:#1c1c1e;box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+[data-theme="dark"] .sentiment-source,
+[data-theme="dark"] .sentiment-empty{background:rgba(28,28,30,.68);border-color:var(--line);box-shadow:var(--shadow-s)}
+[data-theme="dark"] .sentiment-source:hover{box-shadow:var(--shadow-m),inset 0 1px 0 rgba(255,255,255,.06)}
+[data-theme="dark"] .source-x .sentiment-source-mark{background:rgba(255,255,255,.08);color:#e5e5ea}
+[data-theme="dark"] .sentiment-skeleton .shimmer{background:linear-gradient(105deg,#1c1c1e 35%,#3a3a3c 50%,#1c1c1e 65%);background-size:220% 100%}
+
+/* Investment calendar and ownership views. */
+[data-theme="dark"] .calendar-intro{
+  background:linear-gradient(145deg,rgba(10,132,255,.14),rgba(123,113,199,.14) 55%,rgba(28,28,30,.88));
+  border-color:var(--line);box-shadow:var(--shadow-m);
+}
+[data-theme="dark"] .calendar-summary span,
+[data-theme="dark"] .calendar-controls,
+[data-theme="dark"] .agenda-day>div:last-child,
+[data-theme="dark"] .ownership-card-grid article,
+[data-theme="dark"] .ownership-table-wrap{
+  background:rgba(28,28,30,.68);border-color:var(--line);box-shadow:var(--shadow-s);
+}
+[data-theme="dark"] .calendar-type-chips button{background:rgba(44,44,46,.72);border-color:var(--line);color:#a1a1a6}
+[data-theme="dark"] .calendar-type-chips button.active{background:rgba(10,132,255,.16);border-color:rgba(10,132,255,.28);color:#6cb6ff}
+[data-theme="dark"] .segmented.compact button.active{background:#3a3a3c;color:#f5f5f7;box-shadow:0 1px 5px rgba(0,0,0,.35)}
+[data-theme="dark"] .agenda-day-heading{background:color-mix(in srgb,#000 90%,transparent)}
+[data-theme="dark"] .calendar-skeleton span,
+[data-theme="dark"] .ownership-skeleton span{background:linear-gradient(105deg,#1c1c1e 35%,#3a3a3c 50%,#1c1c1e 65%);background-size:220% 100%}
+[data-theme="dark"] .event-glyph{color:#c7bdfa;background:rgba(123,113,199,.16)}
+[data-theme="dark"] .type-dividend_ex_date .event-glyph,
+[data-theme="dark"] .type-dividend_payment_date .event-glyph,
+[data-theme="dark"] .event-glyph.type-dividend_ex_date,
+[data-theme="dark"] .event-glyph.type-dividend_payment_date{background:rgba(48,209,88,.13);color:#63dc83}
+
+/* AI memory and investment decision workspaces. */
+[data-theme="dark"] .ai-memory-hero,
+[data-theme="dark"] .ai-memory-list>article,
+[data-theme="dark"] .ai-memory-candidate,
+[data-theme="dark"] .ai-decision-candidate,
+[data-theme="dark"] .ai-decision-list>button,
+[data-theme="dark"] .ai-decision-detail,
+[data-theme="dark"] .decision-final-card,
+[data-theme="dark"] .decision-ledger li>button{
+  background:linear-gradient(145deg,rgba(44,44,46,.84),rgba(28,28,30,.78));
+  border-color:var(--line);box-shadow:var(--shadow-s);color:#f5f5f7;
+}
+[data-theme="dark"] .ai-memory-controls label,
+[data-theme="dark"] .ai-decision-candidate dl div,
+[data-theme="dark"] .decision-objective-stats>div,
+[data-theme="dark"] .ai-decision-compare-card section{background:rgba(255,255,255,.06);border-color:var(--line)}
+[data-theme="dark"] .opportunity-history-list>button{background:rgba(28,28,30,.68);border-color:var(--line)}
+[data-theme="dark"] .opportunity-history-list>button:hover,
+[data-theme="dark"] .opportunity-history-list>button.active{background:rgba(10,132,255,.12);border-color:rgba(10,132,255,.28)}
+[data-theme="dark"] .decision-number,[data-theme="dark"] .decision-final-meta b{color:#c7bdfa}
+[data-theme="dark"] .decision-ledger li em{background:rgba(123,113,199,.16);color:#c7bdfa}
+
+/* Matte dark mode: no luminous ambient, glossy highlight, or colored glow.
+   Depth comes from restrained surface contrast and hairlines only. */
+[data-theme="dark"] body{background:#000}
+[data-theme="dark"] .ambient{display:none}
+[data-theme="dark"] aside{
+  background:rgba(18,18,20,.98);box-shadow:none;
+}
+[data-theme="dark"] .brand-orb{
+  background:#2c2c2e;box-shadow:none;
+}
+[data-theme="dark"] nav button.active{
+  background:#2c2c2e;box-shadow:none;
+}
+[data-theme="dark"] .nav-active-dot{box-shadow:none}
+[data-theme="dark"] .account-card,
+[data-theme="dark"] .market-pill,
+[data-theme="dark"] .preview-banner,
+[data-theme="dark"] .source-notice{box-shadow:none}
+[data-theme="dark"] .app>main>header,
+[data-theme="dark"] .about-nav{background:rgba(18,18,20,.96)}
+[data-theme="dark"] .app>main>header:after{display:none}
+[data-theme="dark"] .card-glow,
+[data-theme="dark"] .index-hero:before,
+[data-theme="dark"] .auth-aurora{display:none}
+[data-theme="dark"] .stock-card,
+[data-theme="dark"] .split>div,
+[data-theme="dark"] .add-form,
+[data-theme="dark"] .index-card,
+[data-theme="dark"] .report-tile,
+[data-theme="dark"] .metric-card,
+[data-theme="dark"] .journal-editor,
+[data-theme="dark"] .journal-card{box-shadow:none}
+[data-theme="dark"] .index-hero,
+[data-theme="dark"] .stock-manager-intro,
+[data-theme="dark"] .cross-model .cross-hero,
+[data-theme="dark"] .cross-model .ai-opinion,
+[data-theme="dark"] .statement-toolbar,
+[data-theme="dark"] .discovery-banner,
+[data-theme="dark"] .opportunity-header,
+[data-theme="dark"] .sentiment-hero,
+[data-theme="dark"] .calendar-intro,
+[data-theme="dark"] .ai-memory-hero,
+[data-theme="dark"] .decision-final-card,
+[data-theme="dark"] .decision-ledger li>button{
+  background:#1c1c1e;box-shadow:none;
+}
+[data-theme="dark"] .stock-manager-intro dl div,
+[data-theme="dark"] .stock-manager .stock-section,
+[data-theme="dark"] .managed-stock-note,
+[data-theme="dark"] .managed-stock-note.note-tone-1,
+[data-theme="dark"] .managed-stock-note.note-tone-2,
+[data-theme="dark"] .managed-stock-note.note-tone-3,
+[data-theme="dark"] .managed-stock-note.matched,
+[data-theme="dark"] .valuation-toolbar,
+[data-theme="dark"] .valuation-focus,
+[data-theme="dark"] .valuation-glance>div,
+[data-theme="dark"] .cross-model .cross-metric,
+[data-theme="dark"] .cross-group.pricing .cross-metric,
+[data-theme="dark"] .cross-group.growth .cross-metric,
+[data-theme="dark"] .cross-group.quality .cross-metric,
+[data-theme="dark"] .cross-model .scenario-section,
+[data-theme="dark"] .cross-model .consensus-section,
+[data-theme="dark"] .cross-model .signal-section,
+[data-theme="dark"] .cross-model .cross-weights,
+[data-theme="dark"] .statement-card,
+[data-theme="dark"] .benchmark-grid article,
+[data-theme="dark"] .health-score-main,
+[data-theme="dark"] .scenario-result-toolbar,
+[data-theme="dark"] .portfolio-strategy-entry,
+[data-theme="dark"] .portfolio-overview,
+[data-theme="dark"] .mobile-performance-overview,
+[data-theme="dark"] .mobile-return-strip,
+[data-theme="dark"] .mobile-benchmark-grid article,
+[data-theme="dark"] .opportunity-header dl>div,
+[data-theme="dark"] .exposure-card,
+[data-theme="dark"] .flow-column,
+[data-theme="dark"] .flow-column:last-child,
+[data-theme="dark"] .raw-candidate-panel,
+[data-theme="dark"] .filtered-candidates,
+[data-theme="dark"] .discovery-run-metadata,
+[data-theme="dark"] .discovery-empty,
+[data-theme="dark"] .sentiment-source,
+[data-theme="dark"] .sentiment-empty,
+[data-theme="dark"] .calendar-summary span,
+[data-theme="dark"] .calendar-controls,
+[data-theme="dark"] .agenda-day>div:last-child,
+[data-theme="dark"] .ownership-card-grid article,
+[data-theme="dark"] .ownership-table-wrap,
+[data-theme="dark"] .opportunity-history-list>button,
+[data-theme="dark"] .ai-memory-list>article,
+[data-theme="dark"] .ai-memory-candidate,
+[data-theme="dark"] .ai-decision-candidate,
+[data-theme="dark"] .ai-decision-list>button,
+[data-theme="dark"] .ai-decision-detail{
+  box-shadow:none;
+}
+[data-theme="dark"] .managed-stock-note,
+[data-theme="dark"] .managed-stock-note.note-tone-1,
+[data-theme="dark"] .managed-stock-note.note-tone-2,
+[data-theme="dark"] .managed-stock-note.note-tone-3,
+[data-theme="dark"] .managed-stock-note.matched{background:#2c2c2e}
+[data-theme="dark"] .index-hero .badge{
+  background:#2c2c2e;border:0;color:#f5f5f7;box-shadow:none;
+}
+[data-theme="dark"] .index-hero .badge i{
+  background:#30d158;box-shadow:none;
+}
+[data-theme="dark"] .stock-card .company-overview-btn{
+  background:#2c2c2e;border-color:#38383a;color:#f5f5f7;box-shadow:none;
+}
+[data-theme="dark"] .stock-card .company-overview-btn:hover{
+  background:#3a3a3c;border-color:#48484a;color:#e5e5ea;
+}
+[data-theme="dark"] .empty,
+[data-theme="dark"] .stock-manager .empty{
+  background:#1c1c1e;border-color:#2c2c2e;box-shadow:none;color:#d1d1d6;
+}
+[data-theme="dark"] .stock-manager .empty{border:0}
+[data-theme="dark"] .stock-manager .stock-section{border-color:#2c2c2e}
+[data-theme="dark"] .section-title h2,
+[data-theme="dark"] .hero-copy h2{color:#f5f5f7}
+[data-theme="dark"] .section-title>div>p,
+[data-theme="dark"] .overview-heatmap .section-title>small,
+[data-theme="dark"] .hero-copy p,
+[data-theme="dark"] .matched-section-note{color:#c7c7cc}
+
 /* Ambients — dim in dark */
 [data-theme="dark"] .ambient{opacity:.32}
 [data-theme="dark"] .ambient-one{background:radial-gradient(circle,rgba(10,132,255,.22),transparent 68%)}
 [data-theme="dark"] .ambient-two{background:radial-gradient(circle,rgba(48,209,144,.12),transparent 68%)}
 
 /* TradingView container shell */
-[data-theme="dark"] .tradingview-heatmap-shell{background:rgba(28,28,30,.62);border:1px solid var(--line);border-radius:18px;padding:8px}
+[data-theme="dark"] .tradingview-heatmap-shell{background:#000;border:0;border-radius:18px;padding:0}
 
 /* Theme toggle button — Apple-style capsule */
 .theme-toggle{

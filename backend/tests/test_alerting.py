@@ -12,11 +12,13 @@ from app.models import (
     PriceSnapshot,
     User,
     UserPriceAlert,
+    WatchlistItem,
 )
 from app.services.alerting import (
     _change,
     _event_key,
     _runtime_settings,
+    evaluate_quote,
     evaluate_user_price_alerts,
 )
 from app.services.market_calendar import market_status
@@ -84,6 +86,128 @@ def test_event_key_changes_across_market_days():
 def test_event_key_is_ticker_scoped():
     moment = datetime(2026, 1, 2, 15, 0, tzinfo=UTC)
     assert _event_key("AAPL", moment) != _event_key("MSFT", moment)
+
+
+def test_cross_provider_implausible_snapshot_without_previous_close_is_ignored():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    moment = datetime(2026, 7, 14, 15, 0, tzinfo=UTC)
+    with Session(engine) as db:
+        item = WatchlistItem(ticker="MSFT")
+        baseline = PriceSnapshot(
+            ticker="MSFT",
+            quote_time=moment - timedelta(minutes=20),
+            price=100,
+            source="yfinance",
+        )
+        current = PriceSnapshot(
+            ticker="MSFT",
+            quote_time=moment,
+            price=150,
+            previous_close=None,
+            source="alpaca",
+            feed="iex",
+            provider_role="realtime_market_data",
+        )
+        db.add_all([item, baseline, current])
+        db.flush()
+
+        assert evaluate_quote(db, item, current) == []
+        assert db.scalars(select(PriceAlert)).all() == []
+        assert db.scalars(select(Investigation)).all() == []
+
+
+def test_same_provider_threshold_move_still_triggers():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    moment = datetime(2026, 7, 14, 15, 0, tzinfo=UTC)
+    with Session(engine) as db:
+        item = WatchlistItem(ticker="MSFT")
+        baseline = PriceSnapshot(
+            ticker="MSFT",
+            quote_time=moment - timedelta(minutes=20),
+            price=100,
+            source="yfinance",
+        )
+        current = PriceSnapshot(
+            ticker="MSFT",
+            quote_time=moment,
+            price=110,
+            previous_close=None,
+            source="yfinance",
+        )
+        db.add_all([item, baseline, current])
+        db.flush()
+
+        triggered = evaluate_quote(db, item, current)
+
+        assert len(triggered) == 1
+        assert triggered[0].period == "20m"
+        assert triggered[0].change_percent == 10
+        assert db.scalar(select(Investigation).where(Investigation.alert_id == triggered[0].id))
+
+
+def test_large_cross_provider_move_is_allowed_with_recent_corroboration():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    moment = datetime(2026, 7, 14, 15, 0, tzinfo=UTC)
+    with Session(engine) as db:
+        item = WatchlistItem(ticker="MSFT")
+        baseline = PriceSnapshot(
+            ticker="MSFT",
+            quote_time=moment - timedelta(minutes=20),
+            price=100,
+            source="yfinance",
+        )
+        corroborating = PriceSnapshot(
+            ticker="MSFT",
+            quote_time=moment - timedelta(minutes=2),
+            price=150,
+            source="tiingo",
+        )
+        current = PriceSnapshot(
+            ticker="MSFT",
+            quote_time=moment,
+            price=150,
+            previous_close=None,
+            source="alpaca",
+            feed="iex",
+            provider_role="realtime_market_data",
+        )
+        db.add_all([item, baseline, corroborating, current])
+        db.flush()
+
+        triggered = evaluate_quote(db, item, current)
+
+        assert len(triggered) == 1
+        assert triggered[0].period == "20m"
+        assert triggered[0].change_percent == 50
+
+
+def test_source_native_previous_close_supports_legitimate_day_change():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    moment = datetime(2026, 7, 14, 15, 0, tzinfo=UTC)
+    with Session(engine) as db:
+        item = WatchlistItem(ticker="MSFT")
+        current = PriceSnapshot(
+            ticker="MSFT",
+            quote_time=moment,
+            price=150,
+            previous_close=100,
+            source="alpaca",
+            feed="iex",
+            provider_role="realtime_market_data",
+        )
+        db.add_all([item, current])
+        db.flush()
+
+        triggered = evaluate_quote(db, item, current)
+
+        assert len(triggered) == 1
+        assert triggered[0].period == "day"
+        assert triggered[0].baseline_price == 100
+        assert triggered[0].change_percent == 50
 
 
 def test_market_status_supports_future_dates():

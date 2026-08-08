@@ -19,6 +19,15 @@ from app.models import (
 
 PERIODS = {"20m": timedelta(minutes=20), "1h": timedelta(hours=1)}
 
+# A quote from a different provider without a source-native previous close is
+# not enough evidence for an unusually large move.  This protects the alert
+# path from thin/one-sided feeds (for example an IEX quote) being compared with
+# a delayed consolidated snapshot while still allowing ordinary threshold
+# alerts and independently corroborated moves.
+_MAX_UNCORROBORATED_CROSS_PROVIDER_MOVE_PCT = 25.0
+_CORROBORATION_WINDOW = timedelta(minutes=5)
+_CORROBORATION_TOLERANCE_PCT = 5.0
+
 
 def _runtime_settings(db: Session) -> dict:
     settings = get_settings()
@@ -63,6 +72,74 @@ def _event_key(ticker: str, moment: datetime) -> str:
     return hashlib.sha256(f"{ticker}:{day}".encode()).hexdigest()
 
 
+def _provider(snapshot: PriceSnapshot) -> str:
+    """Return a stable provider name for current and legacy snapshots."""
+    return str(getattr(snapshot, "provider", None) or "").strip().lower()
+
+
+def _has_source_native_evidence(snapshot: PriceSnapshot) -> bool:
+    """Whether the provider supplied a usable previous-close anchor."""
+    try:
+        return snapshot.previous_close is not None and snapshot.previous_close > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _has_recent_corroboration(
+    db: Session,
+    current: PriceSnapshot,
+) -> bool:
+    """Find an independent provider agreeing with a large current move.
+
+    The window is deliberately narrow and uses market timestamps, so an old
+    baseline cannot accidentally count as corroboration.  A provider different
+    from the current snapshot is required; two rows from the same feed do not
+    provide independent evidence.
+    """
+    if current.market_timestamp is None:
+        return False
+    current_provider = _provider(current)
+    if not current_provider:
+        return False
+    start = current.market_timestamp - _CORROBORATION_WINDOW
+    end = current.market_timestamp + _CORROBORATION_WINDOW
+    peers = db.scalars(
+        select(PriceSnapshot).where(
+            PriceSnapshot.symbol == current.symbol,
+            PriceSnapshot.market_timestamp >= start,
+            PriceSnapshot.market_timestamp <= end,
+            PriceSnapshot.last_price > 0,
+        )
+    ).all()
+    for peer in peers:
+        if _provider(peer) == current_provider:
+            continue
+        peer_change = _change(current.last_price, peer.last_price)
+        # Compare prices rather than percentage changes against the historical
+        # baseline; this remains meaningful when providers use different
+        # previous-close conventions.
+        if abs(peer_change) <= _CORROBORATION_TOLERANCE_PCT:
+            return True
+    return False
+
+
+def _candidate_is_supported(
+    db: Session,
+    current: PriceSnapshot,
+    baseline: PriceSnapshot,
+    *,
+    change: float,
+) -> bool:
+    """Reject only an implausible, unsupported cross-provider candidate."""
+    if _provider(current) == _provider(baseline):
+        return True
+    if _has_source_native_evidence(current):
+        return True
+    if abs(change) <= _MAX_UNCORROBORATED_CROSS_PROVIDER_MOVE_PCT:
+        return True
+    return _has_recent_corroboration(db, current)
+
+
 def evaluate_quote(db: Session, item: WatchlistItem, current: PriceSnapshot) -> list[PriceAlert]:
     if current.market_timestamp is None:
         return []
@@ -84,25 +161,34 @@ def evaluate_quote(db: Session, item: WatchlistItem, current: PriceSnapshot) -> 
     if existing_today:
         return []
 
-    candidates: list[tuple[str, float]] = []
+    candidates: list[tuple[str, PriceSnapshot | float]] = []
     for period, delta in PERIODS.items():
         baseline = db.scalar(
-            select(PriceSnapshot.last_price)
+            select(PriceSnapshot)
             .where(PriceSnapshot.symbol == item.ticker, PriceSnapshot.market_timestamp <= current.market_timestamp - delta)
             .order_by(PriceSnapshot.market_timestamp.desc())
             .limit(1)
         )
-        if baseline:
+        if baseline and baseline.last_price:
             candidates.append((period, baseline))
     if current.previous_close:
+        # A source-native previous close is already the strongest available
+        # day-level anchor.  Keep the float shape here so the alert payload and
+        # existing day-threshold semantics remain unchanged.
         candidates.append(("day", current.previous_close))
 
     # 在所有越过阈值的周期里，取涨跌幅绝对值最大的作为当日代表异动。
-    triggered = [
-        (period, baseline, _change(current.last_price, baseline))
-        for period, baseline in candidates
-        if abs(_change(current.last_price, baseline)) >= thresholds[period]
-    ]
+    triggered: list[tuple[str, float, float]] = []
+    for period, baseline in candidates:
+        baseline_price = baseline.last_price if isinstance(baseline, PriceSnapshot) else baseline
+        change = _change(current.last_price, baseline_price)
+        if abs(change) < thresholds[period]:
+            continue
+        if isinstance(baseline, PriceSnapshot) and not _candidate_is_supported(
+            db, current, baseline, change=change
+        ):
+            continue
+        triggered.append((period, baseline_price, change))
     if not triggered:
         return []
     period, baseline, change = max(triggered, key=lambda row: abs(row[2]))

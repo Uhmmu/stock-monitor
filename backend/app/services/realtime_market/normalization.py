@@ -140,8 +140,8 @@ def normalize_alpaca_quote(
 
     symbol = _symbol(payload, "S", "symbol", "sym")
     timestamp = _timestamp(payload, "t", "timestamp")
-    bid = _float(payload, "bp", "bid_price", "bid")
-    ask = _float(payload, "ap", "ask_price", "ask")
+    bid = _float(payload, "bp", "bid_price", "bid", positive=True)
+    ask = _float(payload, "ap", "ask_price", "ask", positive=True)
     bid_size = _float(payload, "bs", "bid_size")
     ask_size = _float(payload, "as", "ask_size")
     # A quote can have only one side during a thin/entitlement-limited feed;

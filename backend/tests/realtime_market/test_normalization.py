@@ -34,6 +34,22 @@ def test_alpaca_trade_and_quote_keep_provider_timestamp_separate_from_receive_ti
     assert quote.timestamp == datetime.fromtimestamp(1786113060, UTC)
 
 
+def test_alpaca_quote_treats_non_positive_sides_as_unavailable():
+    base = {"S": "MSFT", "t": 1786113060}
+
+    bid_missing = normalize_alpaca_quote({**base, "bp": 0, "ap": 418.3})
+    assert bid_missing is not None
+    assert bid_missing.price == 418.3
+    assert bid_missing.bid is None and bid_missing.ask == 418.3
+
+    ask_missing = normalize_alpaca_quote({**base, "bp": 418.1, "ap": 0})
+    assert ask_missing is not None
+    assert ask_missing.price == 418.1
+    assert ask_missing.bid == 418.1 and ask_missing.ask is None
+
+    assert normalize_alpaca_quote({**base, "bp": 0, "ap": 0}) is None
+
+
 def test_alpaca_bar_normalization_does_not_accept_control_messages():
     assert normalize_alpaca_message({"T": "subscription", "bars": ["MSFT"]}) is None
     bar = normalize_alpaca_bar({
