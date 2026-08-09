@@ -1061,6 +1061,7 @@ html,body,#root{max-width:100%;overflow-x:hidden}body{touch-action:pan-y}.sheet-
 
 /* 技术分析详情:底部抽屉,图表与指标平衡呈现,标签清晰可读 */
 .technical-sheet{padding:2px 2px 26px}
+.technical-sheet header{position:static;padding:0;background:none;border:0;backdrop-filter:none;-webkit-backdrop-filter:none}
 .technical-sheet>header{display:flex;align-items:center;gap:13px;margin:0 0 20px}
 .technical-sheet>header .profile-logo{width:52px;height:52px;flex:0 0 52px;border-radius:14px;padding:6px}
 .technical-sheet .tech-sheet-id{flex:1;min-width:0}.technical-sheet .tech-sheet-id .eyebrow{margin:0 0 4px}.technical-sheet>header h2{margin:0;font-size:22px;letter-spacing:-.02em}.technical-sheet>header h2 small{margin-left:6px;color:var(--ink-4);font-size:14px;font-weight:500}
