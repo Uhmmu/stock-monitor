@@ -68,7 +68,9 @@ def test_news_summary_uses_luna_structured_json_contract(monkeypatch):
     client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
     monkeypatch.setattr(llm, "_client_and_model", lambda tier: (client, "gpt-5.6-luna"))
 
-    analysis, model, usage = llm.summarize_news("Title", "Article body", source_quality="medium")
+    analysis, model, usage = llm.summarize_news(
+        "Title", "Article body", source_quality="medium", known_tickers=["AAPL"]
+    )
 
     assert analysis["summary_zh"] == "公司公布了新的经营安排。"
     assert analysis["source_quality"] == "medium"
@@ -82,6 +84,9 @@ def test_news_summary_uses_luna_structured_json_contract(monkeypatch):
     assert "summary_zh" in schema["json_schema"]["schema"]["required"]
     assert "Article body" in captured["messages"][1]["content"]
     assert "来源质量：medium" in captured["messages"][1]["content"]
+    assert "已知关联证券代码：AAPL" in captured["messages"][1]["content"]
+    assert "每个键都必须存在" in captured["messages"][0]["content"]
+    assert "event_type` 只能是 earnings" in captured["messages"][0]["content"]
 
 
 def test_news_summary_uses_key_points_when_provider_omits_facts(monkeypatch):

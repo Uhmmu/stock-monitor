@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from celery import Celery
 from celery.schedules import crontab
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select
 
 import hashlib
 import asyncio
@@ -151,7 +151,7 @@ celery_app.conf.beat_schedule = {
 }
 
 
-NEWS_SUMMARY_VERSION = "news_summary_v1"
+NEWS_SUMMARY_VERSION = "news_summary_v2"
 
 
 def _news_enrichment_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -214,7 +214,15 @@ def reconcile_news_enrichment():
                 NewsItem.ai_summary_attempts < settings.news_enrichment_max_attempts,
                 or_(NewsItem.ai_summary_next_retry_at.is_(None), NewsItem.ai_summary_next_retry_at <= now),
             )
-            .order_by(NewsItem.importance_score.desc().nullslast(), NewsItem.id)
+            .order_by(
+                case(
+                    (NewsItem.ai_summary_status.in_(("idle", "pending", "failed")), 0),
+                    (NewsItem.ai_summary_status.in_(("queued", "processing")), 1),
+                    else_=2,
+                ),
+                NewsItem.importance_score.desc().nullslast(),
+                NewsItem.id,
+            )
             .limit(settings.news_enrichment_batch_size)
             .with_for_update(skip_locked=True)
         ).all()
@@ -372,6 +380,10 @@ def summarize_news_item(news_id: int, request_id: str, force: bool = False):
         item.ai_summary_attempts += 1
         item.ai_summary_last_attempt_at = datetime.now(UTC)
         title = item.title
+        known_tickers = list(dict.fromkeys(
+            ticker for ticker in [item.ticker, *(item.symbols or [])]
+            if ticker and ticker != MARKET_TICKER
+        ))
         url = item.url
         provider_summary = item.summary
         normalized_url = item.normalized_url
@@ -410,7 +422,7 @@ def summarize_news_item(news_id: int, request_id: str, force: bool = False):
         source_quality = "high" if article_content and fetch_quality >= .7 else "medium" if article_content else "low"
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         input_hash = hashlib.sha256(
-            f"{title}\n{content_hash}\n{settings.model_medium}\n{NEWS_SUMMARY_VERSION}".encode("utf-8")
+            f"{title}\n{','.join(known_tickers)}\n{content_hash}\n{settings.model_medium}\n{NEWS_SUMMARY_VERSION}".encode("utf-8")
         ).hexdigest()
 
         with SessionLocal() as db:
@@ -453,7 +465,12 @@ def summarize_news_item(news_id: int, request_id: str, force: bool = False):
             model = cached_analysis.ai_summary_model or settings.model_medium
             usage = {"input_tokens": 0, "output_tokens": 0, "cache_hit": True}
         else:
-            analysis, model, usage = summarize_news(title, content, source_quality=source_quality)
+            analysis, model, usage = summarize_news(
+                title,
+                content,
+                source_quality=source_quality,
+                known_tickers=known_tickers,
+            )
         ai_latency_ms = round((perf_counter() - ai_started) * 1000, 2)
 
         with SessionLocal() as db:

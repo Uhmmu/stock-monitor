@@ -856,7 +856,7 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
   const news = scope==='market' ? marketNews.data?.items : companyNews.data
   const archive = useQuery({queryKey:['news-archive',current],queryFn:()=>api<NewsArchive|null>(`/news/archive?ticker=${current}`),enabled:scope==='company'&&!!current})
   const weekly = useQuery({queryKey:['news-weekly',current],queryFn:()=>api<WeeklyArchive[]>(`/news/weekly?ticker=${current}`),enabled:scope==='company'&&!!current&&weeklyOpen})
-  const detail = useQuery({queryKey:['news-detail',selectedNewsId],queryFn:()=>api<NewsRow>(`/news/${selectedNewsId}`),enabled:selectedNewsId!==null,refetchInterval:q=>['pending','queued','processing'].includes((q.state.data as NewsRow|undefined)?.ai_summary_status||'')?2000:false})
+  const detail = useQuery({queryKey:['news-detail',selectedNewsId],queryFn:()=>api<NewsRow>(`/news/${selectedNewsId}`),enabled:selectedNewsId!==null,refetchInterval:q=>{const status=(q.state.data as NewsRow|undefined)?.ai_summary_status;return status==='idle'||status==='pending'?8000:status==='queued'||status==='processing'?2000:false}})
   const refresh = useMutation({mutationFn:()=>post(scope==='market'?'/news/market/refresh':`/news/refresh?ticker=${current}`,{})})
   // 隐藏“采用与合并”和“剔除”过程段，只留关键事实归纳（兼容历史旧结构定档）
   const keyFactsOnly = (md:string) => md.replace(/###\s*(?:采用与合并|剔除)[\s\S]*?(?=\n###\s|$)/g,'').trim()
@@ -866,8 +866,8 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
   const detailAnalysis = detailItem?.ai_analysis
   const detailStatus = detailItem?.ai_summary_status || 'idle'
   const detailSummary = detailAnalysis?.summary_zh || detailItem?.ai_summary || null
-  const detailPending = detailStatus==='pending'||detailStatus==='queued'||detailStatus==='processing'
-  const detailFailedOrIdle = detailStatus==='failed'||detailStatus==='idle'
+  const detailReady = detailStatus==='completed'||detailStatus==='degraded'
+  const detailPending = detailStatus==='idle'||detailStatus==='pending'||detailStatus==='queued'||detailStatus==='processing'
   const detailEventType = detailItem?.ai_event_type || detailAnalysis?.event_type || null
   const detailSentiment = detailItem?.ai_sentiment || detailAnalysis?.sentiment || null
   const detailMarketImpact = detailItem?.ai_market_impact || detailAnalysis?.market_impact || null
@@ -905,18 +905,18 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
         {detailItem.translated_title&&detailItem.translated_title!==detailItem.title&&<p className="news-original-title">{detailItem.title}</p>}
         <div className="news-meta"><span>{detailItem.ticker}</span>{detailTickers.map(ticker=><span key={ticker}>{ticker}</span>)}{detailItem.topic&&<span className="news-topic">{detailItem.topic}</span>}</div>
         {contentDegraded&&<p className="metric-warning">原文正文不完整，摘要可能存在遗漏，请打开原文核对。</p>}
-        {detailPending&&<p className="news-summary">正在生成摘要…</p>}
-        {detailSummary&&!detailFailedOrIdle&&<section><h3>中文摘要</h3><div className="ai-summary"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{detailSummary}</ReactMarkdown></div></section>}
-        {detailItem.summary&&(!detailSummary||detailFailedOrIdle)&&<section><h3>原始概要</h3><p className="news-summary">{detailItem.summary}</p></section>}
+        {detailPending&&<p className="news-summary">{detailStatus==='idle'||detailStatus==='pending'?'等待后台获取正文并生成摘要…':'正在生成摘要…'}</p>}
+        {detailReady&&detailSummary&&<section><h3>中文摘要</h3><div className="ai-summary"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{detailSummary}</ReactMarkdown></div></section>}
+        {detailItem.summary&&(!detailSummary||!detailReady)&&<section><h3>原始概要</h3><p className="news-summary">{detailItem.summary}</p></section>}
         {!detailPending&&!detailSummary&&!detailItem.summary&&<p className="news-summary">暂无已保存摘要。</p>}
         {detailStatus==='failed'&&<small className="summary-error">{detailItem.ai_summary_error||'摘要生成失败，当前仅显示可用原始信息。'}</small>}
-        {!!detailAnalysis?.key_points?.length&&<section><h3>关键要点</h3><ul>{detailAnalysis.key_points.map((point,index)=><li key={`${point}-${index}`}>{point}</li>)}</ul></section>}
-        <div className="metric-grid">
+        {detailReady&&!!detailAnalysis?.key_points?.length&&<section><h3>关键要点</h3><ul>{detailAnalysis.key_points.map((point,index)=><li key={`${point}-${index}`}>{point}</li>)}</ul></section>}
+        {detailReady&&<div className="metric-grid">
           <div className="metric-card"><span>事件类型</span><strong>{detailEventType||'数据不足'}</strong></div>
           <div className="metric-card"><span>情绪</span><strong>{detailSentiment||'数据不足'}</strong></div>
           <div className="metric-card"><span>重要性</span><strong>{detailImportance==null?'数据不足':detailImportance.toLocaleString('zh-CN',{maximumFractionDigits:2})}</strong></div>
           <div className="metric-card"><span>市场影响</span><strong>{detailMarketImpact||'数据不足'}</strong></div>
-        </div>
+        </div>}
         {detailItem.article_content&&<details><summary>查看已保存正文</summary><p className="news-summary" style={{whiteSpace:'pre-wrap'}}>{detailItem.article_content}</p></details>}
         {(detailItem.ai_summary_version||detailItem.ai_summary_generated_at||detailItem.content_fetch_method)&&<p className="statement-source">{detailItem.ai_summary_version&&`摘要版本 ${detailItem.ai_summary_version}`}{detailItem.ai_summary_generated_at&&` · 生成于 ${formatDate(detailItem.ai_summary_generated_at)}`}{detailItem.content_fetch_method&&` · 正文来源 ${detailItem.content_fetch_method}`}</p>}
         <a className="news-title" href={detailItem.content_final_url||detailItem.url} target="_blank" rel="noreferrer">打开原文 ↗</a>

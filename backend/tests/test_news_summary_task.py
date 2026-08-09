@@ -67,12 +67,23 @@ def test_news_summary_task_persists_result_and_status(monkeypatch):
     engine = _database(monkeypatch)
     with Session(engine) as db:
         item = _news()
+        item.ticker = tasks.MARKET_TICKER
+        item.symbols = ["MSFT"]
         db.add(item)
         db.commit()
         news_id = item.id
 
     monkeypatch.setattr(tasks, "fetch_article", lambda _url: _fetch_result())
-    monkeypatch.setattr(tasks, "summarize_news", lambda _title, _content, source_quality: (_analysis(source_quality), "gpt-5.6-luna", {}))
+    captured = {}
+    monkeypatch.setattr(
+        tasks,
+        "summarize_news",
+        lambda _title, _content, source_quality, known_tickers: (
+            captured.update(known_tickers=known_tickers) or _analysis(source_quality),
+            "gpt-5.6-luna",
+            {},
+        ),
+    )
 
     result = tasks.summarize_news_item.run(news_id, "request-1")
 
@@ -82,10 +93,11 @@ def test_news_summary_task_persists_result_and_status(monkeypatch):
         assert item.ai_summary_status == "completed"
         assert item.ai_summary == "中文总结"
         assert item.ai_summary_model == "gpt-5.6-luna"
-        assert item.ai_summary_version == "news_summary_v1"
+        assert item.ai_summary_version == "news_summary_v2"
         assert item.ai_summary_created_at is not None
         assert item.article_content.startswith("Full article body")
         assert item.content_fetch_method == "http"
+    assert captured["known_tickers"] == ["MSFT"]
 
 
 def test_news_summary_task_does_not_overwrite_newer_request(monkeypatch):
@@ -131,7 +143,7 @@ def test_news_summary_task_degrades_to_provider_summary(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(tasks, "fetch_article", lambda _url: _fetch_result(success=False))
-    monkeypatch.setattr(tasks, "summarize_news", lambda _title, content, source_quality: (captured.update(content=content, source_quality=source_quality) or _analysis(source_quality), "gpt-5.6-luna", {}))
+    monkeypatch.setattr(tasks, "summarize_news", lambda _title, content, source_quality, **_kwargs: (captured.update(content=content, source_quality=source_quality) or _analysis(source_quality), "gpt-5.6-luna", {}))
 
     assert tasks.summarize_news_item.run(news_id, "request-1")["status"] == "degraded"
     with Session(engine) as db:
@@ -154,7 +166,7 @@ def test_news_summary_task_retries_transient_fetch_without_repeating_ai(monkeypa
     object.__setattr__(result, "error_code", "network_timeout")
     ai_calls = []
     monkeypatch.setattr(tasks, "fetch_article", lambda _url: result)
-    monkeypatch.setattr(tasks, "summarize_news", lambda _title, _content, source_quality: (ai_calls.append(1) or _analysis(source_quality), "gpt-5.6-luna", {}))
+    monkeypatch.setattr(tasks, "summarize_news", lambda _title, _content, source_quality, **_kwargs: (ai_calls.append(1) or _analysis(source_quality), "gpt-5.6-luna", {}))
 
     assert tasks.summarize_news_item.run(news_id, "request-1")["status"] == "degraded"
     with Session(engine) as db:
@@ -188,7 +200,7 @@ def test_transient_refetch_failure_preserves_existing_article(monkeypatch):
     object.__setattr__(failed, "error_code", "network_timeout")
     captured = {}
     monkeypatch.setattr(tasks, "fetch_article", lambda _url: failed)
-    monkeypatch.setattr(tasks, "summarize_news", lambda _title, content, source_quality: (captured.update(content=content, source_quality=source_quality) or _analysis(source_quality), "gpt-5.6-luna", {}))
+    monkeypatch.setattr(tasks, "summarize_news", lambda _title, content, source_quality, **_kwargs: (captured.update(content=content, source_quality=source_quality) or _analysis(source_quality), "gpt-5.6-luna", {}))
 
     assert tasks.summarize_news_item.run(news_id, "request-1")["status"] == "degraded"
     with Session(engine) as db:
@@ -211,7 +223,7 @@ def test_news_summary_task_does_not_treat_long_provider_content_as_fetched_artic
 
     captured = {}
     monkeypatch.setattr(tasks, "fetch_article", lambda _url: _fetch_result(success=False))
-    monkeypatch.setattr(tasks, "summarize_news", lambda _title, content, source_quality: (captured.update(content=content) or _analysis(source_quality), "gpt-5.6-luna", {}))
+    monkeypatch.setattr(tasks, "summarize_news", lambda _title, content, source_quality, **_kwargs: (captured.update(content=content) or _analysis(source_quality), "gpt-5.6-luna", {}))
 
     assert tasks.summarize_news_item.run(news_id, "request-1")["status"] == "degraded"
     assert captured["content"] == "Original provider summary with enough context."
@@ -253,6 +265,37 @@ def test_reconciliation_only_claims_yesterday_and_today(monkeypatch):
 
     assert result["claimed"] == 1
     assert queued[0][0][0] == recent_id
+
+
+def test_reconciliation_prioritizes_unprocessed_news_over_version_upgrade(monkeypatch):
+    engine = _database(monkeypatch)
+    now = datetime.now(UTC)
+    with Session(engine) as db:
+        pending = _news("pending")
+        pending.fingerprint = "pending"
+        pending.published_at = now
+        pending.ai_summary_status = "idle"
+        pending.importance_score = .1
+        stale = _news("stale")
+        stale.fingerprint = "stale"
+        stale.published_at = now
+        stale.ai_summary = "old"
+        stale.ai_analysis = _analysis()
+        stale.ai_summary_status = "completed"
+        stale.ai_summary_model = tasks.settings.model_medium
+        stale.ai_summary_version = "news_summary_v1"
+        stale.importance_score = .9
+        db.add_all([pending, stale])
+        db.commit()
+        pending_id = pending.id
+    queued = []
+    monkeypatch.setattr(tasks.settings, "news_enrichment_batch_size", 1)
+    monkeypatch.setattr(tasks.summarize_news_item, "apply_async", lambda args, priority: queued.append((args, priority)))
+
+    result = tasks.reconcile_news_enrichment.run()
+
+    assert result["claimed"] == 1
+    assert queued[0][0][0] == pending_id
 
 
 def test_news_enrichment_bounds_follow_market_timezone(monkeypatch):

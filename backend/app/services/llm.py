@@ -237,10 +237,16 @@ NEWS_SUMMARY_SYSTEM_PROMPT = """# Role
 - 只依据给定原文和标题，不得补充原文没有的信息、价格、行情数据或因果结论。
 - `facts` 必须是原文明确陈述的原子事实；无法确认的内容写“数据不足”，不得把推断写成事实。
 - `key_points` 用 3-5 条简体中文概括事实；`summary_zh` 必须是简体中文。
-- `market_impact` 只描述原文明确提及的影响；没有依据时写“数据不足”。
-- `importance` 为 0 到 100 的整数，`confidence` 为 0 到 1 的数值；来源质量以用户提供的值为准。
-- 数组没有匹配对象时返回空数组；不得猜测公司、证券代码或行业。
-- 只输出符合 JSON Schema 的 JSON 对象，不要 Markdown、代码块或额外文字。
+- `event_type`、`sentiment`、`importance` 和 `market_impact` 是你必须给出的分析判断，不要因为缺少正文就留空或统一返回 other/neutral/数据不足。
+- `market_impact` 说明事件可能影响哪些业务、预期或风险因素，必须用“可能”“或”等表达标明这是分析，不得宣称已发生价格变动或提供买卖建议。只有连标题都无法支持任何判断时才写“数据不足”。
+- 当只有标题或供应商摘要时，仍完成分类和影响分析，并通过较低的 `confidence` 表达信息不完整。
+- `event_type` 只能是 earnings, guidance, m&a, product, ai, regulation, litigation, macro, analyst, financing, partnership, supply_chain, geopolitical, management, other 之一。
+- `sentiment` 只能是 positive, neutral, negative, mixed 之一；`importance` 为 0 到 100 的整数；`confidence` 为 0 到 1 的数值。
+- 来源质量以用户提供的值为准。数组没有匹配对象时返回空数组；除用户给出的已知证券代码外，不得猜测公司、代码或行业。
+
+# 输出
+只输出下列 JSON 对象，每个键都必须存在，不要 Markdown、代码块、标题键或额外文字：
+{"summary_zh":"","key_points":[],"companies":[],"tickers":[],"industries":[],"event_type":"other","sentiment":"neutral","market_impact":"","importance":0,"source_quality":"","confidence":0,"facts":[]}
 """
 
 
@@ -373,16 +379,18 @@ def summarize_news(
     content: str,
     *,
     source_quality: str = "high",
+    known_tickers: list[str] | None = None,
 ) -> tuple[dict[str, Any], str, dict[str, int]]:
     """Return a strict, source-bounded news analysis using the Luna tier."""
     client, model = _client_and_model("medium")
     source_quality_value = str(source_quality or "").strip() or "unknown"
+    ticker_context = ", ".join(dict.fromkeys(ticker.strip() for ticker in known_tickers or [] if ticker.strip())) or "未提供"
     messages = [
         {"role": "system", "content": NEWS_SUMMARY_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
-                f"来源质量：{source_quality_value}\n\n标题：{title}\n\n原文：\n{content}"
+                f"来源质量：{source_quality_value}\n已知关联证券代码：{ticker_context}\n\n标题：{title}\n\n原文或供应商摘要：\n{content}"
             ),
         },
     ]
@@ -393,7 +401,7 @@ def summarize_news(
         response_format={
             "type": "json_schema",
             "json_schema": {
-                "name": "stock_monitor_news_analysis_v1",
+                "name": "stock_monitor_news_analysis_v2",
                 "strict": True,
                 "schema": NEWS_ANALYSIS_JSON_SCHEMA,
             },
