@@ -54,8 +54,25 @@ export function SentimentSkeleton() {
   </section>
 }
 
-export function SentimentContent({data}:{data:StockSentiment}) {
+export function SentimentContent({data,compact=false}:{data:StockSentiment;compact?:boolean}) {
   const bullishTone=sentimentTone(data.bullish_average)
+  if(compact) return <>
+    <section className="sentiment-preview-card">
+      <div className="sentiment-preview-heading"><p className="eyebrow">ADANOS · CROSS-SOURCE SIGNAL</p><h2>{data.symbol}<span>{data.company_name||'公司名称暂缺'}</span></h2></div>
+      <div className="sentiment-preview-rings">
+        {([['reddit','Reddit'],['x','X'],['news','新闻'],['polymarket','Polymarket']] as const).map(([key,label])=>{
+          const source=data.sources.find(item=>item.source===key)
+          return <div className="sentiment-preview-source" key={key}>
+            <div className={`sentiment-preview-ring${source?'':' unavailable'}`} style={{'--score':`${Math.max(0,Math.min(100,source?.buzz_score??0))*3.6}deg`} as CSSProperties}>
+              <strong>{source?source.buzz_score.toFixed(1):'—'}</strong><small>热度</small>
+            </div>
+            <b>{label}</b><span className={sentimentTone(source?.bullish_pct??null)}>{source?.bullish_pct==null?'数据不足':`看多 ${source.bullish_pct.toFixed(1)}%`}</span>
+          </div>
+        })}
+      </div>
+    </section>
+    <p className="sentiment-disclaimer">最近 {data.period_days} 天 · 舆情只反映讨论热度与倾向，不代表价格走势或投资建议。</p>
+  </>
   return <>
     <section className="sentiment-hero">
       <div className="sentiment-identity">
@@ -103,11 +120,11 @@ export function SentimentContent({data}:{data:StockSentiment}) {
         </article>
       })}
     </section>
-    <p className="sentiment-disclaimer">舆情只反映讨论热度与倾向，不能验证事实真伪，也不代表价格走势或投资建议。</p>
+    <p className="sentiment-disclaimer">最近 {data.period_days} 天 · 舆情只反映讨论热度与倾向，不代表价格走势或投资建议。</p>
   </>
 }
 
-export function SentimentModule({ticker,selector}:{ticker:string;selector:ReactNode}) {
+export function SentimentModule({ticker,selector,compact=false}:{ticker:string;selector?:ReactNode;compact?:boolean}) {
   const [days,setDays]=useState(7)
   const result=useQuery({
     queryKey:['sentiment',ticker,days],
@@ -116,9 +133,9 @@ export function SentimentModule({ticker,selector}:{ticker:string;selector:ReactN
     staleTime:300_000,
     retry:1,
   })
-  return <div className="sentiment-page">
+  return <div className={`sentiment-page${compact?' compact':''}`}>
     <div className="sentiment-toolbar">
-      <div>{selector}</div>
+      {selector&&<div>{selector}</div>}
       <div className="sentiment-period" role="tablist" aria-label="舆情观察周期">
         {[7,14,30].map(value=><button role="tab" aria-selected={days===value} className={days===value?'active':''}
           onClick={()=>setDays(value)} key={value}>{value} 天</button>)}
@@ -128,6 +145,6 @@ export function SentimentModule({ticker,selector}:{ticker:string;selector:ReactN
     {ticker&&result.isLoading&&<SentimentSkeleton/>}
     {ticker&&result.isError&&<div className="sentiment-empty"><strong>暂时无法连接舆情服务</strong><p>已有页面不受影响，可以稍后重试。</p><button onClick={()=>result.refetch()}>重新加载</button></div>}
     {ticker&&!result.isLoading&&!result.isError&&!result.data&&<div className="sentiment-empty"><strong>暂无可用舆情</strong><p>四个来源当前都没有返回 {ticker} 的有效数据，或服务端尚未配置 Adanos API Key。</p><button onClick={()=>result.refetch()}>重新检查</button></div>}
-    {result.data&&<SentimentContent data={result.data}/>}
+    {result.data&&<SentimentContent data={result.data} compact={compact}/>}
   </div>
 }

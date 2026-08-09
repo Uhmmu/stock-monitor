@@ -955,6 +955,7 @@ def _sync_ticker_financials(db, ticker: str) -> bool:
         row.net_margin = quarter.net_margin
         row.operating_cash_flow = quarter.operating_cash_flow
         row.free_cash_flow = quarter.free_cash_flow
+        row.source = "yfinance"
         row.raw_payload = quarter.raw_payload
         row.synced_at = synced_at
         archive.write_quarter(ticker, quarter.label, quarter.raw_payload)

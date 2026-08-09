@@ -31,6 +31,17 @@ describe('舆情板块',()=>{
     expect(html).toContain('趋势不足')
   })
 
+  it('紧凑预览用四个圆环分别展示固定来源',()=>{
+    const html=renderToStaticMarkup(<SentimentContent data={data} compact/>)
+    expect(html).toContain('AAPL')
+    expect(html).toContain('最近 7 天')
+    expect(html).not.toContain('讨论温度与方向')
+    expect(html.match(/sentiment-preview-source/g)).toHaveLength(4)
+    expect(html).toContain('Reddit')
+    expect(html).toContain('Polymarket')
+    expect(html).toContain('数据不足')
+  })
+
   it('按看多比例提供稳定的语义色阶',()=>{
     expect(sentimentTone(70)).toBe('positive')
     expect(sentimentTone(30)).toBe('negative')

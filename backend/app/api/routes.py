@@ -195,6 +195,9 @@ def create_snapshot(section: str, ticker: str | None = Query(default=None), secu
     elif section in {"fundamentals", "financials"}:
         from app.tasks.celery_app import sync_ticker_financials
         sync_ticker_financials.delay(value)
+        if section == "fundamentals":
+            from app.tasks.celery_app import sync_ticker_sec_all
+            sync_ticker_sec_all.delay(value)
     elif section == "valuation":
         from app.tasks.celery_app import sync_peer_valuation_data
         sync_peer_valuation_data.delay(value)
@@ -1111,7 +1114,7 @@ def fundamentals(ticker: str = Query(...), db: Session = Depends(get_db)):
 
 @router.get("/sec-filings")
 def sec_filings(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker, "sec")
+    value = _require_watched_ticker(db, ticker, "sec|fundamentals")
     rows = db.scalars(
         select(SecFiling)
         .where(SecFiling.ticker == value)
@@ -1136,7 +1139,7 @@ def sec_filings(ticker: str = Query(...), db: Session = Depends(get_db)):
 
 @router.post("/sec-filings/refresh")
 def refresh_sec_filings(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker, "sec")
+    value = _require_watched_ticker(db, ticker, "sec|fundamentals")
     from app.tasks.celery_app import sync_ticker_sec_all
 
     sync_ticker_sec_all.delay(value)
@@ -1145,7 +1148,7 @@ def refresh_sec_filings(ticker: str = Query(...), db: Session = Depends(get_db))
 
 @router.get("/sec-events")
 def sec_events(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker, "sec")
+    value = _require_watched_ticker(db, ticker, "sec|fundamentals")
     rows = db.scalars(
         select(SecEvent)
         .where(SecEvent.ticker == value)
@@ -1172,7 +1175,7 @@ def sec_events(ticker: str = Query(...), db: Session = Depends(get_db)):
 
 @router.get("/sec-financials")
 def sec_financials(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker, "sec")
+    value = _require_watched_ticker(db, ticker, "sec|fundamentals")
     rows = db.scalars(
         select(SecFinancialPeriod)
         .where(SecFinancialPeriod.ticker == value)
@@ -1186,6 +1189,8 @@ def sec_financials(ticker: str = Query(...), db: Session = Depends(get_db)):
             "form": r.form,
             "period_end": r.period_end,
             "currency": r.currency,
+            "source": r.source,
+            "synced_at": r.synced_at,
             "revenue": r.revenue,
             "net_income": r.net_income,
             "operating_income": r.operating_income,
@@ -1203,7 +1208,7 @@ def sec_financials(ticker: str = Query(...), db: Session = Depends(get_db)):
 
 @router.get("/sec-insider")
 def sec_insider(ticker: str = Query(...), db: Session = Depends(get_db)):
-    value = _require_watched_ticker(db, ticker, "sec")
+    value = _require_watched_ticker(db, ticker, "sec|fundamentals")
     rows = db.scalars(
         select(SecInsiderTrade)
         .where(SecInsiderTrade.ticker == value)
@@ -1231,7 +1236,7 @@ def sec_insider(ticker: str = Query(...), db: Session = Depends(get_db)):
 @router.get("/sec-13f")
 def sec_13f(ticker: str = Query(...), db: Session = Depends(get_db)):
     """13F 机构持仓：返回最新季度的持有机构（按市值降序），附环比增减。"""
-    value = _require_watched_ticker(db, ticker, "sec")
+    value = _require_watched_ticker(db, ticker, "sec|fundamentals")
     latest_period = db.scalar(
         select(Sec13FHolding.report_period)
         .where(Sec13FHolding.ticker == value)

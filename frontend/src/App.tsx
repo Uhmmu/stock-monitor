@@ -19,6 +19,7 @@ import { IbkrIntegrationTest } from './IbkrIntegrationTest'
 import { IbkrAccount } from './IbkrAccount'
 import { MacroDataSourcePanel, MacroFundamentals } from './MacroFundamentals'
 import { ThemeToggle } from './ThemeToggle'
+import { providerValuesDiffer } from './financialComparison'
 import { subscribeTheme, getResolvedTheme, type ThemeMode } from './theme'
 import './macro.css'
 import {
@@ -69,21 +70,19 @@ type GrahamStatus = 'undervalued'|'fairly_valued'|'overvalued'|'not_applicable'
 type GrahamAnalysis = {symbol:string;currency:string;current_price:number|null;graham_number:{value:number|null;margin_of_safety:number|null;status:GrahamStatus;available:boolean};growth_formula:{conservative:GrahamScenario;base:GrahamScenario;optimistic:GrahamScenario};inputs:{current_price:GrahamPoint;eps_ttm:GrahamPoint;book_value_per_share:GrahamPoint;growth_rate:GrahamPoint;aaa_yield:GrahamPoint};applicability:{status:'applicable'|'limited'|'not_applicable';confidence:string;reasons:string[];missing_fields:string[]};overall_status:GrahamStatus;financial_period:string|null;updated_at:string}
 type CrossModel = {ticker:string;company:string;classification:{sector:string|null;industry:string|null;industry_key:string|null;profile:string;label:string;primary:string[];secondary:string[];focus:string};peers:{source:string;symbols:string[];official_symbols?:string[];coverage:number;medians:Record<string,number>};tags:{name:string;label:string;confidence:number}[];weights:Record<string,number>;weight_details:WeightDetail[];valuation:CrossMetric[];growth:CrossMetric[];health:CrossMetric[];graham:GrahamAnalysis|null;dcf_scenarios:{bear:number|null;base:number|null;bull:number|null;current:number|null;assumptions:Record<string,{growth:number;discount_rate:number;terminal_growth:number}>};reverse_dcf:{implied_fcf_growth:number|null;unit:string};consensus:{items:{key:string;label:string;value:number}[];value:number|null;current:number|null};model_signals:ModelSignal[];model_conflict:boolean;ai_opinion:string;ai_model:string|null;snapshot_date:string;generated_at:string|null}
 type SecEvent = {id:number;form:string;item_code:string;item_label:string;priority:string;text:string|null;summary_zh:string|null;summary_model:string|null;summary_status:string;filing_date:string|null;filing_url:string}
-type SecFin = {fiscal_year:number;fiscal_period:string;form:string;period_end:string|null;currency:string|null;revenue:number|null;net_income:number|null;operating_income:number|null;gross_profit:number|null;eps_basic:number|null;eps_diluted:number|null;cash_and_equivalents:number|null;total_debt:number|null;shares_outstanding:number|null;operating_cash_flow:number|null}
+type SecFin = {fiscal_year:number;fiscal_period:string;form:string;period_end:string|null;currency:string|null;source:string;synced_at:string;revenue:number|null;net_income:number|null;operating_income:number|null;gross_profit:number|null;eps_basic:number|null;eps_diluted:number|null;cash_and_equivalents:number|null;total_debt:number|null;shares_outstanding:number|null;operating_cash_flow:number|null}
 type SecInsider = {id:number;insider_name:string;insider_title:string|null;transaction_date:string|null;transaction_code:string|null;shares:number|null;price:number|null;value:number|null;shares_owned_after:number|null;flag:string|null;filing_url:string}
 type Sec13FHolding = {id:number;manager_name:string;shares:number|null;value_usd:number|null;put_call:string|null;share_change:number|null;is_new:boolean;filing_date:string|null}
 type Sec13F = {report_period:string|null;prev_period:string|null;holdings:Sec13FHolding[]}
 type TemporarySnapshot = {ticker:string;section:string;expires_at:string}
 type Figure = {slug:string;display_name:string;kind:string;photo_url:string|null;note:string|null;is_seed:boolean;has_positions:boolean}
-type CongressTradeRow = {id:number;filer_id:string;filer_name:string;chamber:string|null;party:string|null;state:string|null;ticker:string|null;asset_name:string|null;transaction_type:string|null;transaction_date:string|null;filing_date:string|null;amount_label:string|null;is_late:boolean}
-type Position = {ticker:string|null;asset_name:string;category:string;value:number;is_percent:boolean;note:string|null}
-type FigureDetail = {slug:string;display_name:string;kind:string;photo_url:string|null;note:string|null;is_seed:boolean;positions:Position[];positions_are_percent:boolean;trades:CongressTradeRow[];moves:{buys:string[];sells:string[]}|null}
 type FilerHit = {filer_id:string;full_name:string;chamber:string|null;branch:string|null;party:string|null;state:string|null;trade_count:number|null}
 type TradeLogRow = {security_id?:number|null;ticker:string;direction:string;quantity:number|null;price:number|null;fee:number|null;strategy:string;result:string}
 type TradeLog = {id:number;trade_date:string;ticker:string|null;direction:string|null;quantity:number|null;price:number|null;note:string|null;content:string|null;table_rows:TradeLogRow[];photo_urls:string[];ai_summary:string|null;ai_summary_model:string|null;ai_summary_created_at:string|null;status:'draft'|'published';source_type:'manual'|'ibkr_sync';objective_facts:Record<string,unknown>;ibkr_sync_run_id:number|null;ibkr_position_id:number|null;created_at:string}
 
 const formatPrice = (value:number|null) => value == null ? '等待行情' : `$${value.toFixed(2)}`
 const formatDate = (value:string) => new Date(value).toLocaleString('zh-CN')
+const normalizeTab = (tab:string) => tab==='sentiment'?'news':tab==='congress'?'settings':tab
 // 同一股票在同一美东交易日的多次异动调查归并为一张卡片（后端已限制一天一个，此处兜底并处理历史数据）
 const marketDayKey = (value:string) => new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value))
 type InvestigationGroup = {key:string;ticker:string;status:string;started_at:string;ends_at:string;news_count:number;last_error:string|null;items:Investigation[]}
@@ -414,7 +413,7 @@ export default function App() {
   const [demoMode,setDemoMode] = useState(previewRequested)
   const [authUser,setAuthUser] = useState<{username:string;role:string}|null>(()=>previewRequested?{username:'访客',role:'viewer'}:null)
   const [authLoading,setAuthLoading] = useState(()=>!!(localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')))
-  const [tab,setTab] = useState(()=>window.location.pathname.startsWith('/admin/integrations/ibkr')?'ibkr-test':window.location.pathname==='/ibkr'?'ibkr':window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')
+  const [tab,setTab] = useState(()=>normalizeTab(window.location.pathname.startsWith('/admin/integrations/ibkr')?'ibkr-test':window.location.pathname==='/ibkr'?'ibkr':window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview'))
   const [mobileNavOpen,setMobileNavOpen] = useState(false)
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
   const [selectedModel,setSelectedModel] = useState<CrossMetric|null>(null)
@@ -451,7 +450,7 @@ export default function App() {
   },[])
 
   useEffect(()=>{
-    const onPop=()=>setTab(window.location.pathname.startsWith('/admin/integrations/ibkr')?'ibkr-test':window.location.pathname==='/ibkr'?'ibkr':window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')
+    const onPop=()=>setTab(normalizeTab(window.location.pathname.startsWith('/admin/integrations/ibkr')?'ibkr-test':window.location.pathname==='/ibkr'?'ibkr':window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview'))
     window.addEventListener('popstate',onPop)
     return ()=>window.removeEventListener('popstate',onPop)
   },[])
@@ -459,16 +458,16 @@ export default function App() {
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const mobileTabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['sentiment','舆情'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓'],['reports','报告中心'],['journal','交易日志'],['settings','监控设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
+  const mobileTabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['reports','报告中心'],['journal','交易日志'],['settings','管理设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
   const desktopNavGroups = [
     {title:'概览与资产',items:[['overview','总览'],['watchlist','自选股'],['holdings','持仓']]},
     {title:'研究与决策',items:[['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现']]},
-    {title:'市场情报',items:[['news','新闻中心'],['sentiment','舆情'],['macro','美国宏观']]},
-    {title:'公司分析',items:[['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 公告'],['congress','名人持仓']]},
-    {title:'记录与系统',items:[['reports','报告中心'],['journal','交易日志'],['settings','监控设置']]},
+    {title:'市场情报',items:[['news','新闻中心'],['macro','美国宏观']]},
+    {title:'公司分析',items:[['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析']]},
+    {title:'记录与系统',items:[['reports','报告中心'],['journal','交易日志'],['settings','管理设置']]},
     {title:'IBKR',items:[['ibkr','IBKR'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]},
   ]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['sentiment','市场舆情'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['congress','名人持仓与交易'],['reports','智能报告'],['journal','交易日志'],['settings','系统设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
   const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ibkr-test')window.history.pushState({},'','/admin/integrations/ibkr');else if(key==='ibkr')window.history.pushState({},'','/ibkr');else if(key==='ai'){if(!window.location.pathname.startsWith('/ai'))window.history.pushState({},'', '/ai/new')}else if(key==='decisions')window.history.pushState({},'','/investment-decisions');else if(window.location.pathname.startsWith('/ai')||window.location.pathname.startsWith('/investment-decisions')||window.location.pathname.startsWith('/admin/integrations/ibkr')||window.location.pathname==='/ibkr')window.history.pushState({},'',`/?tab=${key}`)}
   const askAI=(symbol:string)=>{setSelectedProfileSymbol(null);setActiveTicker(symbol);setTab('ai');window.history.pushState({},'',`/ai/new?symbol=${encodeURIComponent(symbol)}&context=company`);window.dispatchEvent(new PopStateEvent('popstate'))}
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
@@ -509,16 +508,14 @@ export default function App() {
       {tab==='alerts'&&<div className="investigations">{groupInvestigations(investigations.data).map(group=><article key={group.key}><div><span className={`status ${group.status}`}>{group.status}</span><h2>{group.ticker} 异动调查{group.items.length>1&&<em className="group-count"> ×{group.items.length}</em>}</h2><p>{formatDate(group.started_at)} — {formatDate(group.ends_at)}</p></div><strong>{group.news_count}<small> 条新闻线索</small></strong>{group.last_error&&<p className="error">{group.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}
       {tab==='reports'&&<div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span className="report-tag">{typeNames[r.report_type]||r.report_type}{r.confidence&&<><span className="report-tag-sep">|</span><span className={`report-conf conf-${r.confidence==='高'?'high':r.confidence==='中'?'mid':'low'}`}>置信度{r.confidence}</span></>}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div>}
       {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
-      {tab==='sentiment'&&<SentimentModule ticker={activeTicker||watchlist.data?.[0]?.ticker||''} selector={<SnapshotTickerBar section="sentiment" tickers={watchlist.data?.map(w=>w.ticker)||[]} current={activeTicker||watchlist.data?.[0]?.ticker||''} onSelect={setActiveTicker}/>}/>}
-      {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
+      {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker} onOpenSec={()=>selectTab('sec')}/>}
       {tab==='macro'&&<MacroFundamentals isAdmin={authUser.role==='admin'}/>}
       {tab==='financials'&&<FinancialStatementsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onStatementMetric={setSelectedStatementMetric} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='crossmodel'&&<CrossModelCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onMetric={setSelectedModel} onWeight={setSelectedWeight} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='technical'&&<TechnicalAnalysisCenter/>}
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
-      {tab==='congress'&&<CongressCenter/>}
       {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
-      {tab==='settings'&&<>{settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}<RealtimeProviderHealthPanel/><MacroDataSourcePanel isAdmin={authUser.role==='admin'}/><DiscoverySettingsPanel/>{authUser.role==='admin'&&<AdminPanel/>}</> }
+      {tab==='settings'&&<>{settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}<CongressSettings/><RealtimeProviderHealthPanel/><MacroDataSourcePanel isAdmin={authUser.role==='admin'}/><DiscoverySettingsPanel/>{authUser.role==='admin'&&<AdminOperationsPanel/>}</> }
       {tab==='ibkr-test'&&authUser.role==='admin'&&<IbkrIntegrationTest/>}
       </div>
     </main>
@@ -725,10 +722,12 @@ const statementMetricInfo:Record<string,StatementMetric> = {
   investing_cash_flow:{label:'投资活动现金流',english:'Investing Cash Flow',description:'收购、出售投资及长期资产投资相关的现金流。',impact:'需区分正常投资、并购扩张和资产处置等不同驱动。'},
 }
 
-function FundamentalsCenter({tickers,active,setActive}:{tickers:string[];active:string;setActive:(ticker:string)=>void}) {
+function FundamentalsCenter({tickers,active,setActive,onOpenSec}:{tickers:string[];active:string;setActive:(ticker:string)=>void;onOpenSec:()=>void}) {
   const current = active||tickers[0]||''
   const fundamentals = useQuery({queryKey:['fundamentals',current],queryFn:()=>api<Fundamentals>(`/fundamentals?ticker=${current}`),enabled:!!current,staleTime:60_000})
-  const financials = useQuery({queryKey:['financials',current],queryFn:()=>api<Financial[]>(`/financials?ticker=${current}`),enabled:!!current,refetchInterval:current?5000:false})
+  const financials = useQuery({queryKey:['financials',current],queryFn:()=>api<Financial[]>(`/financials?ticker=${current}`),enabled:!!current,staleTime:5*60_000})
+  const secFinancials = useQuery({queryKey:['sec-financials',current],queryFn:()=>api<SecFin[]>(`/sec-financials?ticker=${current}`),enabled:!!current,staleTime:5*60_000})
+  const secEvents = useQuery({queryKey:['sec-events',current],queryFn:()=>api<SecEvent[]>(`/sec-events?ticker=${current}`),enabled:!!current,staleTime:5*60_000})
   const fmtNum = (v:number|null) => {
     if(v==null) return '数据不足'
     const abs=Math.abs(v), sign=v<0?'-':''
@@ -738,24 +737,36 @@ function FundamentalsCenter({tickers,active,setActive}:{tickers:string[];active:
   }
   const fmtMetric = (v:number|null) => v==null?'—':v.toLocaleString('en-US',{maximumFractionDigits:2})
   const r = fundamentals.data?.rating
+  const priorityEvents=(secEvents.data||[]).filter(event=>event.priority==='urgent'||event.priority==='important').slice(0,6)
+  const periods=new Map<string,{yahoo?:Financial;sec?:SecFin}>()
+  financials.data?.forEach(row=>periods.set(`${row.fiscal_year}-${row.fiscal_period}`,{...periods.get(`${row.fiscal_year}-${row.fiscal_period}`),yahoo:row}))
+  secFinancials.data?.forEach(row=>periods.set(`${row.fiscal_year}-${row.fiscal_period}`,{...periods.get(`${row.fiscal_year}-${row.fiscal_period}`),sec:row}))
+  const compared=[...periods.entries()].sort(([,a],[,b])=>(b.yahoo?.period_end||b.sec?.period_end||'').localeCompare(a.yahoo?.period_end||a.sec?.period_end||'')).slice(0,4)
+  const secAsFinancial=(row:SecFin):Financial=>({fiscal_year:row.fiscal_year,fiscal_period:row.fiscal_period,period_end:row.period_end||'',filed_at:null,currency:row.currency,revenue:row.revenue,eps:row.eps_diluted,net_income:row.net_income,operating_income:row.operating_income,gross_margin:row.revenue!=null&&row.revenue!==0&&row.gross_profit!=null?row.gross_profit/row.revenue*100:null,net_margin:row.revenue!=null&&row.revenue!==0&&row.net_income!=null?row.net_income/row.revenue*100:null,operating_cash_flow:row.operating_cash_flow,free_cash_flow:null,source:row.source,synced_at:row.synced_at})
+  const financialCells=(row:Financial,other?:Financial)=>{
+    const values=[row.revenue,row.net_income,row.operating_income,row.eps,row.net_margin,row.operating_cash_flow]
+    const otherValues=[other?.revenue,other?.net_income,other?.operating_income,other?.eps,other?.net_margin,other?.operating_cash_flow]
+    return values.map((value,index)=>{const different=providerValuesDiffer(value,otherValues[index]??null);return <span className={different?'source-different':''} title={different?'Yahoo 与 SEC 披露存在超过 1% 的差异':undefined} key={index}>{index===4?(value==null?'数据不足':value.toFixed(1)+'%'):fmtNum(value)}</span>})
+  }
   return <div className="news-center">
     <SnapshotTickerBar section="fundamentals" tickers={tickers} current={current} onSelect={setActive}/>
     {!current&&<div className="empty">搜索并选择证券，临时查看基本面数据。</div>}
     {fundamentals.data&&<div className={`source-notice ${fundamentals.data.source_support.yahoo?'source-ok':'source-error'}`}><span><i aria-hidden="true"/>{fundamentals.data.source_support.yahoo?'Yahoo 实时基本面已连接':'Yahoo 基本面暂不可用'}</span><time>{formatDate(fundamentals.data.as_of)}</time>{!fundamentals.data.source_support.finnhub&&<small>Finnhub 仅作可选补充，不影响下方 Yahoo 数据。</small>}</div>}
     <div className="section-title"><h2>{current} 基本面指标</h2></div>
     <div className="metric-grid">{fundamentals.data?.metrics.map(m=><div className="metric-card" key={m.label}><span>{m.label}</span><strong>{fmtMetric(m.value)}</strong>{m.source&&<em>{m.source==='yahoo'?'Yahoo':'Finnhub'}</em>}</div>)}{fundamentals.isError&&<div className="empty">基本面数据暂不可用。</div>}</div>
+    <section className="fundamental-sec-preview"><div className="section-title"><div><p>SEC DISCLOSURES</p><h2>重要 SEC 公告</h2></div><button onClick={onOpenSec}>进入公告详情 <span>→</span></button></div>{secEvents.isLoading?<div className="empty">正在读取 SEC 公告…</div>:priorityEvents.length?<div className="priority-sec-list">{priorityEvents.map(event=><article className={`sec-${event.priority}`} key={event.id}><div><span className={`sec-prio ${event.priority}`}>{event.priority==='urgent'?'紧急':'重要'}</span><b>{event.item_label}</b><small>{event.form} · Item {event.item_code} · {event.filing_date||'日期未披露'}</small></div><em>来源：SEC EDGAR</em></article>)}</div>:<div className="empty">暂无紧急或重要 SEC 公告。</div>}</section>
     {!!current&&<OwnershipSection symbol={current}/>}
     <div className="section-title"><h2>分析师评级</h2></div>
     {r?<RatingGauge r={r}/>:<div className="empty">暂无分析师评级。</div>}
-    <div className="section-title"><h2>近四季度财报（SEC 单季，已去累计）</h2></div>
-    <div className="table"><div className="table-head fin"><span>季度</span><span>报告期</span><span>营收</span><span>净利润</span><span>营业利润</span><span>EPS</span><span>净利率</span><span>经营现金流</span></div>{financials.data?.map(f=><div className="table-row fin" key={`${f.fiscal_year}${f.fiscal_period}`}><b>{f.fiscal_year} {f.fiscal_period}</b><span>{f.period_end}</span><span>{fmtNum(f.revenue)}</span><span>{fmtNum(f.net_income)}</span><span>{fmtNum(f.operating_income)}</span><span>{fmtNum(f.eps)}</span><span>{f.net_margin==null?'数据不足':f.net_margin.toFixed(1)+'%'}</span><span>{fmtNum(f.operating_cash_flow)}</span></div>)}{!financials.data?.length&&<div className="empty">暂无财报数据。</div>}</div>
+    <div className="section-title"><div><h2>近四季度财务数据</h2><small>Yahoo 与 SEC 同期数据并列；黄色表示两来源差异超过 1%。</small></div></div>
+    <div className="table"><div className="table-head fin"><span>季度 / 来源</span><span>报告期</span><span>营收</span><span>净利润</span><span>营业利润</span><span>EPS</span><span>净利率</span><span>经营现金流</span></div>{compared.flatMap(([period,pair])=>{const sec=pair.sec&&secAsFinancial(pair.sec);return [pair.yahoo&&<div className="table-row fin" key={`${period}-yahoo`}><b>{period}<small className="source-badge">Yahoo</small></b><span>{pair.yahoo.period_end}</span>{financialCells(pair.yahoo,sec||undefined)}</div>,sec&&<div className="table-row fin" key={`${period}-sec`}><b>{period}<small className="source-badge sec">SEC EDGAR</small></b><span>{sec.period_end||'—'}</span>{financialCells(sec,pair.yahoo)}</div>]})}{!compared.length&&<div className="empty">暂无 Yahoo 或 SEC 财务数据。</div>}</div>
   </div>
 }
 
 function FinancialStatementsCenter({tickers,onStatementMetric,active,setActive}:{tickers:string[];onStatementMetric:(metric:StatementMetric)=>void;active:string;setActive:(ticker:string)=>void}) {
   const [frequency,setFrequency] = useState<'annual'|'quarterly'>('annual')
   const current = active||tickers[0]||''
-  const statements = useQuery({queryKey:['financial-statements',current,frequency],queryFn:()=>api<FinancialStatement[]>(`/financial-statements?ticker=${current}&frequency=${frequency}`),enabled:!!current,refetchInterval:current?5000:false})
+  const statements = useQuery({queryKey:['financial-statements',current,frequency],queryFn:()=>api<FinancialStatement[]>(`/financial-statements?ticker=${current}&frequency=${frequency}`),enabled:!!current,staleTime:5*60_000})
   return <div className="news-center"><SnapshotTickerBar section="financials" tickers={tickers} current={current} onSelect={setActive}/>{!current?<div className="empty">搜索并选择证券，临时查看财务报表。</div>:<FinancialStatementsPanel frequency={frequency} setFrequency={setFrequency} rows={statements.data||[]} loading={statements.isLoading} onMetric={onStatementMetric}/>}</div>
 }
 
@@ -836,7 +847,7 @@ function SecCenter({tickers,active,setActive}:{tickers:string[];active:string;se
 
 function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;setActive:(ticker:string)=>void}) {
   const [weeklyOpen,setWeeklyOpen] = useState(false)
-  const [scope,setScope] = useState<'market'|'company'>('market')
+  const [scope,setScope] = useState<'market'|'company'>('company')
   const client = useQueryClient()
   const current = active||tickers[0]||''
   const companyNews = useQuery({queryKey:['news',current],queryFn:()=>api<NewsRow[]>(`/news?ticker=${current}`),enabled:scope==='company'&&!!current,refetchInterval:q=>(q.state.data as NewsRow[]|undefined)?.some(n=>n.ai_summary_status==='queued'||n.ai_summary_status==='processing')?2000:false})
@@ -853,6 +864,7 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
   return <div className="news-center">
     <SnapshotTickerBar section="news" tickers={tickers} current={scope==='company'?current:''} onSelect={ticker=>{setActive(ticker);setScope('company')}} leading={<button className={`market-entry ${scope==='market'?'active':''}`} onClick={()=>setScope('market')}>全市场</button>}/>
     {scope==='company'&&!current&&<div className="empty">搜索并选择证券，临时查看新闻。</div>}
+    {scope==='company'&&current&&<section className="news-sentiment-preview"><div className="section-title"><div><p>SENTIMENT PREVIEW</p><h2>舆情预览</h2></div></div><SentimentModule ticker={current} compact/></section>}
     {scope==='company'&&<><div className="section-title"><h2>每日定档（Luna 去重）</h2><button onClick={()=>setWeeklyOpen(true)}>历史每周新闻</button></div>
     {archive.data?<article className="report-detail"><p className="eyebrow">{archive.data.market_date} · v{archive.data.version} · {archive.data.model}</p><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{keyFactsOnly(archive.data.content)}</ReactMarkdown></div></article>:<div className="empty">尚未生成每日定档。</div>}
     <Sheet open={weeklyOpen} onClose={()=>setWeeklyOpen(false)} title={`${current} 历史每周新闻`}>
@@ -875,78 +887,21 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
   </div>
 }
 
-const PIE_COLORS = ['#4f7cff','#ff6b6b','#22c55e','#f59e0b','#a855f7','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6','#eab308','#8b5cf6']
-const CAT_NAMES:Record<string,string> = {stock:'股票',etf:'ETF/基金',preferred:'优先股',corp_bond:'企业债',muni_bond:'市政债',treasury:'国债',option:'期权',other:'其他'}
-
-function PieChart({slices}:{slices:{label:string;value:number;color:string}[]}) {
-  const total = slices.reduce((s,x)=>s+x.value,0)
-  if(total<=0) return <div className="empty">暂无持仓数据。</div>
-  const R=90, C=100
-  let acc=0
-  const arcs = slices.map(s=>{
-    const frac=s.value/total
-    const a0=acc*2*Math.PI-Math.PI/2, a1=(acc+frac)*2*Math.PI-Math.PI/2
-    acc+=frac
-    const x0=C+R*Math.cos(a0), y0=C+R*Math.sin(a0), x1=C+R*Math.cos(a1), y1=C+R*Math.sin(a1)
-    const large=frac>0.5?1:0
-    return {d:`M${C},${C} L${x0},${y0} A${R},${R} 0 ${large},1 ${x1},${y1} Z`,color:s.color,frac}
-  })
-  return <svg viewBox="0 0 200 200" className="pie-svg" width="200" height="200">
-    {arcs.map((a,i)=><path key={i} d={a.d} fill={a.color} stroke="#fff" strokeWidth="1"/>)}
-  </svg>
-}
-
-function CongressCenter() {
+function CongressSettings() {
   const client = useQueryClient()
-  const [slug,setSlug] = useState('')
   const [q,setQ] = useState('')
   const [doSearch,setDoSearch] = useState('')
   const figures = useQuery({queryKey:['congress-figures'],queryFn:()=>api<Figure[]>('/congress/figures')})
-  const current = slug || figures.data?.[0]?.slug || ''
-  const detail = useQuery({queryKey:['congress-figure',current],queryFn:()=>api<FigureDetail>(`/congress/figure/${current}`),enabled:!!current})
   const search = useQuery({queryKey:['congress-search',doSearch],queryFn:()=>api<FilerHit[]>(`/congress/search?q=${encodeURIComponent(doSearch)}`),enabled:doSearch.length>=2})
   const subscribe = useMutation({mutationFn:(h:FilerHit)=>post('/congress/subscribe',{filer_id:h.filer_id,full_name:h.full_name}),onSuccess:()=>{setDoSearch('');setQ('');client.invalidateQueries({queryKey:['congress-figures']})}})
-  const unsub = useMutation({mutationFn:(s:string)=>api(`/congress/figure/${s}`,{method:'DELETE'}),onSuccess:()=>{setSlug('');client.invalidateQueries({queryKey:['congress-figures']})}})
+  const unsub = useMutation({mutationFn:(slug:string)=>api(`/congress/figure/${slug}`,{method:'DELETE'}),onSuccess:()=>client.invalidateQueries({queryKey:['congress-figures']})})
   const partyName:Record<string,string> = {D:'民主党',R:'共和党',I:'独立'}
-  const fmtMoney = (v:number) => v>=1e8?`$${(v/1e8).toFixed(2)}亿`:v>=1e4?`$${(v/1e4).toFixed(1)}万`:`$${v.toFixed(0)}`
-  return <div className="news-center">
-    <div className="news-tickers">{figures.data?.map(f=><button key={f.slug} className={f.slug===current?'active':''} onClick={()=>setSlug(f.slug)}>{f.display_name}{f.is_seed?'':' ×'}</button>)}</div>
-    <form className="add-form" onSubmit={e=>{e.preventDefault();setDoSearch(q.trim())}}><div><label>订阅其他政客</label><input value={q} onChange={e=>setQ(e.target.value)} placeholder="输入名字，如 Pelosi、Tuberville" maxLength={64}/></div><button>搜索</button></form>
+  return <details className="settings-card congress-settings"><summary>名人监控</summary><p>这里只管理关注对象。持仓估算质量不足，暂不在产品中展示。</p>
+    <div className="news-tickers">{figures.data?.map(figure=><button key={figure.slug} disabled={figure.is_seed||unsub.isPending} onClick={()=>unsub.mutate(figure.slug)}>{figure.display_name}{figure.is_seed?' · 默认':' ×'}</button>)}</div>
+    <form className="add-form" onSubmit={event=>{event.preventDefault();setDoSearch(q.trim())}}><div><label>添加关注对象</label><input value={q} onChange={event=>setQ(event.target.value)} placeholder="输入名字，如 Pelosi、Tuberville" maxLength={64}/></div><button>搜索</button></form>
     {search.data&&search.data.length>0&&<div className="search-hits">{search.data.map(h=><button key={h.filer_id} className="hit-row" onClick={()=>subscribe.mutate(h)} disabled={subscribe.isPending}><b>{h.full_name}</b><span>{h.chamber||h.branch} · {partyName[h.party||'']||h.party||'—'} {h.state||''}</span><em>{h.trade_count??0} 笔 · 点击订阅</em></button>)}</div>}
     {doSearch.length>=2&&search.data?.length===0&&<div className="empty">未找到匹配的政客。</div>}
-    <CongressDetail detail={detail.data} loading={detail.isLoading} onUnsub={s=>unsub.mutate(s)} fmtMoney={fmtMoney}/>
-  </div>
-}
-
-function CongressDetail({detail,loading,onUnsub,fmtMoney}:{detail:FigureDetail|undefined;loading:boolean;onUnsub:(s:string)=>void;fmtMoney:(v:number)=>string}) {
-  if(loading) return <div className="empty">加载中…</div>
-  if(!detail) return <div className="empty">请选择一位名人。</div>
-  const pct = detail.positions_are_percent
-  const total = detail.positions.reduce((s,p)=>s+p.value,0)
-  const slices = detail.positions.map((p,i)=>({label:p.ticker||p.asset_name,value:p.value,color:PIE_COLORS[i%PIE_COLORS.length]}))
-  const typeName:Record<string,string> = {'Purchase':'买入','Sale (Full)':'清仓','Sale (Partial)':'部分卖出','Exchange':'换股'}
-  const typeCls = (t:string|null) => (t||'').includes('Purchase')?'positive':(t||'').includes('Sale')?'negative':''
-  return <>
-    <div className="section-title"><h2>{detail.display_name}</h2>{!detail.is_seed&&<button className="danger" onClick={()=>onUnsub(detail.slug)}>取消订阅</button>}</div>
-    {detail.note&&<small className="chart-note">{detail.note}</small>}
-    {detail.is_seed&&detail.positions.length>0&&<>
-      <div className="explainer"><b>关于这张持仓饼图</b><p>数据基于 STOCK Act / 年度披露的<b>金额区间中点估算</b>，{pct?'为基金持仓占比（%）':'并叠加基线日期后的逐笔交易（买入加、部分卖出减、清仓归零）'}。<b>这是估算，非实际市值持仓</b>，仅供了解配置结构与方向。</p></div>
-      <div className="pie-wrap">
-        <PieChart slices={slices}/>
-        <div className="pie-legend">{slices.slice(0,14).map((s,i)=>{const p=detail.positions[i];return <div className="legend-row" key={i}><i style={{background:s.color}}/><b>{s.label}</b><span>{CAT_NAMES[p.category]||p.category}</span><em>{pct?`${s.value.toFixed(2)}%`:`${fmtMoney(s.value)} · ${(s.value/total*100).toFixed(1)}%`}</em></div>})}</div>
-      </div>
-    </>}
-    {detail.moves&&<div className="moves-board"><div className="moves-col"><h3>近30天加仓 ⬆️</h3>{detail.moves.buys.map((m,i)=><div key={i} className="move-row positive">{m}</div>)}</div><div className="moves-col"><h3>近30天减仓 ⬇️</h3>{detail.moves.sells.map((m,i)=><div key={i} className="move-row negative">{m}</div>)}</div></div>}
-    <div className="section-title"><h2>交易动态（政治家时间轴）</h2></div>
-    {detail.trades.length===0&&<div className="empty">{detail.kind==='fund_manager'?'该名人无国会披露交易。':'暂无交易记录，稍后同步。'}</div>}
-    <div className="timeline">{detail.trades.map(t=><div className="tl-row" key={t.id}>
-      <span className="tl-date">{t.transaction_date||t.filing_date||'—'}{t.is_late&&<em className="late" title="逾期申报"> 迟报</em>}</span>
-      <b className="tl-ticker">{t.ticker||'—'}</b>
-      <span className={`tl-type ${typeCls(t.transaction_type)}`}>{typeName[t.transaction_type||'']||t.transaction_type||'—'}</span>
-      <span className="tl-amount">{t.amount_label||'—'}</span>
-      <span className="tl-asset">{t.asset_name||''}</span>
-    </div>)}</div>
-  </>
+  </details>
 }
 
 function TrashIcon() { return <svg className="trash-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/></svg> }
@@ -1145,35 +1100,14 @@ function JournalSection({username}:{username:string}) {
   </div>
 }
 
-// ── 管理员用户管理 ────────────────────────────────────────────────
-type UserRow = {id:number;username:string;role:string;status:string;created_at:string}
 type FmpStatus = {quota_day:string;requests_used:number;requests_remaining:number;usable_limit:number;last_processed_ticker:string|null;pending_profile_count:number;pending_history_count:number;pending_analysis_count:number;failed_item_count:number;quota_timezone:string}
 
-function AdminPanel() {
+function AdminOperationsPanel() {
   const client = useQueryClient()
-  const users = useQuery({queryKey:['admin-users'],queryFn:()=>api<UserRow[]>('/auth/admin/users')})
   const fmp = useQuery({queryKey:['admin-fmp-status'],queryFn:()=>api<FmpStatus>('/admin/fmp/status'),refetchInterval:60_000})
   const syncFmp = useMutation({mutationFn:()=>post('/admin/fmp/sync',{}),onSuccess:()=>setTimeout(()=>client.invalidateQueries({queryKey:['admin-fmp-status']}),1500)})
-  const approve = useMutation({mutationFn:(id:number)=>post<unknown>(`/auth/admin/users/${id}/approve`,{}),onSuccess:()=>client.invalidateQueries({queryKey:['admin-users']})})
-  const del = useMutation({mutationFn:(id:number)=>api<unknown>(`/auth/admin/users/${id}`,{method:'DELETE'}),onSuccess:()=>client.invalidateQueries({queryKey:['admin-users']})})
-  const statusLabel:Record<string,string> = {active:'已激活',pending:'待审核'}
   return <div style={{marginTop:32}}>
     <div className="section-title"><div><p>FMP · UTC QUOTA</p><h2>资料与技术分析同步</h2></div><button onClick={()=>syncFmp.mutate()} disabled={syncFmp.isPending}>{syncFmp.isPending?'正在排队…':'排队同步'}</button></div>
     {fmp.data?<div className="technical-metrics admin-fmp"><div><span>今日已用</span><b>{fmp.data.requests_used} / {fmp.data.usable_limit}</b></div><div><span>剩余请求</span><b>{fmp.data.requests_remaining}</b></div><div><span>资料待处理</span><b>{fmp.data.pending_profile_count}</b></div><div><span>行情待处理</span><b>{fmp.data.pending_history_count}</b></div><div><span>分析待处理</span><b>{fmp.data.pending_analysis_count}</b></div><div><span>失败项目</span><b>{fmp.data.failed_item_count}</b><small>{fmp.data.last_processed_ticker&&`最近 ${fmp.data.last_processed_ticker}`}</small></div></div>:<div className="empty">正在读取 FMP 配额状态…</div>}
-    <div className="section-title"><h2>用户管理</h2></div>
-    <div className="table">
-      <div className="table-head"><span>用户名</span><span>角色</span><span>状态</span><span>注册时间</span><span/></div>
-      {users.data?.map(u=><div className="table-row" key={u.id}>
-        <b>{u.username}</b>
-        <span>{u.role==='admin'?'管理员':'普通用户'}</span>
-        <span className={u.status==='active'?'positive':''}>{statusLabel[u.status]||u.status}</span>
-        <span>{new Date(u.created_at).toLocaleDateString('zh-CN')}</span>
-        <span style={{display:'flex',gap:6}}>
-          {u.status==='pending'&&<button onClick={()=>approve.mutate(u.id)}>激活</button>}
-          {u.role!=='admin'&&<button className="danger" onClick={()=>del.mutate(u.id)}>删除</button>}
-        </span>
-      </div>)}
-      {!users.data?.length&&<div className="empty">暂无用户数据。</div>}
-    </div>
   </div>
 }
