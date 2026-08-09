@@ -181,7 +181,7 @@ def _chart_series_payload(rows: list[dict], time_key: str) -> dict:
 def build_weekly_chart_data(rows: Iterable[Any], source: str | None = None) -> dict:
     """Build the interactive-chart payload from cached daily history only."""
     cached_rows = list(rows)
-    weekly = aggregate_weekly(cached_rows)[-156:]
+    weekly = aggregate_weekly(cached_rows)
     if not weekly:
         return {
             "chart_data_status": "insufficient",
@@ -197,7 +197,7 @@ def build_weekly_chart_data(rows: Iterable[Any], source: str | None = None) -> d
         }
 
     daily = []
-    for item in cached_rows[-780:]:
+    for item in cached_rows:
         try:
             day = item["date"] if isinstance(item, dict) else item.date
             get = item.get if isinstance(item, dict) else lambda key: getattr(item, key)
@@ -218,7 +218,7 @@ def build_weekly_chart_data(rows: Iterable[Any], source: str | None = None) -> d
             values["close"],
         ):
             daily.append(values)
-    monthly = aggregate_monthly(cached_rows)[-120:]
+    monthly = aggregate_monthly(cached_rows)
     weekly_payload = _chart_series_payload(weekly, "week")
     chart_series = {
         "day": _chart_series_payload(daily, "time"),

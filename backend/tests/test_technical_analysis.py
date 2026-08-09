@@ -81,7 +81,8 @@ def test_insufficient_history_records_omissions():
 
 
 def test_weekly_chart_data_uses_business_days_and_backend_ma_values():
-    payload = build_weekly_chart_data(candles(420), "fmp")
+    rows = candles(2000)
+    payload = build_weekly_chart_data(rows, "fmp")
     assert payload["chart_data_status"] == "ready"
     assert payload["chart_data_source"] == "fmp"
     assert payload["weekly"]
@@ -100,8 +101,11 @@ def test_weekly_chart_data_uses_business_days_and_backend_ma_values():
     )[19]
     assert set(payload["chart_series"]) == {"day", "week", "month"}
     assert payload["chart_series"]["week"]["candles"] == payload["weekly"]
-    assert payload["chart_series"]["day"]["candles"]
-    assert payload["chart_series"]["month"]["candles"]
+    assert len(payload["chart_series"]["day"]["candles"]) == len(rows)
+    assert len(payload["weekly"]) == len(aggregate_weekly(rows)) > 156
+    assert payload["chart_series"]["day"]["candles"][0]["time"] == rows[0]["date"].isoformat()
+    assert payload["weekly"][0]["time"] == aggregate_weekly(rows)[0]["week"].isoformat()
+    assert payload["chart_series"]["month"]["candles"][0]["time"] == "2024-01-01"
 
 
 def test_weekly_chart_data_explicitly_reports_missing_history():

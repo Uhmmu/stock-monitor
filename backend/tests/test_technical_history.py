@@ -103,6 +103,13 @@ def test_sync_history_is_idempotent_and_generates(db, monkeypatch):
     assert row is not None and row.status == "ready"
     assert row.analysis["source"] == "yahoo"
 
+    # A rolling upstream response may omit old candles; the local archive must retain them.
+    monkeypatch.setattr(
+        market_data.yf, "Ticker", lambda symbol: SimpleNamespace(history=lambda **kw: _frame(rows[-2:]))
+    )
+    technical_analysis.sync_fallback_history(db, "aapl", today=date(2025, 12, 31))
+    assert db.scalar(select(HistoricalPrice.date).order_by(HistoricalPrice.date)) == date(2024, 1, 1)
+
 
 def test_fmp_source_takes_priority_over_yahoo(db, monkeypatch):
     """同一标的同时存在 fmp 与 yahoo 历史时，generate 应优先使用 fmp。"""
