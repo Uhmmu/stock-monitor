@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import app.services.llm as llm
@@ -32,43 +33,139 @@ def test_unknown_report_type_uses_safe_default():
     assert "输入未提供" in prompt
 
 
-def test_news_summary_uses_low_latency_translation_stack(monkeypatch):
+def _news_payload():
+    return {
+        "summary_zh": "公司公布了新的经营安排。",
+        "key_points": ["公司公布经营安排", "报道说明执行范围", "原文未提供行情数据"],
+        "companies": ["Example Corp"],
+        "tickers": ["EXM"],
+        "industries": ["Technology"],
+        "event_type": "management",
+        "sentiment": "neutral",
+        "market_impact": "数据不足",
+        "importance": 60,
+        "source_quality": "model-must-not-infer",
+        "confidence": 0.7,
+        "facts": ["公司公布了新的经营安排。"],
+    }
+
+
+def test_news_summary_uses_luna_structured_json_contract(monkeypatch):
     captured = {}
 
     class Completions:
         def create(self, **kwargs):
             captured.update(kwargs)
             return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content="- 中文要点"))]
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content=json.dumps(_news_payload()))
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=11, completion_tokens=7, total_tokens=18),
             )
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
-    monkeypatch.setattr(llm, "_translation_client_and_model", lambda: (client, "haiku-test"))
+    monkeypatch.setattr(llm, "_client_and_model", lambda tier: (client, "gpt-5.6-luna"))
 
-    summary, model = llm.summarize_news("Title", "Article body")
+    analysis, model, usage = llm.summarize_news("Title", "Article body", source_quality="medium")
 
-    assert summary == "- 中文要点"
-    assert model == "haiku-test"
+    assert analysis["summary_zh"] == "公司公布了新的经营安排。"
+    assert analysis["source_quality"] == "medium"
+    assert analysis["importance"] == 60
+    assert model == "gpt-5.6-luna"
+    assert usage == {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}
     assert captured["temperature"] == 0
+    schema = captured["response_format"]
+    assert schema["type"] == "json_schema"
+    assert schema["json_schema"]["strict"] is True
+    assert "summary_zh" in schema["json_schema"]["schema"]["required"]
     assert "Article body" in captured["messages"][1]["content"]
+    assert "来源质量：medium" in captured["messages"][1]["content"]
 
 
-def test_news_summary_retries_when_provider_ignores_chinese_requirement(monkeypatch):
-    replies = iter(["- English summary only", "- 中文要点已经修正"])
-    calls = []
+def test_news_summary_uses_key_points_when_provider_omits_facts(monkeypatch):
+    payload = _news_payload()
+    payload.pop("facts")
 
     class Completions:
         def create(self, **kwargs):
-            calls.append(kwargs)
             return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content=next(replies)))]
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))],
             )
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
-    monkeypatch.setattr(llm, "_translation_client_and_model", lambda: (client, "haiku-test"))
+    monkeypatch.setattr(llm, "_client_and_model", lambda tier: (client, "gpt-5.6-luna"))
 
-    summary, _ = llm.summarize_news("Title", "Article body")
+    analysis, _, _ = llm.summarize_news("Title", "Article body")
 
-    assert summary == "- 中文要点已经修正"
-    assert len(calls) == 2
-    assert "不是中文" in calls[1]["messages"][-1]["content"]
+    assert analysis["facts"] == payload["key_points"]
+
+
+def test_news_summary_rejects_english_summary(monkeypatch):
+    payload = _news_payload()
+    payload["summary_zh"] = "English summary only"
+
+    class Completions:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))],
+            )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    monkeypatch.setattr(llm, "_client_and_model", lambda tier: (client, "gpt-5.6-luna"))
+
+    try:
+        llm.summarize_news("Title", "Article body")
+    except ValueError as exc:
+        assert "中文摘要" in str(exc)
+    else:
+        raise AssertionError("English-only summary must fail validation")
+
+
+def test_news_summary_rejects_nonstandard_enums(monkeypatch):
+    payload = _news_payload()
+    payload["event_type"] = "company_update"
+
+    class Completions:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))],
+            )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    monkeypatch.setattr(llm, "_client_and_model", lambda tier: (client, "gpt-5.6-luna"))
+
+    analysis, _, _ = llm.summarize_news("Title", "Article body")
+
+    assert analysis["event_type"] == "other"
+
+
+def test_news_summary_normalizes_compatible_endpoint_schema_drift(monkeypatch):
+    payload = {
+        "title": "extra field",
+        "summary_zh": "公司公布了新的经营安排。",
+        "key_points": ["要点一", "要点二"],
+        "market_impact": {"analysis": "原文未提供行情数据"},
+        "importance": "61.4",
+        "confidence": "0.7",
+        "facts": [f"事实 {index}" for index in range(14)],
+        "source_quality": "model-value",
+    }
+
+    class Completions:
+        def create(self, **kwargs):
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    monkeypatch.setattr(llm, "_client_and_model", lambda tier: (client, "gpt-5.6-luna"))
+
+    analysis, _, _ = llm.summarize_news("Title", "Article body", source_quality="low")
+
+    assert analysis["companies"] == []
+    assert analysis["event_type"] == "other"
+    assert analysis["sentiment"] == "neutral"
+    assert analysis["market_impact"] == "原文未提供行情数据"
+    assert analysis["importance"] == 61
+    assert len(analysis["facts"]) == 12
+    assert analysis["source_quality"] == "low"

@@ -70,6 +70,8 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""
     archive_dir: str = "/data/archive"
     news_poll_minutes: int = 15
+    news_enrichment_batch_size: int = 20
+    news_enrichment_max_attempts: int = 3
     news_relevance_threshold: float = 0.15
     marketaux_api_key: str = ""
     marketaux_enabled: bool = True

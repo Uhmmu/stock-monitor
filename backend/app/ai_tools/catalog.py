@@ -93,6 +93,8 @@ class ComparePriceArguments(SymbolsArguments):
 class NewsArguments(DateArguments):
     symbol: str | None = Field(None, max_length=32); symbols: list[str] = Field(default_factory=list, max_length=20)
     days: int = Field(30, ge=1, le=365); provider: str | None = Field(None, max_length=100)
+    industry: str | None = Field(None, max_length=192); event_type: str | None = Field(None, max_length=32)
+    sentiment: str | None = Field(None, max_length=16); min_importance: int | None = Field(None, ge=0, le=100)
     include_market_news: bool = False; limit: int = Field(20, ge=1, le=50)
     @field_validator("symbol")
     @classmethod
@@ -102,7 +104,9 @@ class NewsArguments(DateArguments):
     def clean_symbols(cls, value): return _symbols(value)
 class SearchNewsArguments(DateArguments):
     query: str = Field(min_length=1, max_length=500); symbols: list[str] = Field(default_factory=list, max_length=20)
-    provider: str | None = Field(None, max_length=100); limit: int = Field(20, ge=1, le=50)
+    provider: str | None = Field(None, max_length=100); industry: str | None = Field(None, max_length=192)
+    event_type: str | None = Field(None, max_length=32); sentiment: str | None = Field(None, max_length=16)
+    min_importance: int | None = Field(None, ge=0, le=100); limit: int = Field(20, ge=1, le=50)
     @field_validator("symbols")
     @classmethod
     def clean(cls, value): return _symbols(value)
@@ -307,7 +311,10 @@ def dispatch(name: str, args: ToolArguments, gw: ResearchGateway) -> AdapterResu
     if name in {"get_latest_news","search_news"}:
         if name=="get_latest_news": syms=list(dict.fromkeys(([args.symbol] if args.symbol else [])+args.symbols)); start=args.start_date or today-timedelta(days=args.days); query=None; include=args.include_market_news
         else: syms=args.symbols; start=args.start_date or today-timedelta(days=30); query=args.query; include=False
-        r=gw.news(syms,query,start,args.end_date or today,args.provider,include,1,args.limit); return from_research(r,_count_summary("stored news items",r))
+        r=gw.news(syms,query,start,args.end_date or today,args.provider,include,1,args.limit,
+                  getattr(args,"industry",None),getattr(args,"event_type",None),
+                  getattr(args,"sentiment",None),getattr(args,"min_importance",None))
+        return from_research(r,_count_summary("stored news items",r))
     if name == "get_news_detail": return from_research(gw.news_detail(args.news_id),f"Returned stored metadata and bounded detail for news item {args.news_id}.")
     if name == "get_news_archives":
         r=gw.archives(args.symbol,args.period,args.start_date,args.end_date,1,args.limit); return from_research(r,_count_summary("persisted news archives",r))

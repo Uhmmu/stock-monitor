@@ -1,4 +1,8 @@
+import json
+from typing import Any, Literal
+
 from openai import OpenAI
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import get_settings
 
@@ -43,7 +47,7 @@ MOVEMENT_SYSTEM_PROMPT = """# Role
 - **支撑/阻力位预判**：仅在资料充分时给出，否则说明数据不足。
 - **核心风险点**：列出主要风险。
 
-如果资讯中找不到合理解释，必须明确写：“当前舆情与公告未见明显利好/利空，本次异动大概率由盘中资金博弈或游资短线行为驱动”。
+如果资料中找不到可靠解释，必须明确说明“未发现可验证的直接催化，当前证据不足以归因”，不得把资金博弈写成既定原因。
 """
 
 PREMARKET_SYSTEM_PROMPT = """# Role
@@ -188,16 +192,107 @@ WEEKLY_ARCHIVE_SYSTEM_PROMPT = """# Role
 - 分条列出可追溯到日期的客观事实。
 """
 
+
+class NewsAnalysis(BaseModel):
+    """Validated, fact-bounded analysis stored with a fetched article."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    summary_zh: str = Field(min_length=1, max_length=4000)
+    key_points: list[str] = Field(max_length=5)
+    companies: list[str] = Field(max_length=20)
+    tickers: list[str] = Field(max_length=20)
+    industries: list[str] = Field(max_length=20)
+    event_type: Literal[
+        "earnings",
+        "guidance",
+        "m&a",
+        "product",
+        "ai",
+        "regulation",
+        "litigation",
+        "macro",
+        "analyst",
+        "financing",
+        "partnership",
+        "supply_chain",
+        "geopolitical",
+        "management",
+        "other",
+    ]
+    sentiment: Literal["positive", "neutral", "negative", "mixed"]
+    market_impact: str = Field(min_length=1, max_length=1500)
+    importance: int = Field(ge=0, le=100)
+    source_quality: str = Field(min_length=1, max_length=32)
+    confidence: float = Field(ge=0, le=1)
+    facts: list[str] = Field(max_length=12)
+
+
+NEWS_ANALYSIS_JSON_SCHEMA = NewsAnalysis.model_json_schema()
+
 NEWS_SUMMARY_SYSTEM_PROMPT = """# Role
-你是一位客观的财经新闻摘要员。请对单条新闻做中文要点摘要。
+你是一位客观的财经新闻事实分析员。请对单条新闻做严格、可追溯的中文结构化分析。
 
 # 要求
-- 只依据给定原文，不得补充原文没有的信息或行情数据。
-- 用 3-5 条要点概括核心事实，保持中立，不给投资建议。
-- 若原文信息不足，明确写“原文信息有限”。
-- 无论标题和原文使用何种语言，最终答案必须使用简体中文；公司名、证券代码和必要专有名词可保留原文。
-- 只输出 Markdown 正文，不要代码块包裹。
+- 只依据给定原文和标题，不得补充原文没有的信息、价格、行情数据或因果结论。
+- `facts` 必须是原文明确陈述的原子事实；无法确认的内容写“数据不足”，不得把推断写成事实。
+- `key_points` 用 3-5 条简体中文概括事实；`summary_zh` 必须是简体中文。
+- `market_impact` 只描述原文明确提及的影响；没有依据时写“数据不足”。
+- `importance` 为 0 到 100 的整数，`confidence` 为 0 到 1 的数值；来源质量以用户提供的值为准。
+- 数组没有匹配对象时返回空数组；不得猜测公司、证券代码或行业。
+- 只输出符合 JSON Schema 的 JSON 对象，不要 Markdown、代码块或额外文字。
 """
+
+
+_NEWS_EVENT_TYPES = set(NewsAnalysis.model_fields["event_type"].annotation.__args__)
+_NEWS_SENTIMENTS = set(NewsAnalysis.model_fields["sentiment"].annotation.__args__)
+
+
+def _news_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        return "；".join(text for item in value.values() if (text := _news_text(item)))
+    if isinstance(value, list):
+        return "；".join(text for item in value if (text := _news_text(item)))
+    return str(value).strip() if value is not None else ""
+
+
+def _news_list(value: Any, limit: int) -> list[str]:
+    rows = value if isinstance(value, list) else [value] if value is not None else []
+    return list(dict.fromkeys(text for item in rows if (text := _news_text(item))))[:limit]
+
+
+def _normalize_news_analysis(payload: dict[str, Any], source_quality: str) -> dict[str, Any]:
+    """Adapt harmless schema drift without inventing facts missing from the source."""
+    facts = _news_list(payload.get("facts"), 12)
+    key_points = _news_list(payload.get("key_points"), 5) or facts[:5]
+    importance = payload.get("importance", 0)
+    confidence = payload.get("confidence", 0)
+    try:
+        importance = round(float(importance))
+    except (TypeError, ValueError):
+        importance = 0
+    try:
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        confidence = 0
+    event_type = _news_text(payload.get("event_type")).casefold()
+    sentiment = _news_text(payload.get("sentiment")).casefold()
+    return {
+        "summary_zh": (_news_text(payload.get("summary_zh")) or "数据不足")[:4000],
+        "key_points": key_points,
+        "companies": _news_list(payload.get("companies"), 20),
+        "tickers": _news_list(payload.get("tickers"), 20),
+        "industries": _news_list(payload.get("industries"), 20),
+        "event_type": event_type if event_type in _NEWS_EVENT_TYPES else "other",
+        "sentiment": sentiment if sentiment in _NEWS_SENTIMENTS else "neutral",
+        "market_impact": (_news_text(payload.get("market_impact")) or "数据不足")[:1500],
+        "importance": max(0, min(100, importance)),
+        "source_quality": source_quality,
+        "confidence": max(0, min(1, confidence)),
+        "facts": facts or key_points,
+    }
 
 TRADE_LOG_SUMMARY_SYSTEM_PROMPT = """# Role
 你是一位严谨的交易复盘整理助手。请把用户输入的交易日志整理成更清晰的中文 Markdown 复盘。
@@ -273,26 +368,67 @@ def curate_weekly_news(ticker: str, week_label: str, evidence: str) -> tuple[str
     return response.choices[0].message.content or "", model
 
 
-def summarize_news(title: str, content: str) -> tuple[str, str]:
-    # 单篇新闻只需要客观归纳，复用低延迟的 Haiku 栈；深度报告仍走
-    # OpenAI medium/important 档。失败由持久任务状态呈现并允许用户重试。
-    client, model = _translation_client_and_model()
+def summarize_news(
+    title: str,
+    content: str,
+    *,
+    source_quality: str = "high",
+) -> tuple[dict[str, Any], str, dict[str, int]]:
+    """Return a strict, source-bounded news analysis using the Luna tier."""
+    client, model = _client_and_model("medium")
+    source_quality_value = str(source_quality or "").strip() or "unknown"
     messages = [
         {"role": "system", "content": NEWS_SUMMARY_SYSTEM_PROMPT},
-        {"role": "user", "content": f"请严格用简体中文总结。\n\n标题：{title}\n\n原文：\n{content}"},
+        {
+            "role": "user",
+            "content": (
+                f"来源质量：{source_quality_value}\n\n标题：{title}\n\n原文：\n{content}"
+            ),
+        },
     ]
-    response = client.chat.completions.create(model=model, messages=messages, temperature=0)
-    summary = (response.choices[0].message.content or "").strip()
-    if summary and not _contains_chinese(summary):
-        response = client.chat.completions.create(
-            model=model,
-            messages=[*messages, {"role": "assistant", "content": summary}, {"role": "user", "content": "上面的输出不是中文。请只返回简体中文 Markdown 要点，不要解释。"}],
-            temperature=0,
-        )
-        summary = (response.choices[0].message.content or "").strip()
-    if not summary or not _contains_chinese(summary):
-        raise ValueError("新闻 AI 总结未返回中文内容")
-    return summary, model
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=0,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "stock_monitor_news_analysis_v1",
+                "strict": True,
+                "schema": NEWS_ANALYSIS_JSON_SCHEMA,
+            },
+        },
+    )
+    raw_content = getattr(response.choices[0].message, "content", None)
+    try:
+        payload = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+        if not isinstance(payload, dict):
+            raise ValueError("新闻分析响应必须是 JSON 对象")
+        analysis = NewsAnalysis.model_validate(_normalize_news_analysis(payload, source_quality_value))
+    except (TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
+        raise ValueError("新闻结构化分析响应格式无效") from exc
+    if not _contains_chinese(analysis.summary_zh):
+        raise ValueError("新闻结构化分析未返回中文摘要")
+    usage = _response_usage(getattr(response, "usage", None))
+    return analysis.model_dump(mode="json"), model, usage
+
+
+def _response_usage(value: Any) -> dict[str, int]:
+    """Normalize OpenAI-compatible usage fields without requiring a response class."""
+    if value is None:
+        return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+    def read(name: str, fallback: int = 0) -> int:
+        raw = value.get(name, fallback) if isinstance(value, dict) else getattr(value, name, fallback)
+        try:
+            return max(0, int(raw or 0))
+        except (TypeError, ValueError):
+            return fallback
+
+    input_tokens = read("prompt_tokens", read("input_tokens"))
+    output_tokens = read("completion_tokens", read("output_tokens"))
+    total_tokens = read("total_tokens", input_tokens + output_tokens)
+    return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
 
 
 def _contains_chinese(value: str) -> bool:

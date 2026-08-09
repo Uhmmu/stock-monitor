@@ -64,7 +64,9 @@ class ResearchRepository:
         return self._page(query, m.TradeTransaction, offset, limit)
 
     def news(self, symbols: list[str], query_text: str | None, start: date | None, end: date | None,
-             provider: str | None, include_market: bool, offset: int, limit: int):
+             provider: str | None, include_market: bool, offset: int, limit: int,
+             industry: str | None = None, event_type: str | None = None,
+             sentiment: str | None = None, min_importance: int | None = None):
         query = select(m.NewsItem)
         scopes = ["company", "market"] if include_market else ["company"]
         query = query.where(m.NewsItem.scope.in_(scopes))
@@ -73,13 +75,24 @@ class ResearchRepository:
             query = query.where(or_(symbol_filter, m.NewsItem.scope == "market") if include_market else symbol_filter)
         if query_text:
             pattern = f"%{query_text.strip()}%"
-            query = query.where(or_(m.NewsItem.title.ilike(pattern), m.NewsItem.summary.ilike(pattern), m.NewsItem.ai_summary.ilike(pattern)))
+            query = query.where(or_(m.NewsItem.title.ilike(pattern), m.NewsItem.summary.ilike(pattern), m.NewsItem.ai_summary.ilike(pattern), m.NewsItem.topic.ilike(pattern)))
         if start:
             query = query.where(func.date(func.coalesce(m.NewsItem.published_at, m.NewsItem.found_at)) >= start)
         if end:
             query = query.where(func.date(func.coalesce(m.NewsItem.published_at, m.NewsItem.found_at)) <= end)
         if provider:
             query = query.where(m.NewsItem.provider == provider)
+        if industry and industry.strip():
+            pattern = f"%{industry.strip()}%"
+            query = query.outerjoin(m.StockProfile, m.StockProfile.ticker == m.NewsItem.ticker).outerjoin(
+                m.CompanyProfile, m.CompanyProfile.symbol == m.NewsItem.ticker,
+            ).where(or_(m.StockProfile.official_industry.ilike(pattern), m.CompanyProfile.industry.ilike(pattern)))
+        if event_type and event_type.strip():
+            query = query.where(m.NewsItem.ai_event_type.ilike(event_type.strip()))
+        if sentiment and sentiment.strip():
+            query = query.where(m.NewsItem.ai_sentiment.ilike(sentiment.strip()))
+        if min_importance is not None:
+            query = query.where(m.NewsItem.ai_importance >= min_importance)
         query = query.order_by(m.NewsItem.published_at.desc().nullslast(), m.NewsItem.found_at.desc(), m.NewsItem.id.desc())
         return self._page(query, m.NewsItem, offset, limit)
 

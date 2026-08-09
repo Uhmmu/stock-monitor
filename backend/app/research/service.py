@@ -188,15 +188,29 @@ class ResearchGateway:
                 "published_at": r.published_at, "found_at": r.found_at, "provider": r.provider, "source": r.source, "url": safe_external_url(r.url),
                 "topic": r.topic, "news_type": r.news_type, "importance_score": r.importance_score,
                 "quality_score": r.quality_score, "relevance_score": r.relevance_score, "sentiment_score": r.sentiment_score,
-                "ai_summary_status": r.ai_summary_status}
+                "content_fetch_method": r.content_fetch_method, "content_fetch_status": r.content_fetch_status,
+                "content_fetch_quality": r.content_fetch_quality, "content_fetched_at": r.content_fetched_at,
+                "ai_analysis": _bounded(r.ai_analysis), "ai_event_type": r.ai_event_type,
+                "ai_sentiment": r.ai_sentiment, "ai_importance": r.ai_importance,
+                "ai_market_impact": _bounded(r.ai_market_impact), "ai_summary_model": r.ai_summary_model,
+                "ai_summary_version": r.ai_summary_version, "ai_summary_created_at": r.ai_summary_created_at,
+                "ai_summary_generated_at": r.ai_summary_created_at, "ai_summary_requested_at": r.ai_summary_requested_at,
+                "ai_summary_last_attempt_at": r.ai_summary_last_attempt_at, "ai_summary_status": r.ai_summary_status}
         if detail:
+            data.update({
+                "article_content": _bounded(r.article_content),
+                "content_final_url": safe_external_url(r.content_final_url),
+                "content_fetch_error_code": r.content_fetch_error_code,
+            })
             data["metadata"] = _bounded({k: v for k, v in (r.raw_payload or {}).items() if k in {"author", "authors", "language", "category", "categories", "source", "tickers"}})
         return data
 
     def news(self, symbols: list[str], query: str | None, start: date | None, end: date | None, provider: str | None,
-             include_market: bool, page: int, page_size: int):
+             include_market: bool, page: int, page_size: int, industry: str | None = None,
+             event_type: str | None = None, sentiment: str | None = None, min_importance: int | None = None):
         validate_date_range(start, end); clean = list(dict.fromkeys(normalize_symbol(s) for s in symbols)); offset, limit = page_window(page, page_size)
-        rows, total = self.repo.news(clean, query, start, end, provider, include_market, offset, limit)
+        rows, total = self.repo.news(clean, query, start, end, provider, include_market, offset, limit,
+                                     industry, event_type, sentiment, min_importance)
         sources = [source(SourceType.news, r.id, r.title, symbol=None if r.scope == "market" else r.ticker, provider=r.provider,
                           authority=SourceAuthority.secondary, published_at=r.published_at, retrieved_at=r.found_at, url=r.url, locator=f"research://news/{r.id}") for r in rows]
         warnings = [ResearchWarning(code="DATA_INCOMPLETE", message="No persisted news matched the requested filters.", severity=WarningSeverity.info)] if not rows else []
@@ -205,7 +219,8 @@ class ResearchGateway:
     def news_detail(self, news_id: int):
         row = self.repo.news_item(news_id)
         if not row: raise ResearchError(ResearchErrorCode.not_found, "news item was not found", status_code=404)
-        return self.response(self._news_data(row, True), sources=[source(SourceType.news, row.id, row.title, symbol=row.ticker, provider=row.provider, authority=SourceAuthority.secondary, published_at=row.published_at, retrieved_at=row.found_at, url=row.url, locator=f"research://news/{row.id}")], freshness=calculate_freshness("news", row.found_at, "news retrieval time"), symbol=None if row.scope == "market" else row.ticker)
+        symbol = None if row.scope == "market" else row.ticker
+        return self.response(self._news_data(row, True), sources=[source(SourceType.news, row.id, row.title, symbol=symbol, provider=row.provider, authority=SourceAuthority.secondary, published_at=row.published_at, retrieved_at=row.found_at, url=row.url, locator=f"research://news/{row.id}")], freshness=calculate_freshness("news", row.found_at, "news retrieval time"), symbol=symbol)
 
     def archives(self, symbol: str, period: str, start: date | None, end: date | None, page: int, page_size: int):
         if period not in {"daily", "weekly"}: raise ResearchError(ResearchErrorCode.invalid_parameter, "period must be daily or weekly", field="period", status_code=422)

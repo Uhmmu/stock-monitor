@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth import create_token
 from app.database import Base, get_db
 from app.models import (
-    NewsItem, Portfolio, PortfolioPosition, PortfolioPositionLot, PortfolioStrategyProfile,
+    CompanyProfile, NewsItem, Portfolio, PortfolioPosition, PortfolioPositionLot, PortfolioStrategyProfile, StockProfile,
     PriceSnapshot, StockDiscoveryRun, StockDiscoveryMarketContext, TradeTransaction, User,
     PortfolioAnalysisRun, CongressTrade, TrackedFigure, FigurePosition,
 )
@@ -31,7 +31,7 @@ TABLES = [
     User.__table__, PortfolioStrategyProfile.__table__, Portfolio.__table__, TradeTransaction.__table__,
     PortfolioPosition.__table__, PortfolioPositionLot.__table__, PriceSnapshot.__table__, StockDiscoveryRun.__table__,
     StockDiscoveryMarketContext.__table__, PortfolioAnalysisRun.__table__, CongressTrade.__table__,
-    TrackedFigure.__table__, FigurePosition.__table__, NewsItem.__table__,
+    TrackedFigure.__table__, FigurePosition.__table__, StockProfile.__table__, CompanyProfile.__table__, NewsItem.__table__,
 ]
 
 
@@ -197,6 +197,49 @@ def test_research_news_and_price_api_return_sources_and_freshness(db, users):
     assert quote.json()["sources"][0]["fetched_at"]
     assert quote.json()["sources"][0]["persisted_at"]
     assert quote.json()["freshness"]["status"] == "live"
+
+
+def test_research_news_filters_and_detail_return_enrichment(db, users):
+    first, _, _, _ = users
+    generated_at = datetime(2026, 1, 10, 12, tzinfo=UTC)
+    enriched = NewsItem(
+        ticker="MSFT", provider="test-enriched", fingerprint="e" * 64, title="Guidance catalyst",
+        url="https://example.test/msft/catalyst", scope="company", summary="Stored summary",
+        published_at=generated_at, article_content="A" * 5001,
+        content_final_url="https://example.test/msft/catalyst/final", content_fetch_method="readability",
+        content_fetch_status="succeeded", content_fetch_quality=0.91, content_fetched_at=generated_at,
+        content_fetch_error_code=None, ai_analysis={"catalyst": "guidance", "impact": "positive"},
+        ai_event_type="guidance", ai_sentiment="positive", ai_importance=4,
+        ai_market_impact="positive", ai_summary_model="test-model", ai_summary_version="v2",
+        ai_summary_created_at=generated_at, ai_summary_requested_at=generated_at,
+        ai_summary_last_attempt_at=generated_at, ai_summary_status="completed",
+    )
+    other = NewsItem(
+        ticker="MSFT", provider="test-enriched", fingerprint="o" * 64, title="Older earnings item",
+        url="https://example.test/msft/earnings", scope="company", published_at=datetime(2026, 1, 9, tzinfo=UTC),
+        ai_event_type="earnings", ai_sentiment="negative", ai_importance=2,
+    )
+    db.add_all([StockProfile(ticker="MSFT", official_industry="Software"), enriched, other]); db.commit()
+
+    gateway = ResearchGateway(db, first)
+    result = gateway.news(
+        ["MSFT"], None, date(2026, 1, 1), date(2026, 1, 31), None, False, 1, 10,
+        industry="software", event_type="GUIDANCE", sentiment="POSITIVE", min_importance=4,
+    )
+    assert result.meta.total == 1
+    item = result.data[0]
+    assert item["ai_event_type"] == "guidance"
+    assert item["ai_analysis"] == {"catalyst": "guidance", "impact": "positive"}
+    assert item["content_fetch_status"] == "succeeded"
+    assert "article_content" not in item
+
+    detail = gateway.news_detail(enriched.id)
+    assert detail.data["article_content"] == "A" * 4000
+    assert detail.data["content_final_url"].endswith("/final")
+    assert detail.data["ai_summary_model"] == "test-model"
+    assert detail.data["ai_summary_version"] == "v2"
+    assert detail.data["ai_summary_created_at"].replace(tzinfo=UTC) == generated_at
+    assert detail.data["ai_summary_status"] == "completed"
 
 
 def test_research_openapi_contains_contract_and_error_models():

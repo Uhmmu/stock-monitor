@@ -28,6 +28,7 @@ from app.ai_tools.schemas import (
     ToolDefinition,
     ToolExecutionContext,
 )
+from app.ai.tool_selector import ToolSelector
 from app.research.schemas import ResearchFreshness
 from pydantic import ValidationError
 
@@ -80,6 +81,18 @@ def test_strict_argument_validation_and_normalization():
     with pytest.raises(ValidationError): ComparePriceArguments(symbols=[f"A{i}" for i in range(11)])
     with pytest.raises(ValidationError): FinancialCompareArguments(symbols=["MSFT","AAPL"],metrics=["payload.secret"])
     with pytest.raises(ValidationError): SecFilingsArguments(symbol="MSFT",start_date=date(2026,2,1),end_date=date(2026,1,1))
+
+
+def test_selector_combines_news_with_realtime_market_tools():
+    selection = ToolSelector(tool_registry).select(
+        message="Why did MSFT stock price move? 最近有什么新闻和盘中变化？",
+        page_context=None,
+        active_symbol="MSFT",
+        allowed_tools=None,
+        denied_tools=set(),
+    )
+    assert {"get_latest_news", "search_news"}.issubset(selection.tool_names)
+    assert {"get_realtime_quote", "get_intraday_summary", "get_intraday_bars"}.issubset(selection.tool_names)
 
 
 def test_compression_preserves_json_and_enforces_limits():

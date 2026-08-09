@@ -101,9 +101,12 @@ def news_archives(symbol: str, period: str = "daily", start_date: date | None = 
 def news(symbol: str | None = None, symbols: list[str] = Query(default=[]), query: str | None = Query(None, max_length=200),
          start_date: date | None = None, end_date: date | None = None, provider: str | None = None,
          limit: int = Query(25, ge=1), page: int = Query(1, ge=1), include_market_news: bool = False,
+         industry: str | None = Query(None, max_length=192), event_type: str | None = Query(None, max_length=32),
+         sentiment: str | None = Query(None, max_length=16), min_importance: int | None = Query(None, ge=0, le=100),
          gw: ResearchGateway = Depends(gateway)):
     values = ([symbol] if symbol else []) + symbols
-    return gw.news(values, query, start_date, end_date, provider, include_market_news, page, limit)
+    return gw.news(values, query, start_date, end_date, provider, include_market_news, page, limit,
+                   industry, event_type, sentiment, min_importance)
 
 
 @router.get("/news/{news_id}", response_model=ResearchResponse[dict], responses=ERROR_RESPONSES, summary="Read one persisted news item")

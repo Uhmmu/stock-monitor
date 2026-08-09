@@ -1,9 +1,12 @@
 from datetime import UTC, date, datetime, timedelta
 import logging
+from time import perf_counter
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from celery import Celery
 from celery.schedules import crontab
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 
 import hashlib
 import asyncio
@@ -19,6 +22,7 @@ from app.models import (
     FinancialStatementSnapshot,
     CompanyProfile,
     FmpSyncState,
+    HistoricalPrice,
     Investigation,
     InvestigationStatus,
     InvestmentCalendarSyncRun,
@@ -53,7 +57,9 @@ from app.services.price_snapshots import (
     collect_price_snapshot,
     get_latest_persisted_price_snapshot,
     persist_price_snapshot,
+    price_snapshot_out,
 )
+from app.services.intraday_market import intraday_summary
 from app.services.marketaux import fetch_marketaux_market_news, fetch_marketaux_news
 # Legacy FMP news records remain readable, but FMP is no longer scheduled as a
 # news source: the provider is reserved for profile and EOD history endpoints.
@@ -63,8 +69,7 @@ from app.services.company_profile_translation import translate_description
 from app.services.news import MARKET_TICKER, collect_ticker_news, prepare_news
 from app.services.news_store import news_for_day, persist_news
 from app.services.news_tiingo import fetch_tiingo_news
-from app.services.article_fetch import fetch_article_text
-from app.services.search import search_ticker_news
+from app.services.article_fetch import fetch_article
 from app.services.title_translation import title_input_hash, translate_title
 from app.services.cross_model import build_cross_model, fetch_cross_model_inputs, opinion_evidence
 from app.services.finnhub_mcp import fetch_basic_metrics, fetch_company_peers, fetch_market_news
@@ -103,10 +108,6 @@ def _record_news_provider_health(
         logger.debug("news provider health cache unavailable provider=%s", provider)
 
 
-class ArticleContentUnavailable(RuntimeError):
-    pass
-
-
 celery_app = Celery("stock_monitor", broker=settings.redis_url, backend=settings.redis_url)
 celery_app.conf.timezone = "UTC"
 celery_app.conf.beat_schedule = {
@@ -130,6 +131,7 @@ celery_app.conf.beat_schedule = {
     "sync-financials": {"task": "app.tasks.celery_app.sync_financials", "schedule": 43200},
     "sync-valuations": {"task": "app.tasks.celery_app.sync_valuations", "schedule": 86400},
     "translate-news-titles": {"task": "app.tasks.celery_app.translate_news_titles", "schedule": 60},
+    "reconcile-news-enrichment": {"task": "app.tasks.celery_app.reconcile_news_enrichment", "schedule": 300},
     "summarize-sec-events": {"task": "app.tasks.celery_app.summarize_sec_events", "schedule": 120},
     "sync-sec-filings": {"task": "app.tasks.celery_app.sync_sec_filings", "schedule": 21600},
     "sync-sec-events": {"task": "app.tasks.celery_app.sync_sec_events", "schedule": 21600},
@@ -147,6 +149,98 @@ celery_app.conf.beat_schedule = {
     # due check is cheap and request_sync provides a per-user database lock.
     "sync-ibkr-flex-due": {"task": "app.tasks.celery_app.ensure_ibkr_flex_fresh", "schedule": 900},
 }
+
+
+NEWS_SUMMARY_VERSION = "news_summary_v1"
+
+
+def _news_enrichment_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
+    """Yesterday + today in the application's market timezone."""
+    current = (now or datetime.now(UTC)).astimezone(ZoneInfo(settings.market_timezone))
+    start = datetime.combine(current.date() - timedelta(days=1), datetime.min.time(), tzinfo=current.tzinfo)
+    end = datetime.combine(current.date() + timedelta(days=1), datetime.min.time(), tzinfo=current.tzinfo)
+    return start.astimezone(UTC), end.astimezone(UTC)
+
+
+def _retryable_news_error(error: Exception) -> bool:
+    status = getattr(error, "status_code", None)
+    return status is None or status in {408, 429} or (isinstance(status, int) and status >= 500)
+
+
+def _retryable_fetch_error(code: str | None) -> bool:
+    if code in {"network_error", "network_timeout", "http_error", "browser_error", "browser_busy", "browser_unavailable"}:
+        return True
+    if not code:
+        return False
+    try:
+        status = int(code.rsplit("_", 1)[-1])
+    except ValueError:
+        return False
+    return status in {408, 429} or status >= 500
+
+
+@celery_app.task(name="app.tasks.celery_app.reconcile_news_enrichment")
+def reconcile_news_enrichment():
+    """Claim a bounded recent batch; older history is deliberately never backfilled."""
+    now = datetime.now(UTC)
+    start, end = _news_enrichment_bounds(now)
+    with SessionLocal() as db:
+        rows = db.scalars(
+            select(NewsItem)
+            .where(
+                func.coalesce(NewsItem.published_at, NewsItem.found_at) >= start,
+                func.coalesce(NewsItem.published_at, NewsItem.found_at) < end,
+                or_(
+                    NewsItem.ai_summary_status.in_(("idle", "pending", "failed")),
+                    and_(
+                        NewsItem.ai_summary_status == "degraded",
+                        NewsItem.ai_summary_next_retry_at.isnot(None),
+                        NewsItem.ai_summary_next_retry_at <= now,
+                    ),
+                    and_(
+                        NewsItem.ai_summary_status.in_(("queued", "processing")),
+                        NewsItem.ai_summary_requested_at <= now - timedelta(minutes=10),
+                    ),
+                    and_(
+                        NewsItem.ai_summary_status.in_(("completed", "degraded")),
+                        or_(
+                            NewsItem.ai_summary_version.is_(None),
+                            NewsItem.ai_summary_version != NEWS_SUMMARY_VERSION,
+                            NewsItem.ai_summary_model.is_(None),
+                            NewsItem.ai_summary_model != settings.model_medium,
+                        ),
+                    ),
+                ),
+                NewsItem.ai_summary_attempts < settings.news_enrichment_max_attempts,
+                or_(NewsItem.ai_summary_next_retry_at.is_(None), NewsItem.ai_summary_next_retry_at <= now),
+            )
+            .order_by(NewsItem.importance_score.desc().nullslast(), NewsItem.id)
+            .limit(settings.news_enrichment_batch_size)
+            .with_for_update(skip_locked=True)
+        ).all()
+        claimed = []
+        for row in rows:
+            request_id = str(uuid4())
+            row.ai_summary_status = "queued"
+            row.ai_summary_request_id = request_id
+            row.ai_summary_requested_at = now
+            row.ai_summary_next_retry_at = None
+            claimed.append((row.id, request_id))
+        db.commit()
+    queued = 0
+    for news_id, request_id in claimed:
+        try:
+            summarize_news_item.apply_async(args=[news_id, request_id], priority=7)
+            queued += 1
+        except Exception as error:
+            logger.warning("news_enrichment_enqueue_failed news_id=%s error=%s", news_id, type(error).__name__)
+            with SessionLocal() as db:
+                row = db.get(NewsItem, news_id)
+                if row and row.ai_summary_request_id == request_id:
+                    row.ai_summary_status = "pending"
+                    row.ai_summary_last_error = f"{type(error).__name__}: {error}"[:1000]
+                    db.commit()
+    return {"claimed": len(claimed), "queued": queued, "window_start": start.isoformat(), "window_end": end.isoformat()}
 
 
 @celery_app.task(
@@ -258,54 +352,150 @@ if settings.fmp_sync_enabled and settings.fmp_api_key.strip():
     time_limit=240,
 )
 def summarize_news_item(news_id: int, request_id: str, force: bool = False):
-    """抓取正文并生成单篇新闻总结；request_id 防止旧任务覆盖较新的请求。"""
+    """Fetch once, generate once, persist once; request_id blocks stale workers."""
     with SessionLocal() as db:
         item = db.get(NewsItem, news_id)
         if not item:
             return {"status": "missing", "news_id": news_id}
         if item.ai_summary_request_id != request_id:
             return {"status": "superseded", "news_id": news_id}
+        if (
+            not force
+            and item.ai_summary_status in {"completed", "degraded"}
+            and item.ai_summary_version == NEWS_SUMMARY_VERSION
+            and item.ai_summary_model == settings.model_medium
+            and item.ai_summary_next_retry_at is None
+        ):
+            return {"status": item.ai_summary_status, "news_id": news_id}
         item.ai_summary_status = "processing"
         item.ai_summary_last_error = None
+        item.ai_summary_attempts += 1
+        item.ai_summary_last_attempt_at = datetime.now(UTC)
         title = item.title
         url = item.url
-        existing_hash = item.ai_summary_input_hash
-        has_summary = bool(item.ai_summary)
+        provider_summary = item.summary
+        normalized_url = item.normalized_url
+        existing_article_content = item.article_content
+        existing_content_hash = item.article_content_hash
+        existing_final_url = item.content_final_url
+        existing_fetch_method = item.content_fetch_method
+        existing_fetch_quality = item.content_fetch_quality
+        existing_fetched_at = item.content_fetched_at
         db.commit()
 
     try:
-        full_text = fetch_article_text(url)
-        if not full_text:
-            raise ArticleContentUnavailable("未能从原网页取得足够的新闻正文")
-        content = full_text
-        input_hash = hashlib.sha256(f"{title}\n{content}".encode("utf-8")).hexdigest()[:64]
-        if has_summary and existing_hash == input_hash and not force:
-            summary = model = None
+        cached = None
+        if normalized_url:
+            with SessionLocal() as db:
+                cached = db.scalar(select(NewsItem).where(
+                    NewsItem.id != news_id,
+                    NewsItem.normalized_url == normalized_url,
+                    NewsItem.content_fetch_status.in_(("completed", "degraded")),
+                    NewsItem.article_content.isnot(None),
+                ).order_by(NewsItem.content_fetched_at.desc().nullslast()).limit(1))
+        if cached:
+            fetched = type("CachedFetch", (), {
+                "content": cached.article_content, "final_url": cached.content_final_url or url,
+                "method": "cache", "success": True, "quality_score": cached.content_fetch_quality or 1.0,
+                "error": None, "error_code": None, "fetched_at": datetime.now(UTC), "latency_ms": 0,
+            })()
         else:
-            summary, model = summarize_news(title, content)
+            fetched = fetch_article(url)
+        article_content = fetched.content if fetched.success else existing_article_content
+        fetch_method = fetched.method if fetched.success else existing_fetch_method or "metadata_fallback"
+        fetch_quality = fetched.quality_score if fetched.success else existing_fetch_quality or fetched.quality_score
+        final_url = fetched.final_url if fetched.success else existing_final_url or fetched.final_url
+        fetched_at = fetched.fetched_at if fetched.success or not existing_fetched_at else existing_fetched_at
+        content = article_content or provider_summary or title
+        source_quality = "high" if article_content and fetch_quality >= .7 else "medium" if article_content else "low"
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        input_hash = hashlib.sha256(
+            f"{title}\n{content_hash}\n{settings.model_medium}\n{NEWS_SUMMARY_VERSION}".encode("utf-8")
+        ).hexdigest()
 
         with SessionLocal() as db:
             item = db.get(NewsItem, news_id)
             if not item or item.ai_summary_request_id != request_id:
                 return {"status": "superseded", "news_id": news_id}
-            if full_text:
-                item.raw_content = full_text
-            if summary is not None:
-                item.ai_summary = summary
-                item.ai_summary_model = model
-                item.ai_summary_input_hash = input_hash
-                item.ai_summary_created_at = datetime.now(UTC)
-            item.ai_summary_status = "completed"
-            item.ai_summary_last_error = None
+            item.article_content = article_content
+            item.article_content_hash = hashlib.sha256(article_content.encode("utf-8")).hexdigest() if article_content else existing_content_hash
+            item.content_final_url = final_url
+            item.content_fetch_method = fetch_method
+            item.content_fetch_status = "completed" if fetched.success else "degraded"
+            item.content_fetch_quality = fetch_quality
+            item.content_fetched_at = fetched_at
+            item.content_fetch_error_code = fetched.error_code
             db.commit()
-        return {"status": "completed", "news_id": news_id}
+
+        cached_analysis = None
+        if not force:
+            with SessionLocal() as db:
+                current = db.get(NewsItem, news_id)
+                if (
+                    current
+                    and current.ai_summary_input_hash == input_hash
+                    and current.ai_summary_version == NEWS_SUMMARY_VERSION
+                    and current.ai_summary_model == settings.model_medium
+                    and current.ai_analysis
+                ):
+                    cached_analysis = current
+                else:
+                    cached_analysis = db.scalar(select(NewsItem).where(
+                        NewsItem.id != news_id,
+                        NewsItem.ai_summary_input_hash == input_hash,
+                        NewsItem.ai_summary_version == NEWS_SUMMARY_VERSION,
+                        NewsItem.ai_summary_status.in_(("completed", "degraded")),
+                        NewsItem.ai_analysis.isnot(None),
+                    ).order_by(NewsItem.ai_summary_created_at.desc().nullslast()).limit(1))
+        ai_started = perf_counter()
+        if cached_analysis:
+            analysis = dict(cached_analysis.ai_analysis or {})
+            model = cached_analysis.ai_summary_model or settings.model_medium
+            usage = {"input_tokens": 0, "output_tokens": 0, "cache_hit": True}
+        else:
+            analysis, model, usage = summarize_news(title, content, source_quality=source_quality)
+        ai_latency_ms = round((perf_counter() - ai_started) * 1000, 2)
+
+        with SessionLocal() as db:
+            item = db.get(NewsItem, news_id)
+            if not item or item.ai_summary_request_id != request_id:
+                return {"status": "superseded", "news_id": news_id}
+            item.ai_summary = analysis["summary_zh"]
+            item.ai_analysis = analysis
+            item.ai_event_type = analysis["event_type"]
+            item.ai_sentiment = analysis["sentiment"]
+            item.ai_importance = analysis["importance"]
+            item.ai_market_impact = analysis["market_impact"]
+            item.ai_summary_model = model
+            item.ai_summary_version = NEWS_SUMMARY_VERSION
+            item.ai_summary_input_hash = input_hash
+            item.ai_summary_created_at = datetime.now(UTC)
+            item.ai_summary_status = "completed" if fetched.success else "degraded"
+            item.ai_summary_last_error = None
+            item.ai_summary_next_retry_at = (
+                datetime.now(UTC) + timedelta(minutes=2 ** item.ai_summary_attempts)
+                if not fetched.success
+                and _retryable_fetch_error(fetched.error_code)
+                and item.ai_summary_attempts < settings.news_enrichment_max_attempts
+                else None
+            )
+            db.commit()
+        logger.info(
+            "news_enrichment_completed news_id=%s status=%s fetch_method=%s fetch_quality=%.3f fetch_latency_ms=%s fetch_error=%s ai_latency_ms=%s input_tokens=%s output_tokens=%s",
+            news_id, "completed" if fetched.success else "degraded", fetch_method,
+            fetched.quality_score, fetched.latency_ms, fetched.error_code, ai_latency_ms,
+            usage.get("input_tokens"), usage.get("output_tokens"),
+        )
+        return {"status": "completed" if fetched.success else "degraded", "news_id": news_id}
     except Exception as exc:
-        logger.exception("Interactive news summary failed news_id=%s", news_id)
+        logger.exception("News enrichment failed news_id=%s", news_id)
         with SessionLocal() as db:
             item = db.get(NewsItem, news_id)
             if item and item.ai_summary_request_id == request_id:
                 item.ai_summary_status = "failed"
                 item.ai_summary_last_error = f"{type(exc).__name__}: {exc}"[:1000]
+                if _retryable_news_error(exc) and item.ai_summary_attempts < settings.news_enrichment_max_attempts:
+                    item.ai_summary_next_retry_at = datetime.now(UTC) + timedelta(minutes=2 ** item.ai_summary_attempts)
                 db.commit()
         return {"status": "failed", "news_id": news_id}
 
@@ -313,7 +503,7 @@ def summarize_news_item(news_id: int, request_id: str, force: bool = False):
 def _save_report(db, key: str, ticker: str | None, report_type: ReportType, title: str, evidence: str, tier: str, sources: list[dict], start=None, end=None):
     if db.scalar(select(Report.id).where(Report.idempotency_key == key)):
         return
-    if ticker:
+    if ticker and report_type != ReportType.movement:
         try:
             evidence = build_market_context(ticker, provider_symbol(db, ticker, "finnhub")) + "\n\n# 新闻线索\n" + evidence
         except Exception:
@@ -365,18 +555,15 @@ def poll_market():
 def _collect_investigation_news(db, investigation: Investigation, now: datetime):
     dtos = collect_ticker_news(investigation.ticker, "sudden price movement catalyst", days=2,
                                finnhub_symbol=provider_symbol(db, investigation.ticker, "finnhub"))
-    for dto in dtos:
-        fingerprint = dto.fingerprint
-        if db.scalar(select(NewsItem.id).where(NewsItem.fingerprint == fingerprint)):
-            continue
-        db.add(
-            NewsItem(
-                investigation_id=investigation.id, ticker=investigation.ticker, provider=dto.provider,
-                external_id=dto.external_id, fingerprint=fingerprint, title=dto.title[:512], url=dto.url,
-                source=dto.source, summary=dto.summary, raw_content=dto.raw_content, image_url=dto.image_url,
-                raw_payload=dto.raw_payload or None, published_at=dto.published_at,
-            )
-        )
+    final, _stats = prepare_news(dtos, scope="company", now=now, limit=NEWS_PER_TICKER)
+    persist_news(db, investigation.ticker, now.astimezone(ZoneInfo(settings.market_timezone)).date(), final)
+    fingerprints = [dto.fingerprint for dto in final]
+    if fingerprints:
+        for item in db.scalars(select(NewsItem).where(
+            NewsItem.ticker == investigation.ticker,
+            NewsItem.fingerprint.in_(fingerprints),
+        )).all():
+            item.investigation_id = investigation.id
     investigation.next_search_at = now + timedelta(minutes=settings.investigation_interval_minutes)
     investigation.last_error = None
 
@@ -388,10 +575,66 @@ def _daily_archive_text(db, ticker: str, market_date) -> str:
     return f"\n\n# 当日新闻定档（Luna 去重筛选）\n{row.content}" if row else ""
 
 
+def _stored_news(db, ticker: str, start: datetime, end: datetime, limit: int = 100) -> list[NewsItem]:
+    timestamp = func.coalesce(NewsItem.published_at, NewsItem.found_at)
+    return list(db.scalars(
+        select(NewsItem)
+        .where(NewsItem.ticker == ticker, timestamp >= start, timestamp <= end)
+        .order_by(NewsItem.ai_importance.desc().nullslast(), timestamp.desc(), NewsItem.id.desc())
+        .limit(limit)
+    ).all())
+
+
+def _movement_market_evidence(db, ticker: str, through: datetime) -> str:
+    """Persisted facts only; the model, not code, decides what explains the move."""
+    snapshot = get_latest_persisted_price_snapshot(db, ticker)
+    candidates = list(db.scalars(
+        select(HistoricalPrice)
+        .where(HistoricalPrice.symbol == ticker, HistoricalPrice.date <= through.date())
+        .order_by(HistoricalPrice.date.desc(), HistoricalPrice.source)
+        .limit(60)
+    ).all())
+    by_date = {}
+    for row in candidates:
+        by_date.setdefault(row.date, row)
+    rows = [by_date[value] for value in sorted(by_date)[-20:]]
+    volumes = [float(row.volume) for row in rows if row.volume is not None]
+    payload = {
+        "latest_price_snapshot": price_snapshot_out(snapshot) if snapshot else None,
+        "intraday_ohlcv": intraday_summary(db, ticker, now=through),
+        "daily_ohlcv": [
+            {
+                "date": row.date, "open": float(row.open), "high": float(row.high),
+                "low": float(row.low), "close": float(row.close),
+                "volume": row.volume, "source": row.source,
+            }
+            for row in rows
+        ],
+        "derived_statistics": {
+            "avg_volume_5d": sum(volumes[-5:]) / len(volumes[-5:]) if volumes[-5:] else None,
+            "avg_volume_20d": sum(volumes) / len(volumes) if volumes else None,
+            "high_5d": max((float(row.high) for row in rows[-5:]), default=None),
+            "low_5d": min((float(row.low) for row in rows[-5:]), default=None),
+            "high_20d": max((float(row.high) for row in rows), default=None),
+            "low_20d": min((float(row.low) for row in rows), default=None),
+        },
+    }
+    return "# 已持久化行情工具上下文\n" + json.dumps(payload, ensure_ascii=False, default=str)
+
+
 def _complete_investigation(db, investigation: Investigation):
-    news = db.scalars(select(NewsItem).where(NewsItem.investigation_id == investigation.id).order_by(NewsItem.found_at)).all()
-    evidence = "\n".join(f"[{index}] {item.title}\n{item.summary or item.raw_content or ''}\n{item.url}" for index, item in enumerate(news, 1))
-    evidence += _daily_archive_text(db, investigation.ticker, investigation.started_at.date())
+    timestamp = func.coalesce(NewsItem.published_at, NewsItem.found_at)
+    news = db.scalars(select(NewsItem).where(
+        NewsItem.ticker == investigation.ticker,
+        timestamp >= investigation.started_at - timedelta(days=3),
+        timestamp <= investigation.ends_at,
+    ).order_by(NewsItem.ai_importance.desc().nullslast(), timestamp)).all()
+    evidence = _movement_market_evidence(db, investigation.ticker, investigation.ends_at)
+    evidence += "\n\n# 相关新闻（T-3 至异动结束）\n" + "\n\n".join(
+        _news_analysis_evidence(item, index) for index, item in enumerate(news, 1)
+    )
+    market_day = investigation.started_at.astimezone(ZoneInfo(settings.market_timezone)).date()
+    evidence += _daily_archive_text(db, investigation.ticker, market_day)
     sources = [{"title": item.title, "url": item.url} for item in news]
     key = f"movement:{investigation.id}"
     _save_report(db, key, investigation.ticker, ReportType.movement, f"{investigation.ticker} 价格异动调查报告", evidence or "调查期内未检索到相关新闻。", "important", sources, investigation.started_at, investigation.ends_at)
@@ -408,7 +651,6 @@ def advance_investigations():
         for investigation in rows:
             try:
                 if now >= investigation.ends_at:
-                    investigation.status = InvestigationStatus.reporting
                     _complete_investigation(db, investigation)
                 else:
                     _collect_investigation_news(db, investigation, now)
@@ -416,6 +658,8 @@ def advance_investigations():
                 investigation.last_error = str(error)
                 investigation.next_search_at = now + timedelta(minutes=5)
         db.commit()
+        if rows:
+            reconcile_news_enrichment.delay()
         return {"processed": len(rows)}
 
 
@@ -425,10 +669,13 @@ def _scheduled_report(db, report_type: ReportType, session: str, title: str):
         key = f"{report_type.value}:{session}:{item.ticker}"
         if db.scalar(select(Report.id).where(Report.idempotency_key == key)):
             continue
-        results = search_ticker_news(item.ticker, title)
-        evidence = "\n".join(f"[{i}] {r.title}\n{r.content}\n{r.url}" for i, r in enumerate(results, 1))
-        evidence += _daily_archive_text(db, item.ticker, datetime.fromisoformat(session).date())
-        _save_report(db, key, item.ticker, report_type, f"{item.ticker} {title}", evidence or "暂无相关新闻。", "medium", [{"title": r.title, "url": r.url} for r in results])
+        market_date = datetime.fromisoformat(session).date()
+        zone = ZoneInfo(settings.market_timezone)
+        end = datetime.combine(market_date + timedelta(days=1), datetime.min.time(), tzinfo=zone).astimezone(UTC)
+        rows = _stored_news(db, item.ticker, end - timedelta(days=3), end)
+        evidence = "\n\n".join(_news_analysis_evidence(row, i) for i, row in enumerate(rows, 1))
+        evidence += _daily_archive_text(db, item.ticker, market_date)
+        _save_report(db, key, item.ticker, report_type, f"{item.ticker} {title}", evidence or "暂无已入库相关新闻。", "medium", [{"title": row.title, "url": row.url} for row in rows])
 
 
 @celery_app.task(name="app.tasks.celery_app.scheduled_reports")
@@ -750,6 +997,7 @@ def poll_news(ticker: str | None = None):
         db.commit()
         if total:
             translate_news_titles.delay()
+            reconcile_news_enrichment.delay()
         return {"tickers": len(items), "new": total}
 
 
@@ -768,24 +1016,46 @@ def poll_market_news():
         final, stats = prepare_news(inputs, scope="market", now=now, limit=settings.market_news_max_items)
         saved = persist_news(db, MARKET_TICKER, now.date(), final, [(dto.importance_score, None) for dto in final])
         db.commit()
-        if saved: translate_news_titles.delay()
+        if saved:
+            translate_news_titles.delay()
+            reconcile_news_enrichment.delay()
         logger.info("news provider=combined scope=market fetched=%d accepted=%d filtered=%d clustered=%d inserted=%d", stats["fetched"], stats["accepted"], stats["filtered"], stats["clustered"], len(saved))
         return {**stats, "inserted": len(saved)}
 
 
 def _daily_input_hash(news: list[NewsItem]) -> str:
-    basis = "|".join(sorted(item.fingerprint for item in news))
+    basis = "|".join(sorted(
+        f"{item.fingerprint}:{item.ai_summary_input_hash or ''}:{item.ai_summary_status}"
+        for item in news
+    ))
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:64]
+
+
+def _news_analysis_evidence(item: NewsItem, index: int) -> str:
+    analysis = item.ai_analysis or {}
+    facts = analysis.get("key_points") or []
+    body = item.ai_summary or (item.article_content or "")[:2000] or item.summary or "数据不足"
+    return (
+        f"[{index}] ({item.provider}) {item.title}\n"
+        f"结构化摘要：{body}\n"
+        f"关键事实：{'；'.join(str(value) for value in facts) or '数据不足'}\n"
+        f"事件类型：{item.ai_event_type or '数据不足'}；情绪：{item.ai_sentiment or '数据不足'}；"
+        f"重要性：{item.ai_importance if item.ai_importance is not None else '数据不足'}\n"
+        f"市场影响分析：{item.ai_market_impact or '数据不足'}\n{item.url}"
+    )
 
 
 @celery_app.task(name="app.tasks.celery_app.curate_daily_archives")
 def curate_daily_archives():
-    market_date = market_status()["checked_at"][:10]
-    parsed = datetime.fromisoformat(market_date).date()
+    parsed = datetime.now(UTC).astimezone(ZoneInfo(settings.market_timezone)).date()
+    market_date = parsed.isoformat()
     with SessionLocal() as db:
-        tickers = list(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        tickers = set(db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all())
+        tickers.update(db.scalars(select(PortfolioPosition.symbol).where(PortfolioPosition.total_quantity > 0)).all())
+        tickers.update(referenced_tickers(db))
         curated = 0
-        for ticker in tickers:
+        failed = []
+        for ticker in sorted(tickers):
             news = news_for_day(db, ticker, parsed)
             if not news:
                 continue
@@ -795,11 +1065,13 @@ def curate_daily_archives():
             )
             if existing and existing.input_hash == input_hash:
                 continue
-            evidence = "\n".join(
-                f"[{i}] ({item.provider}) {item.title}\n{item.summary or item.raw_content or ''}\n{item.url}"
-                for i, item in enumerate(news, 1)
-            )
-            content, model = curate_daily_news(ticker, market_date, evidence)
+            evidence = "\n\n".join(_news_analysis_evidence(item, i) for i, item in enumerate(news, 1))
+            try:
+                content, model = curate_daily_news(ticker, market_date, evidence)
+            except Exception as error:
+                logger.warning("daily_news_archive_failed ticker=%s error=%s", ticker, type(error).__name__)
+                failed.append(ticker)
+                continue
             included = [item.id for item in news]
             manifest = {"ticker": ticker, "market_date": market_date, "model": model, "input_hash": input_hash, "news_ids": included}
             file_path = archive.write_daily_archive(ticker, parsed, content, manifest)
@@ -819,7 +1091,7 @@ def curate_daily_archives():
                 )
             curated += 1
         db.commit()
-        return {"curated": curated}
+        return {"curated": curated, "failed": failed}
 
 
 def _iso_week_bounds(d) -> tuple[int, int, "date", "date"]:
@@ -836,16 +1108,13 @@ def _weekly_input_hash(archives: list[DailyNewsArchive]) -> str:
 
 @celery_app.task(name="app.tasks.celery_app.rollup_weekly_archives")
 def rollup_weekly_archives():
-    """把已结束的完整 ISO 周（周一起）合并成周报，随后删除当周的原始新闻与每日定档。
+    """把已结束的完整 ISO 周（周一起）合并成周报并删除冗余每日定档。
 
     - 只处理周一严格早于“本周周一”的完整周，绝不动本周数据。
-    - 逐 ticker 逐周：合并当周每日定档的关键事实 → 落库 WeeklyNewsArchive → 删除当周 NewsItem + DailyNewsArchive。
-    - 整周删除（非滚动）；缺失一次调度也能在下次自愈。
+    - 逐 ticker 逐周：合并当周每日定档的关键事实 → 落库 WeeklyNewsArchive → 删除 DailyNewsArchive。
+    - NewsItem 是统一研究数据源，永久保留供 Chat、报告和详情复用。
     """
-    from datetime import time
-
-    market_date = market_status()["checked_at"][:10]
-    today = datetime.fromisoformat(market_date).date()
+    today = datetime.now(UTC).astimezone(ZoneInfo(settings.market_timezone)).date()
     _, _, current_monday, _ = _iso_week_bounds(today)
 
     rolled, deleted_news, deleted_daily = 0, 0, 0
@@ -905,14 +1174,8 @@ def rollup_weekly_archives():
             rolled += 1
 
         db.flush()
-        # 删除过去完整周的每日定档
         deleted_daily = db.execute(
             delete(DailyNewsArchive).where(DailyNewsArchive.market_date < current_monday)
-        ).rowcount or 0
-        # 删除过去完整周的原始新闻（整周删除；本周之前的调查早已完成，报告来源已固化到 Report.sources）
-        cutoff = datetime.combine(current_monday, time.min, tzinfo=UTC)
-        deleted_news = db.execute(
-            delete(NewsItem).where(NewsItem.found_at < cutoff)
         ).rowcount or 0
         db.commit()
     return {"rolled": rolled, "deleted_daily": deleted_daily, "deleted_news": deleted_news}
@@ -1734,13 +1997,12 @@ def earnings_reports():
             key = f"{report_type.value}:{event.id}"
             if db.scalar(select(Report.id).where(Report.idempotency_key == key)):
                 continue
-            context = "upcoming earnings expectations guidance analyst estimates" if before else "earnings results revenue EPS guidance reaction"
             try:
-                results = search_ticker_news(event.ticker, context)
-                evidence = "\n".join(f"[{i}] {r.title}\n{r.content}\n{r.url}" for i, r in enumerate(results, 1))
+                rows = _stored_news(db, event.ticker, now - timedelta(days=7), now)
+                evidence = "\n\n".join(_news_analysis_evidence(row, i) for i, row in enumerate(rows, 1))
                 evidence += _financials_text(db, event.ticker)
                 label = "财报前瞻报告" if before else "财报复盘报告"
-                _save_report(db, key, event.ticker, report_type, f"{event.ticker} {label}", evidence or "暂无相关新闻。", "important", [{"title": r.title, "url": r.url} for r in results])
+                _save_report(db, key, event.ticker, report_type, f"{event.ticker} {label}", evidence or "暂无已入库相关新闻。", "important", [{"title": row.title, "url": row.url} for row in rows])
             except Exception:
                 continue
         db.commit()

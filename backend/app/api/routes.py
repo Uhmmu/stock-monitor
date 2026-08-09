@@ -2,6 +2,7 @@ import hashlib
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date as date_type, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
@@ -764,8 +765,8 @@ def report_detail(report_id: int, db: Session = Depends(get_db)):
     return report
 
 
-def _news_out(item: NewsItem) -> dict:
-    return {
+def _news_out(item: NewsItem, *, detail: bool = False) -> dict:
+    data = {
         "id": item.id,
         "ticker": item.ticker,
         "provider": item.provider,
@@ -787,21 +788,38 @@ def _news_out(item: NewsItem) -> dict:
         "relevance_score": item.relevance_score,
         "sentiment_score": item.sentiment_score,
         "ai_summary": item.ai_summary,
+        "ai_analysis": item.ai_analysis,
+        "ai_event_type": item.ai_event_type,
+        "ai_sentiment": item.ai_sentiment,
+        "ai_importance": item.ai_importance,
+        "ai_market_impact": item.ai_market_impact,
         "ai_summary_model": item.ai_summary_model,
+        "ai_summary_version": item.ai_summary_version,
         "ai_summary_status": item.ai_summary_status,
         "ai_summary_requested_at": item.ai_summary_requested_at,
+        "ai_summary_generated_at": item.ai_summary_created_at,
+        "content_fetch_method": item.content_fetch_method,
+        "content_fetch_status": item.content_fetch_status,
+        "content_fetch_quality": item.content_fetch_quality,
+        "content_fetched_at": item.content_fetched_at,
         "ai_summary_error": (
-            "未能从原网页取得足够正文，没有使用新闻概要冒充全文。请稍后重试或打开原文确认访问限制。"
+            "后台摘要生成失败，当前展示数据源原始概要。系统会自动重试。"
             if item.ai_summary_status == "failed"
-            and (item.ai_summary_last_error or "").startswith("ArticleContentUnavailable:")
             else None
         ),
     }
+    if detail:
+        data.update({
+            "article_content": item.article_content,
+            "content_final_url": item.content_final_url,
+            "content_fetch_error_code": item.content_fetch_error_code,
+        })
+    return data
 
 
 def _current_week_start() -> date_type:
-    """本 ISO 周的周一（UTC）。原始新闻与每日定档只保留本周，历史归入每周汇总。"""
-    today = datetime.now(UTC).date()
+    """本市场时区 ISO 周的周一；历史新闻仍保留在数据库中。"""
+    today = datetime.now(UTC).astimezone(ZoneInfo(get_settings().market_timezone)).date()
     return today - timedelta(days=today.isocalendar()[2] - 1)
 
 
@@ -809,14 +827,16 @@ def _current_week_start() -> date_type:
 def list_news(ticker: str = Query(...), date: date_type | None = None, db: Session = Depends(get_db)):
     value = _require_watched_ticker(db, ticker, "news")
     query = select(NewsItem).where(NewsItem.ticker == value, NewsItem.scope == "company")
+    zone = ZoneInfo(get_settings().market_timezone)
+    timestamp = func.coalesce(NewsItem.published_at, NewsItem.found_at)
     if date:
-        start = datetime.combine(date, datetime.min.time(), tzinfo=UTC)
-        end = datetime.combine(date, datetime.max.time(), tzinfo=UTC)
-        query = query.where(NewsItem.found_at >= start, NewsItem.found_at <= end)
+        start = datetime.combine(date, datetime.min.time(), tzinfo=zone).astimezone(UTC)
+        end = datetime.combine(date + timedelta(days=1), datetime.min.time(), tzinfo=zone).astimezone(UTC)
+        query = query.where(timestamp >= start, timestamp < end)
     else:
-        # 仅本周：早于本周的原始新闻已被每周汇总任务清理，这里也做上界防御
-        week_start = datetime.combine(_current_week_start(), datetime.min.time(), tzinfo=UTC)
-        query = query.where(NewsItem.found_at >= week_start)
+        # 列表默认只展示本周；更早新闻仍可由日期 API 和 Research Gateway 查询。
+        week_start = datetime.combine(_current_week_start(), datetime.min.time(), tzinfo=zone).astimezone(UTC)
+        query = query.where(timestamp >= week_start)
     query = query.order_by(NewsItem.importance_score.desc().nullslast(), NewsItem.quality_score.desc().nullslast(), NewsItem.published_at.desc().nullslast(), NewsItem.found_at.desc()).limit(200)
     return [_news_out(item) for item in db.scalars(query).all()]
 
@@ -829,6 +849,42 @@ def list_market_news(limit: int = Query(20, ge=1, le=100), offset: int = Query(0
     total = len(db.scalars(query).all())
     rows = db.scalars(query.order_by(NewsItem.importance_score.desc().nullslast(), NewsItem.quality_score.desc().nullslast(), NewsItem.published_at.desc().nullslast()).offset(offset).limit(limit)).all()
     return {"items": [_news_out(item) for item in rows], "total": total, "generated_at": datetime.now(UTC), "last_updated_at": max((item.found_at for item in rows), default=None), "sources": sorted({item.provider for item in rows})}
+
+
+@router.get("/news/enrichment/status")
+def news_enrichment_status(db: Session = Depends(get_db)):
+    now = datetime.now(UTC)
+    local_now = now.astimezone(ZoneInfo(get_settings().market_timezone))
+    start = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=local_now.tzinfo).astimezone(UTC)
+    rows = db.execute(
+        select(
+            NewsItem.ai_summary_status,
+            func.count(NewsItem.id),
+            func.avg(NewsItem.content_fetch_quality),
+        )
+        .where(func.coalesce(NewsItem.published_at, NewsItem.found_at) >= start)
+        .group_by(NewsItem.ai_summary_status)
+    ).all()
+    statuses = {status: count for status, count, _quality in rows}
+    average_quality = db.scalar(select(func.avg(NewsItem.content_fetch_quality)).where(
+        func.coalesce(NewsItem.published_at, NewsItem.found_at) >= start,
+    ))
+    method_rows = db.execute(
+        select(NewsItem.content_fetch_method, NewsItem.content_fetch_status, func.count(NewsItem.id))
+        .where(func.coalesce(NewsItem.published_at, NewsItem.found_at) >= start)
+        .group_by(NewsItem.content_fetch_method, NewsItem.content_fetch_status)
+    ).all()
+    methods: dict[str, dict[str, int]] = {}
+    for method, fetch_status, count in method_rows:
+        bucket = methods.setdefault(method or "pending", {})
+        bucket[fetch_status] = count
+    return {
+        "window_start": start,
+        "total": sum(statuses.values()),
+        "statuses": statuses,
+        "fetch_methods": methods,
+        "average_fetch_quality": float(average_quality) if average_quality is not None else None,
+    }
 
 
 @router.post("/news/market/refresh")
@@ -919,6 +975,14 @@ def news_weekly(ticker: str = Query(...), db: Session = Depends(get_db)):
         }
         for row in rows
     ]
+
+
+@router.get("/news/{news_id}")
+def news_detail(news_id: int, db: Session = Depends(get_db)):
+    item = db.get(NewsItem, news_id)
+    if not item:
+        raise HTTPException(404, "未找到新闻")
+    return _news_out(item, detail=True)
 
 
 @router.get("/financials")

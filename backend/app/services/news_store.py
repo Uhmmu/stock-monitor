@@ -1,9 +1,11 @@
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import replace
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from app.models import NewsItem
+from app.config import get_settings
 from app.services import archive
 from app.services.news import (
     MARKET_TICKER,
@@ -277,13 +279,15 @@ def persist_news(
 
 
 def news_for_day(db, ticker: str, market_date: date) -> list[NewsItem]:
-    from datetime import datetime, time, timezone
+    from datetime import datetime, time
 
-    start = datetime.combine(market_date, time.min, tzinfo=timezone.utc)
-    end = datetime.combine(market_date, time.max, tzinfo=timezone.utc)
+    zone = ZoneInfo(get_settings().market_timezone)
+    start = datetime.combine(market_date, time.min, tzinfo=zone).astimezone(UTC)
+    end = datetime.combine(market_date + timedelta(days=1), time.min, tzinfo=zone).astimezone(UTC)
+    timestamp = func.coalesce(NewsItem.published_at, NewsItem.found_at)
     rows = db.scalars(
         select(NewsItem)
-        .where(NewsItem.ticker == ticker, NewsItem.found_at >= start, NewsItem.found_at <= end)
+        .where(NewsItem.ticker == ticker, timestamp >= start, timestamp < end)
         .order_by(NewsItem.published_at.desc().nullslast(), NewsItem.found_at.desc())
     ).all()
     return list(rows)

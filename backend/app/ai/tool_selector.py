@@ -52,7 +52,7 @@ PREFERRED = {
     "calendar": ["get_calendar_events", "get_calendar_event_detail"],
     "ownership": ["get_company_ownership_activity", "get_congress_trades", "get_institutional_holdings", "get_tracked_figures"],
     "discovery": ["get_discovery_runs", "get_discovery_run", "get_discovery_candidates"],
-    "market": ["get_latest_price", "get_price_history", "get_market_context"],
+    "market": ["get_realtime_quote", "get_intraday_summary", "get_intraday_bars", "get_latest_price", "get_price_history", "get_market_context"],
     "company": ["get_company_snapshot", "get_company_profile", "get_company_peers"],
     "memory": [
         "get_relevant_user_memories",

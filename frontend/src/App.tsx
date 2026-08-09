@@ -50,7 +50,8 @@ type Investigation = {id:number;ticker:string;status:string;started_at:string;en
 type Report = {id:number;ticker:string|null;report_type:string;title:string;model:string;created_at:string;confidence?:'高'|'中'|'低'|null}
 type ReportDetail = Report & {content:string;sources:{title:string;url:string}[]}
 type Settings = {threshold_20m:number;threshold_1h:number;threshold_day:number;alert_cooldown_minutes:number;investigation_interval_minutes:number;investigation_duration_minutes:number;price_poll_minutes:number}
-type NewsRow = {id:number;ticker:string;provider:string;title:string;translated_title:string|null;title_translation_model:string|null;title_translated_at:string|null;url:string;source:string|null;summary:string|null;symbols:string[];news_type:string;scope:'market'|'company';topic:string|null;importance_score:number|null;quality_score:number|null;published_at:string|null;found_at:string;relevance_score:number|null;sentiment_score:number|null;ai_summary:string|null;ai_summary_model:string|null;ai_summary_status:'idle'|'queued'|'processing'|'completed'|'failed';ai_summary_requested_at:string|null;ai_summary_error:string|null}
+type NewsAIAnalysis = {summary_zh:string|null;key_points:string[];companies:string[];tickers:string[];industries:string[];event_type:string|null;sentiment:string|null;market_impact:string|null;importance:number|null;source_quality:string|null;confidence:number|null}
+type NewsRow = {id:number;ticker:string;provider:string;title:string;translated_title:string|null;title_translation_model:string|null;title_translated_at:string|null;url:string;source:string|null;summary:string|null;symbols:string[];news_type:string;scope:'market'|'company';topic:string|null;importance_score:number|null;quality_score:number|null;published_at:string|null;found_at:string;relevance_score:number|null;sentiment_score:number|null;ai_summary:string|null;ai_summary_model:string|null;ai_summary_status:'idle'|'pending'|'queued'|'processing'|'completed'|'degraded'|'failed';ai_summary_requested_at:string|null;ai_summary_error:string|null;article_content?:string|null;content_final_url?:string|null;content_fetch_method?:string|null;content_fetch_status?:string|null;content_fetch_quality?:number|null;ai_analysis?:NewsAIAnalysis|null;ai_event_type?:string|null;ai_sentiment?:string|null;ai_importance?:number|null;ai_market_impact?:string|null;ai_summary_version?:string|null;ai_summary_generated_at?:string|null}
 type MarketNewsResponse = {items:NewsRow[];total:number;generated_at:string;last_updated_at:string|null;sources:string[]}
 type NewsArchive = {ticker:string;market_date:string;content:string;model:string;version:number;updated_at:string;included_news_ids:number[]}
 type WeeklyArchive = {ticker:string;iso_year:number;iso_week:number;week_start:string;week_end:string;content:string;included_dates:string[];model:string;version:number;updated_at:string}
@@ -847,20 +848,33 @@ function SecCenter({tickers,active,setActive}:{tickers:string[];active:string;se
 
 function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;setActive:(ticker:string)=>void}) {
   const [weeklyOpen,setWeeklyOpen] = useState(false)
+  const [selectedNewsId,setSelectedNewsId] = useState<number|null>(null)
   const [scope,setScope] = useState<'market'|'company'>('company')
-  const client = useQueryClient()
   const current = active||tickers[0]||''
-  const companyNews = useQuery({queryKey:['news',current],queryFn:()=>api<NewsRow[]>(`/news?ticker=${current}`),enabled:scope==='company'&&!!current,refetchInterval:q=>(q.state.data as NewsRow[]|undefined)?.some(n=>n.ai_summary_status==='queued'||n.ai_summary_status==='processing')?2000:false})
-  const marketNews = useQuery({queryKey:['news','market'],queryFn:()=>api<MarketNewsResponse>('/news/market'),enabled:scope==='market',refetchInterval:q=>(q.state.data as MarketNewsResponse|undefined)?.items.some(n=>n.ai_summary_status==='queued'||n.ai_summary_status==='processing')?2000:false})
+  const companyNews = useQuery({queryKey:['news',current],queryFn:()=>api<NewsRow[]>(`/news?ticker=${current}`),enabled:scope==='company'&&!!current,refetchInterval:q=>(q.state.data as NewsRow[]|undefined)?.some(n=>['pending','queued','processing'].includes(n.ai_summary_status))?2000:false})
+  const marketNews = useQuery({queryKey:['news','market'],queryFn:()=>api<MarketNewsResponse>('/news/market'),enabled:scope==='market',refetchInterval:q=>(q.state.data as MarketNewsResponse|undefined)?.items.some(n=>['pending','queued','processing'].includes(n.ai_summary_status))?2000:false})
   const news = scope==='market' ? marketNews.data?.items : companyNews.data
   const archive = useQuery({queryKey:['news-archive',current],queryFn:()=>api<NewsArchive|null>(`/news/archive?ticker=${current}`),enabled:scope==='company'&&!!current})
   const weekly = useQuery({queryKey:['news-weekly',current],queryFn:()=>api<WeeklyArchive[]>(`/news/weekly?ticker=${current}`),enabled:scope==='company'&&!!current&&weeklyOpen})
+  const detail = useQuery({queryKey:['news-detail',selectedNewsId],queryFn:()=>api<NewsRow>(`/news/${selectedNewsId}`),enabled:selectedNewsId!==null,refetchInterval:q=>['pending','queued','processing'].includes((q.state.data as NewsRow|undefined)?.ai_summary_status||'')?2000:false})
   const refresh = useMutation({mutationFn:()=>post(scope==='market'?'/news/market/refresh':`/news/refresh?ticker=${current}`,{})})
-  const summarize = useMutation({mutationFn:({id,force}:{id:number;force:boolean})=>post<NewsRow>(`/news/${id}/summarize?force=${force}`,{}),onSuccess:()=>client.invalidateQueries({queryKey:scope==='market'?['news','market']:['news',current]})})
   // 隐藏“采用与合并”和“剔除”过程段，只留关键事实归纳（兼容历史旧结构定档）
   const keyFactsOnly = (md:string) => md.replace(/###\s*(?:采用与合并|剔除)[\s\S]*?(?=\n###\s|$)/g,'').trim()
   const includedIds = archive.data?.included_news_ids || []
   const orderNo = (id:number) => { const i = includedIds.indexOf(id); return i>=0 ? i+1 : null }
+  const detailItem = detail.data
+  const detailAnalysis = detailItem?.ai_analysis
+  const detailStatus = detailItem?.ai_summary_status || 'idle'
+  const detailSummary = detailAnalysis?.summary_zh || detailItem?.ai_summary || null
+  const detailPending = detailStatus==='pending'||detailStatus==='queued'||detailStatus==='processing'
+  const detailFailedOrIdle = detailStatus==='failed'||detailStatus==='idle'
+  const detailEventType = detailItem?.ai_event_type || detailAnalysis?.event_type || null
+  const detailSentiment = detailItem?.ai_sentiment || detailAnalysis?.sentiment || null
+  const detailMarketImpact = detailItem?.ai_market_impact || detailAnalysis?.market_impact || null
+  const detailImportance = detailItem?.ai_importance ?? detailAnalysis?.importance ?? null
+  const detailTickers = detailItem ? Array.from(new Set([...(detailItem.symbols || []), ...(detailAnalysis?.tickers || [])])) : []
+  const contentFlags = [detailItem?.content_fetch_status,detailItem?.content_fetch_quality].filter(Boolean).map(value=>String(value).toLowerCase())
+  const contentDegraded = detailStatus==='degraded'||contentFlags.some(value=>['degraded','partial','incomplete','insufficient','failed','unavailable'].includes(value))
   return <div className="news-center">
     <SnapshotTickerBar section="news" tickers={tickers} current={scope==='company'?current:''} onSelect={ticker=>{setActive(ticker);setScope('company')}} leading={<button className={`market-entry ${scope==='market'?'active':''}`} onClick={()=>setScope('market')}>全市场</button>}/>
     {scope==='company'&&!current&&<div className="empty">搜索并选择证券，临时查看新闻。</div>}
@@ -873,17 +887,41 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
     <div className="section-title"><h2>{scope==='market'?'市场要闻':`${current} 新闻`}</h2><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'刷新中…':'刷新新闻'}</button></div>
     {scope==='market'&&marketNews.data?.last_updated_at&&<p className="market-updated">最近更新：{formatDate(marketNews.data.last_updated_at)}</p>}
     {refresh.isSuccess&&<p className="saved">已触发后台采集，稍后刷新查看。</p>}
-    <div className="news-list">{news?.map(item=>{const no=orderNo(item.id);const working=item.ai_summary_status==='queued'||item.ai_summary_status==='processing';const sending=summarize.isPending&&summarize.variables?.id===item.id;return <article className="news-card" key={item.id}>
+    <div className="news-list">{news?.map(item=>{const no=orderNo(item.id);return <article className="news-card" key={item.id}>
       <div className="news-body">
         <div className="news-meta">{no&&<span className="news-no">[{no}]</span>}<span className={`prov ${item.provider}`}>{item.provider==='finnhub'?'Finnhub':item.provider==='tavily'?'Tavily':item.provider==='yfinance'?'Yahoo财经':item.provider==='marketaux'?'Marketaux':item.provider}</span>{item.topic&&<span className="news-topic">{item.topic}</span>}{item.importance_score!==null&&item.importance_score>=.65&&<span className="news-important">重要</span>}{item.source&&<span>{item.source}</span>}<span>{item.published_at?formatDate(item.published_at):formatDate(item.found_at)}</span></div>
         <a className="news-title" href={item.url} target="_blank" rel="noreferrer">{item.translated_title||item.title}</a>
         {item.translated_title&&item.translated_title!==item.title&&<p className="news-original-title">{item.title}</p>}
-        {item.summary&&(!item.ai_summary||item.ai_summary_status==='failed')&&<p className="news-summary">{item.summary}</p>}
-        <button className="ai-btn" onClick={()=>summarize.mutate({id:item.id,force:!!item.ai_summary})} disabled={working||sending}>{working?(item.ai_summary_status==='queued'?'AI 总结排队中…':'AI 总结中…'):sending?'正在提交…':item.ai_summary_status==='failed'?'重试 AI 总结':item.ai_summary?'重新总结':'AI 总结'}</button>
-        {item.ai_summary_status==='failed'&&<small className="summary-error">{item.ai_summary_error||'AI 总结失败，请点击按钮重试。'}</small>}
-        {item.ai_summary&&item.ai_summary_status!=='failed'&&<div className="ai-summary news-ai-research"><span className="ai-tag">AI 研究概要 · {item.ai_summary_model}</span><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{item.ai_summary}</ReactMarkdown>{item.summary&&<details><summary>查看数据源原始概要</summary><p>{item.summary}</p></details>}</div>}
+        {item.summary&&<p className="news-summary">{item.summary}</p>}
+        <button type="button" className="ai-btn" onClick={()=>setSelectedNewsId(item.id)} aria-label={`查看 ${item.translated_title||item.title} 详情`}>详情</button>
       </div>
     </article>})}{!news?.length&&<div className="empty">暂无原始新闻，点击"刷新新闻"触发采集。</div>}</div>
+    <Sheet open={selectedNewsId!==null} onClose={()=>setSelectedNewsId(null)} title={detailItem?.translated_title||detailItem?.title||'新闻详情'}>
+      {detail.isLoading&&<div className="empty">正在读取已保存新闻详情…</div>}
+      {detail.isError&&<div className="empty">已保存新闻详情暂不可用，请稍后重试。</div>}
+      {detailItem&&<article className="report-detail sheet-report">
+        <p className="eyebrow">{detailItem.provider} · {detailItem.source||'来源未标注'} · {formatDate(detailItem.published_at||detailItem.found_at)}</p>
+        <h2>{detailItem.translated_title||detailItem.title}</h2>
+        {detailItem.translated_title&&detailItem.translated_title!==detailItem.title&&<p className="news-original-title">{detailItem.title}</p>}
+        <div className="news-meta"><span>{detailItem.ticker}</span>{detailTickers.map(ticker=><span key={ticker}>{ticker}</span>)}{detailItem.topic&&<span className="news-topic">{detailItem.topic}</span>}</div>
+        {contentDegraded&&<p className="metric-warning">原文正文不完整，摘要可能存在遗漏，请打开原文核对。</p>}
+        {detailPending&&<p className="news-summary">正在生成摘要…</p>}
+        {detailSummary&&!detailFailedOrIdle&&<section><h3>中文摘要</h3><div className="ai-summary"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{detailSummary}</ReactMarkdown></div></section>}
+        {detailItem.summary&&(!detailSummary||detailFailedOrIdle)&&<section><h3>原始概要</h3><p className="news-summary">{detailItem.summary}</p></section>}
+        {!detailPending&&!detailSummary&&!detailItem.summary&&<p className="news-summary">暂无已保存摘要。</p>}
+        {detailStatus==='failed'&&<small className="summary-error">{detailItem.ai_summary_error||'摘要生成失败，当前仅显示可用原始信息。'}</small>}
+        {!!detailAnalysis?.key_points?.length&&<section><h3>关键要点</h3><ul>{detailAnalysis.key_points.map((point,index)=><li key={`${point}-${index}`}>{point}</li>)}</ul></section>}
+        <div className="metric-grid">
+          <div className="metric-card"><span>事件类型</span><strong>{detailEventType||'数据不足'}</strong></div>
+          <div className="metric-card"><span>情绪</span><strong>{detailSentiment||'数据不足'}</strong></div>
+          <div className="metric-card"><span>重要性</span><strong>{detailImportance==null?'数据不足':detailImportance.toLocaleString('zh-CN',{maximumFractionDigits:2})}</strong></div>
+          <div className="metric-card"><span>市场影响</span><strong>{detailMarketImpact||'数据不足'}</strong></div>
+        </div>
+        {detailItem.article_content&&<details><summary>查看已保存正文</summary><p className="news-summary" style={{whiteSpace:'pre-wrap'}}>{detailItem.article_content}</p></details>}
+        {(detailItem.ai_summary_version||detailItem.ai_summary_generated_at||detailItem.content_fetch_method)&&<p className="statement-source">{detailItem.ai_summary_version&&`摘要版本 ${detailItem.ai_summary_version}`}{detailItem.ai_summary_generated_at&&` · 生成于 ${formatDate(detailItem.ai_summary_generated_at)}`}{detailItem.content_fetch_method&&` · 正文来源 ${detailItem.content_fetch_method}`}</p>}
+        <a className="news-title" href={detailItem.content_final_url||detailItem.url} target="_blank" rel="noreferrer">打开原文 ↗</a>
+      </article>}
+    </Sheet>
   </div>
 }
 
