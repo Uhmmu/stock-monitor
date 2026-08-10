@@ -597,24 +597,25 @@ export function PortfolioModule() {
           <div className="metric-card"><span>持仓盈亏</span><strong>{fmtMoney(s.realized_pnl+(live?.total_unrealized_pnl??s.total_unrealized_pnl),s.base_currency)}</strong><small>已实现 {fmtMoney(s.realized_pnl,s.base_currency)} · 未实现 {fmtMoney(live?.total_unrealized_pnl??s.total_unrealized_pnl,s.base_currency)}</small></div>
           <div className="metric-card"><span>最大回撤</span><strong className="negative">{fmtRatio(s.max_drawdown)}</strong><small>现金流调整后账户曲线</small></div>
         </div>
-        <MobilePerformanceOverview summary={live||s} benchmark={benchmark.data}/>
-        <RealtimeMarketEventList events={liveEvents} title="组合盘中事件" subtitle="持仓的突破、VWAP、放量与指标事件" compact/>
-        <PortfolioPerformanceChart data={performance.data} loading={performance.isLoading} error={performance.isError} range={performanceRange} onRange={setPerformanceRange} currency={s.base_currency}/>
-        <ReturnAttributionPreview data={attribution.data} positions={live?.positions||s.positions} currency={s.base_currency} loading={attribution.isLoading}/>
-        <PortfolioBenchmarkSection data={benchmark.data} loading={benchmark.isLoading} saving={saveBenchmark.isPending} error={saveBenchmark.error} onSave={payload=>saveBenchmark.mutate(payload)}/>
         <div className="table portfolio-table">
-          <div className="table-head portfolio-row"><span>证券</span><span>市值</span><span>权重</span><span>平均成本</span><span>未实现盈亏</span><span>总收益</span><span>来源</span></div>
+          <div className="table-head portfolio-row"><span>证券</span><span>市值</span><span>权重</span><span>平均成本</span><span>未实现盈亏</span><span>每日盈亏</span><span>总收益</span><span>来源</span></div>
           {displayPositions.map(p=><button key={p.symbol} className="table-row portfolio-row" onClick={()=>openPosition(p.symbol)}>
             <span className="toggle">{p.symbol}</span>
             <span data-label="本币市值">{p.live_price!=null?fmtMoney(p.live_market_value,p.currency):p.price_available?fmtMoney(p.market_value,p.currency):'数据不足'}</span>
             <span data-label={`${s.base_currency} 占比`}>{p.live_portfolio_weight==null?p.portfolio_weight==null?'—':`${p.portfolio_weight.toFixed(1)}%`:`${p.live_portfolio_weight.toFixed(1)}%`}</span>
             <span data-label="平均成本">{fmtMoney(p.average_cost,p.currency)}<small>{fmtNum(p.total_quantity)} 股</small></span>
-            <span data-label="浮动盈亏" className={((p.live_unrealized_pnl??p.unrealized_pnl)||0)>=0?'positive':'negative'}>{p.live_price!=null?`${fmtMoney(p.live_unrealized_pnl,p.currency)} (${fmtPercent(p.live_unrealized_pnl_percent)})`:p.price_available?`${fmtMoney(p.unrealized_pnl,p.currency)} (${fmtPercent(p.unrealized_pnl_percent)})`:'数据不足'}{(p.live_daily_pnl_percent??p.daily_change_percent)!=null&&<small className={((p.live_daily_pnl_percent??p.daily_change_percent)||0)>=0?'positive':'negative'}>今日 {fmtPercent(p.live_daily_pnl_percent??p.daily_change_percent??null)}</small>}</span>
+            <span data-label="浮动盈亏" className={((p.live_unrealized_pnl??p.unrealized_pnl)||0)>=0?'positive':'negative'}>{p.live_price!=null?`${fmtMoney(p.live_unrealized_pnl,p.currency)} (${fmtPercent(p.live_unrealized_pnl_percent)})`:p.price_available?`${fmtMoney(p.unrealized_pnl,p.currency)} (${fmtPercent(p.unrealized_pnl_percent)})`:'数据不足'}</span>
+            <span data-label="每日盈亏" className={(p.live_daily_pnl??p.live_daily_pnl_percent??0)>=0?'positive':'negative'}>{p.live_daily_pnl==null&&p.live_daily_pnl_percent==null?'数据不足':`${p.live_daily_pnl==null?'数据不足':fmtMoney(p.live_daily_pnl,p.currency)} (${p.live_daily_pnl_percent==null?'数据不足':fmtPercent(p.live_daily_pnl_percent)})`}</span>
             <span data-label="总收益" className={(p.total_pnl||0)>=0?'positive':'negative'}>{fmtMoney(p.total_pnl,p.currency)} ({fmtPercent(p.total_return_pct)})</span>
             <span data-label="账户来源">{p.authority_source==='ibkr_flex'?'IBKR':'手动'}<small>{p.data_completeness==='complete'?'完整':'部分数据'}</small></span>
           </button>)}
           {!displayPositions.length&&<div className="empty">还没有持仓，点击右上角添加第一笔买入记录。</div>}
         </div>
+        <MobilePerformanceOverview summary={live||s} benchmark={benchmark.data}/>
+        <RealtimeMarketEventList events={liveEvents} title="组合盘中事件" subtitle="持仓的突破、VWAP、放量与指标事件" compact/>
+        <PortfolioPerformanceChart data={performance.data} loading={performance.isLoading} error={performance.isError} range={performanceRange} onRange={setPerformanceRange} currency={s.base_currency}/>
+        <ReturnAttributionPreview data={attribution.data} positions={live?.positions||s.positions} currency={s.base_currency} loading={attribution.isLoading}/>
+        <PortfolioBenchmarkSection data={benchmark.data} loading={benchmark.isLoading} saving={saveBenchmark.isPending} error={saveBenchmark.error} onSave={payload=>saveBenchmark.mutate(payload)}/>
       </>}
     </div>}
 

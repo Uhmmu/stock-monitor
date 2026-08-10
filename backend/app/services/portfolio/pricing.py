@@ -154,16 +154,26 @@ def price_map(db: Session, symbols: list[str]) -> dict[str, PriceInfo]:
                 is_delayed=row.is_delayed,
             )
     unresolved = wanted - result.keys()
+    missing_previous_close = {
+        symbol for symbol, value in result.items() if value.previous_close is None
+    }
     for source in ("fmp", "yahoo"):
-        if not unresolved:
+        candidates = unresolved | missing_previous_close
+        if not candidates:
             break
         rows = db.scalars(
             select(HistoricalPrice).where(
-                HistoricalPrice.symbol.in_(unresolved), HistoricalPrice.source == source,
+                HistoricalPrice.symbol.in_(candidates), HistoricalPrice.source == source,
             ).order_by(HistoricalPrice.symbol, HistoricalPrice.date.desc())
         ).all()
         for row in rows:
-            if row.symbol in result or not row.close:
+            if not row.close:
+                continue
+            if row.symbol in missing_previous_close:
+                result[row.symbol] = replace(result[row.symbol], previous_close=float(row.close))
+                missing_previous_close.remove(row.symbol)
+                continue
+            if row.symbol in result:
                 continue
             previous = float(row.close) - float(row.change) if row.change is not None else None
             result[row.symbol] = PriceInfo(
