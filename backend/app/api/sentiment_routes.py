@@ -4,10 +4,15 @@ from sqlalchemy.orm import Session
 from app.api.routes import _require_watched_ticker
 from app.auth import get_current_user
 from app.database import get_db
-from app.services.adanos import get_stock_sentiment_insights
+from app.services.adanos import get_adanos_quota_status, get_stock_sentiment_insights
 
 
 router = APIRouter(prefix="/api/sentiment", dependencies=[Depends(get_current_user)])
+
+
+@router.get("/quota")
+def sentiment_quota():
+    return get_adanos_quota_status()
 
 
 @router.get("/{ticker}")

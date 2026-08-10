@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { compactNumber, SentimentContent, SentimentSkeleton, sentimentTone, type StockSentiment } from './Sentiment'
+import { AdanosQuotaCard, compactNumber, SentimentContent, SentimentSkeleton, sentimentTone, type StockSentiment } from './Sentiment'
 
 const data:StockSentiment = {
   symbol:'AAPL',
@@ -53,5 +53,15 @@ describe('舆情板块',()=>{
     const html=renderToStaticMarkup(<SentimentSkeleton/>)
     expect(html).toContain('aria-busy="true"')
     expect(compactNumber(12400)).toMatch(/1[.,]2万|12[.,]4K/i)
+  })
+
+  it('设置页显示主副 Key 的最近额度且不暴露密钥',()=>{
+    const html=renderToStaticMarkup(<AdanosQuotaCard data={{slots:[
+      {slot:'primary',label:'主 Key',egress:'直连',configured:true,limit:250,remaining:245,last_status:200,observed_at:'2026-08-10T10:00:00Z'},
+      {slot:'secondary',label:'副 Key',egress:'SOCKS5h 代理',configured:true,limit:250,remaining:0,last_status:429,observed_at:'2026-08-10T10:00:00Z'},
+    ]}}/>)
+    expect(html).toContain('245<small> / 250</small>')
+    expect(html).toContain('SOCKS5h 代理')
+    expect(html).not.toContain('sk_live_')
   })
 })

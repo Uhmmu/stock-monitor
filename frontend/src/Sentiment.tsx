@@ -23,6 +23,7 @@ export type StockSentiment = {
   available_sources:number
   sources:SentimentSource[]
 }
+export type AdanosQuota = {slots:{slot:'primary'|'secondary';label:string;egress:string;configured:boolean;limit:number|null;remaining:number|null;last_status:number|null;observed_at:string|null}[]}
 
 const alignmentLabels:Record<string,string> = {
   'Bullish alignment':'多源偏多',
@@ -52,6 +53,24 @@ export function SentimentSkeleton() {
     <div className="sentiment-skeleton-hero shimmer"/>
     <div className="sentiment-skeleton-grid">{[0,1,2,3].map(item=><div className="shimmer" key={item}/>)}</div>
   </section>
+}
+
+export function AdanosQuotaCard({data}:{data:AdanosQuota}) {
+  return <div className="adanos-quota-grid">{data.slots.map(row=>{
+    const percent=row.limit&&row.remaining!=null?Math.max(0,Math.min(100,row.remaining/row.limit*100)):0
+    const tone=row.remaining===0?'empty':percent<=20?'low':'ok'
+    return <article className={`adanos-quota-row ${tone}`} key={row.slot}>
+      <div><span>{row.label}</span><small>{row.egress}</small></div>
+      <strong>{!row.configured?'未配置':row.remaining==null?'等待首次请求':<>{row.remaining}<small> / {row.limit??'—'}</small></>}</strong>
+      <i aria-label={`${row.label} 月额度`}><span style={{width:`${percent}%`}}/></i>
+      <time>{row.observed_at?`${new Date(row.observed_at).toLocaleString('zh-CN')} · HTTP ${row.last_status}`:'不会额外请求 Adanos'}</time>
+    </article>
+  })}</div>
+}
+
+export function AdanosQuotaPanel() {
+  const quota=useQuery({queryKey:['sentiment-quota'],queryFn:()=>api<AdanosQuota>('/sentiment/quota'),staleTime:30_000})
+  return <section className="settings-card adanos-quota-card"><div className="section-title"><div><p>ADANOS USAGE</p><h2>舆情额度</h2></div><span>{quota.isFetching?'更新中…':'最近响应'}</span></div><p>额度来自实际舆情请求的响应头；查看此卡片不会消耗额度。</p>{quota.data&&<AdanosQuotaCard data={quota.data}/>} {quota.isError&&<div className="empty">额度状态暂时读取失败。</div>}</section>
 }
 
 export function SentimentContent({data,compact=false}:{data:StockSentiment;compact?:boolean}) {

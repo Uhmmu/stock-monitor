@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import math
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import monotonic
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
+import redis
 
 from app.config import Settings, get_settings
 
@@ -76,6 +80,8 @@ class SentimentSourceInsight:
 
 _cache: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
 _cache_lock = asyncio.Lock()
+_quota_status: dict[str, dict[str, Any]] = {}
+_QUOTA_REDIS_KEY = "adanos:quota-status:v1"
 
 
 def _number(value: Any) -> float | None:
@@ -125,6 +131,81 @@ def _valid_proxy_url(value: str) -> bool:
         return parsed.scheme == "socks5h" and bool(parsed.hostname and parsed.port)
     except ValueError:
         return False
+
+
+def _header_int(response: httpx.Response, name: str) -> int | None:
+    try:
+        return int(response.headers[name])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _key_tag(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode()).hexdigest()[:12]
+
+
+def _record_quota(slot: str, response: httpx.Response, api_key: str) -> None:
+    _quota_status[slot] = {
+        "limit": _header_int(response, "x-ratelimit-limit-monthly"),
+        "remaining": _header_int(response, "x-ratelimit-remaining-monthly"),
+        "last_status": response.status_code,
+        "observed_at": datetime.now(UTC).isoformat(),
+        "_key_tag": _key_tag(api_key),
+    }
+
+
+def _persist_quota(settings: Settings) -> None:
+    if not getattr(settings, "redis_url", "") or not _quota_status:
+        return
+    try:
+        with redis.Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=.3, socket_timeout=.3,
+        ) as client:
+            client.hset(_QUOTA_REDIS_KEY, mapping={key: json.dumps(value) for key, value in _quota_status.items()})
+    except (redis.RedisError, OSError):
+        logger.warning("Adanos quota snapshot could not be persisted")
+
+
+def _stored_quota(settings: Settings) -> dict[str, dict[str, Any]]:
+    if not getattr(settings, "redis_url", ""):
+        return _quota_status
+    try:
+        with redis.Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=.3, socket_timeout=.3,
+        ) as client:
+            stored = {key: json.loads(value) for key, value in client.hgetall(_QUOTA_REDIS_KEY).items()}
+        return stored or _quota_status
+    except (redis.RedisError, json.JSONDecodeError, OSError, TypeError):
+        return _quota_status
+
+
+def get_adanos_quota_status(settings: Settings | None = None) -> dict[str, Any]:
+    active_settings = settings or get_settings()
+    api_keys = configured_api_keys(active_settings)
+    observations = _stored_quota(active_settings)
+    return {
+        "slots": [
+            {
+                "slot": slot,
+                "label": label,
+                "egress": egress,
+                "configured": index < len(api_keys),
+                **({
+                    key: observations[slot].get(key)
+                    for key in ("limit", "remaining", "last_status", "observed_at")
+                } if index < len(api_keys) and observations.get(slot, {}).get("_key_tag") == _key_tag(api_keys[index]) else {
+                    "limit": None,
+                    "remaining": None,
+                    "last_status": None,
+                    "observed_at": None,
+                }),
+            }
+            for index, (slot, label, egress) in enumerate((
+                ("primary", "主 Key", "直连"),
+                ("secondary", "副 Key", "SOCKS5h 代理"),
+            ))
+        ],
+    }
 
 
 def source_alignment(bullish_values: list[float]) -> str:
@@ -209,11 +290,13 @@ async def _fetch_compare_source(
     params = {"tickers": symbol, "days": days}
     try:
         response = await primary_client.get(url, params=params, headers={"X-API-Key": primary_key})
+        _record_quota("primary", response, primary_key)
         if response.status_code == 429 and secondary_key and secondary_client:
             logger.warning("Adanos %s primary quota exhausted for %s; trying proxied secondary", source, symbol)
             response = await secondary_client.get(
                 url, params=params, headers={"X-API-Key": secondary_key},
             )
+            _record_quota("secondary", response, secondary_key)
         if response.status_code == 404:
             return None
         response.raise_for_status()
@@ -294,6 +377,7 @@ async def get_stock_sentiment_insights(
             )
             for source in source_keys
         ))
+        _persist_quota(settings)
     finally:
         if owns_primary:
             await primary_client.aclose()

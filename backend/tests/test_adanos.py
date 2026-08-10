@@ -7,6 +7,7 @@ import pytest
 from app.services.adanos import (
     build_stock_sentiment_insights,
     configured_api_keys,
+    get_adanos_quota_status,
     get_stock_sentiment_insights,
     normalize_source_insight,
     source_alignment,
@@ -26,9 +27,10 @@ def config(**overrides):
 
 
 class Response:
-    def __init__(self, payload, status_code=200):
+    def __init__(self, payload, status_code=200, headers=None):
         self.payload = payload
         self.status_code = status_code
+        self.headers = headers or {}
 
     def json(self):
         return self.payload
@@ -166,6 +168,49 @@ def test_rate_limited_key_fails_over_to_alternate_key():
     assert len(primary.calls) == len(secondary.calls) == 4
     assert all(call[1]["headers"] == {"X-API-Key": "key-a"} for call in primary.calls)
     assert all(call[1]["headers"] == {"X-API-Key": "key-b"} for call in secondary.calls)
+
+
+def test_quota_status_persists_observed_headers_without_exposing_keys(monkeypatch):
+    from app.services import adanos
+
+    store = {}
+
+    class FakeRedis:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def hset(self, _key, mapping):
+            store.update(mapping)
+
+        def hgetall(self, _key):
+            return store
+
+    monkeypatch.setattr(adanos.redis.Redis, "from_url", lambda *_args, **_kwargs: FakeRedis())
+    adanos._quota_status.clear()
+    payload = Response({"stocks": [{
+        "ticker": "AAPL", "buzz_score": 60, "bullish_pct": 50,
+        "trend": "stable", "mentions": 100, "trade_count": 20,
+    }]}, headers={
+        "x-ratelimit-limit-monthly": "250",
+        "x-ratelimit-remaining-monthly": "245",
+    })
+    client = Client({source: payload for source in ("reddit", "x", "news", "polymarket")})
+    settings = config(adanos_api_keys="key-a,key-b", redis_url="redis://test")
+    asyncio.run(get_stock_sentiment_insights(
+        "AAPL", config=settings,
+        client=client, secondary_client=Client({}), use_cache=False,
+    ))
+    adanos._quota_status.clear()
+    status = get_adanos_quota_status(settings)
+    assert status["slots"][0] | {"observed_at": None} == {
+        "slot": "primary", "label": "主 Key", "egress": "直连", "configured": True,
+        "limit": 250, "remaining": 245, "last_status": 200, "observed_at": None,
+    }
+    assert status["slots"][1]["remaining"] is None
+    assert "key-a" not in str(status) and "key-b" not in str(status)
 
 
 @pytest.mark.parametrize("status", [401, 403, 404, 500, 502, 503, 504])

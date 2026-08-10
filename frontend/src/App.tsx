@@ -8,7 +8,7 @@ import { Sheet } from './Sheet'
 import { SecuritySearchAutocomplete, securityPayload, type SecuritySearchResult } from './SecuritySearchAutocomplete'
 import { PortfolioModule } from './Portfolio'
 import { DiscoverySettingsPanel, OpportunityDiscovery } from './OpportunityDiscovery'
-import { SentimentModule } from './Sentiment'
+import { AdanosQuotaPanel, SentimentModule } from './Sentiment'
 import { InvestmentCalendar } from './InvestmentCalendar'
 import { OwnershipSection } from './Ownership'
 import { AIChatPage } from './features/ai-chat'
@@ -516,7 +516,7 @@ export default function App() {
       {tab==='technical'&&<TechnicalAnalysisCenter/>}
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
-      {tab==='settings'&&<>{settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}<CongressSettings/><RealtimeProviderHealthPanel/><MacroDataSourcePanel isAdmin={authUser.role==='admin'}/><DiscoverySettingsPanel/>{authUser.role==='admin'&&<AdminOperationsPanel/>}</> }
+      {tab==='settings'&&<>{settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}<AdanosQuotaPanel/><CongressSettings/><RealtimeProviderHealthPanel/><MacroDataSourcePanel isAdmin={authUser.role==='admin'}/><DiscoverySettingsPanel/>{authUser.role==='admin'&&<AdminOperationsPanel/>}</> }
       {tab==='ibkr-test'&&authUser.role==='admin'&&<IbkrIntegrationTest/>}
       </div>
     </main>
