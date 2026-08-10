@@ -63,7 +63,7 @@ services:
 
   sec-worker:
     <<: *backend
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 -Q sec_heavy -n sec@%h
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 --prefetch-multiplier=1 -Q ibkr,sec_heavy -n sec@%h
     healthcheck:
       disable: true
 

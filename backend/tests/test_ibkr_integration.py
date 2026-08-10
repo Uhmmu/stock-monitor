@@ -20,6 +20,12 @@ def run(value):
     return asyncio.run(value)
 
 
+def test_flex_sync_uses_dedicated_queue():
+    from app.tasks.celery_app import sync_ibkr_flex_account
+
+    assert sync_ibkr_flex_account.queue == "ibkr"
+
+
 def settings(**overrides):
     values = {
         "ibkr_cp_enabled": True, "ibkr_cp_base_url": "https://127.0.0.1:5000/v1/api",

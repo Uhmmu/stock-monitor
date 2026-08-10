@@ -297,6 +297,7 @@ def ensure_us_macro_fresh():
 
 @celery_app.task(
     name="app.tasks.celery_app.sync_ibkr_flex_account",
+    queue="ibkr",
     soft_time_limit=540,
     time_limit=600,
 )

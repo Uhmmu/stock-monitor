@@ -14,7 +14,7 @@ const tabs = [
   ['corporate-actions','公司活动'],['performance','收益与绩效'],['tax-lots','税务批次'],['fx-rates','多币种'],
 ] as const
 
-const stageLabel:Record<string,string>={requested:'请求中',downloading:'等待并下载 Flex',downloaded:'下载完成',parsing:'解析',importing:'导入',reconciling:'Portfolio 对账',rebuilding:'重建分析',completed:'完成',failed:'失败'}
+const stageLabel:Record<string,string>={requested:'已排队',downloading:'等待并下载 Flex',downloaded:'下载完成',parsing:'解析',importing:'导入',reconciling:'Portfolio 对账',rebuilding:'重建分析',completed:'完成',failed:'失败'}
 
 const important:Record<string,string[]> = {
   positions:['description','side','position','costBasisPrice','costBasisMoney','markPrice','positionValue','fifoPnlUnrealized','percentOfNAV','fxRateToBase','listingExchange','openDateTime','holdingPeriodDateTime'],
