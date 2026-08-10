@@ -915,8 +915,8 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
           <div className="metric-card"><span>事件类型</span><strong>{detailEventType||'数据不足'}</strong></div>
           <div className="metric-card"><span>情绪</span><strong>{detailSentiment||'数据不足'}</strong></div>
           <div className="metric-card"><span>重要性</span><strong>{detailImportance==null?'数据不足':detailImportance.toLocaleString('zh-CN',{maximumFractionDigits:2})}</strong></div>
-          <div className="metric-card"><span>市场影响</span><strong>{detailMarketImpact||'数据不足'}</strong></div>
         </div>}
+        {detailReady&&<div className="metric-card" style={{marginTop:14}}><span>市场影响</span><strong>{detailMarketImpact||'数据不足'}</strong></div>}
         {detailItem.article_content&&<details><summary>查看已保存正文</summary><p className="news-summary" style={{whiteSpace:'pre-wrap'}}>{detailItem.article_content}</p></details>}
         {(detailItem.ai_summary_version||detailItem.ai_summary_generated_at||detailItem.content_fetch_method)&&<p className="statement-source">{detailItem.ai_summary_version&&`摘要版本 ${detailItem.ai_summary_version}`}{detailItem.ai_summary_generated_at&&` · 生成于 ${formatDate(detailItem.ai_summary_generated_at)}`}{detailItem.content_fetch_method&&` · 正文来源 ${detailItem.content_fetch_method}`}</p>}
         <a className="news-title" href={detailItem.content_final_url||detailItem.url} target="_blank" rel="noreferrer">打开原文 ↗</a>
