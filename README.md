@@ -1,55 +1,76 @@
-# Stock Monitor
+<p align="center">
+  <img src="frontend/public/logo.png" width="96" alt="Stock Monitor logo">
+</p>
 
-一个可自托管的美股监控与研究工作台。它把实时行情、异动提醒、新闻与 SEC 披露、基本面数据、AI 研究助手、交易日志和多模型指标集中在一个响应式仪表盘中。
+<h1 align="center">Stock Monitor</h1>
 
-项目面向希望自己掌握数据、API 密钥和部署环境的个人投资者与小团队。它提供研究辅助，不构成投资建议。
+<p align="center">
+  自托管的美股监控、研究与投资组合分析工作台
+</p>
 
-## 功能
+Stock Monitor 把行情、自选股、新闻、SEC 披露、基本面、估值、投资组合、交易日志和 AI 研究集中在一个响应式仪表盘中。数据、账户和 API Key 都保留在自己的服务器上，适合个人投资者或小团队部署。
 
-- **实时行情与自选股**：按计划轮询自选标的，展示价格、涨跌幅、市场状态和 TradingView 图表。
-- **异动提醒与调查**：按 20 分钟、1 小时和日内阈值检测异常波动，并自动收集相关新闻与上下文。
-- **新闻与 SEC 数据**：个股新闻聚合 Yahoo、Finnhub、Marketaux 与 Tavily；“新闻中心”的紫色“全市场”入口以 Finnhub 市场新闻为主、Marketaux 为补充，并用本地规则过滤、事件聚类、重要度排序和主题均衡，不消耗 LLM 筛选额度。市场新闻与个股新闻都支持按卡片请求 AI 总结。
-- **基本面、股权与估值**：展示财报、分析师评级、季度数据、股本/空头统计、SEC 内部人交易、延迟 13F 申报、DCF 情景和同行估值比较。
-- **投资日历**：以持仓和自选股为中心聚合财报、除息/支付和拆股日期，保留来源、预计/确认状态、冲突与数据新鲜度，并以确定性规则标记组合相关影响。
-- **轻量技术分析**：从 FMP 缓存最多约五年的日线 OHLCV，在本地聚合周线、计算指标与关键区域，并生成可持久化的静态 WebP 图表。
-- **多模型交叉**：根据行业与公司特征组合模型权重，并计算 Forward P/E、PEG、EV/Sales、DCF、ROIC、Piotroski F-Score、Altman Z-Score 等指标。计算结果会显示公式、数据来源、缺失字段和适用性，不把缺失数据伪装成 0 分。
-- **多用户登录**：支持注册申请、登录、JWT 会话、管理员审核/删除用户和管理员权限控制。
-- **交易日志区**：按用户记录交易计划、买卖方向、数量、价格、标签、图片和复盘内容，并可调用 AI 生成总结。
-- **多币种持仓**：记录本币成本与行情，组合总市值、盈亏、权重和行业暴露通过 Yahoo 外汇报价折算到组合基础币种；汇率缺失时明确排除并提示，不按 1:1 混算。
-- **机会发现**：仅手动触发，可在“Perplexity Search API + `gpt-5.6-sol`”低成本模式与“`finance_search` + Perplexity GPT-5.4”深度 Agent 模式间切换；两种模式都会结合 Yahoo、FMP、Finnhub、SEC、持仓、股票池以及新闻标题和概要，结果、本地验证、来源与历史报告均持久化。
-- **AI 研究助手**：内置多轮对话页面（`/ai/new`、`/ai/{id}`），支持 SSE 流式输出、会话归档/软删除/恢复、重新生成、停止生成、引用抽屉和工具活动展示。回答只使用已入库数据，缺数据时明确标注。
-- **只读 AI 工具层**：44 个版本化只读工具建立在 Research Data Gateway 之上，覆盖组合、新闻、SEC、公司、行情与技术数据。工具不写库、不调用上游 API、不递归调用，全部执行都有预算、超时、压缩和审计。
-- **AI 长期记忆与投资决策**：跨会话的用户偏好/约束记忆需显式确认才生效，推断内容停留在 proposed；投资决策记录动作、期限、论点、催化剂、风险和失效条件，草稿必须用户确认后才转为正式，执行状态只是日志，不下单。
-- **富内容回答**：模型只选择服务端生成的候选块 ID，指标网格、对比表、迷你走势、新闻聚类、风险面板、SEC 摘要等组件由确定性工厂产出，并始终附带完整 Markdown 回退。
-- **可选联网研究**：Exa 普通 Search 与五档 Agent Deep Search，默认关闭；私有记忆和决策上下文不会发送到外部搜索。
-- **标准化行情快照**：`price_snapshots` 记录真实行情时间戳、OHLC、涨跌、10/20 日均量与相对量、盘口时段、来源和原始载荷，通过 `snapshot_key` 保证幂等，只有新快照才触发异动评估。
-- **交易日志与持仓同步**：已执行的日志记录通过稳定 source key 幂等同步为权威交易流水并重建派生持仓，编辑和删除都可对账。
-- **SEC 官方数据**：支持 8-K、10-Q、10-K、内幕交易和 13F 持仓信息。
-- **数据缺口提示**：当外部数据覆盖不足时明确显示缺少的字段，方便排错和判断模型可信度。
+> 本项目是研究与记录工具，不提供投资建议，也不会自动下单。历史数据、模型结果和模拟结果不代表未来表现。
+
+## 核心能力
+
+- **市场雷达**：聚合 Alpaca、Tiingo、Finnhub 和 Yahoo 行情，保存标准化快照，通过 SSE 推送实时价格与盘中事件。
+- **异动与新闻**：监控自选股价格和成交量变化，聚合公司新闻、市场新闻及调查上下文，并支持按需 AI 总结。
+- **基本面研究**：提供财务报表、公司资料、分析师评级、SEC 8-K / 10-Q / 10-K、Form 4、13F、技术分析和个股横向比较。
+- **估值与宏观**：包含 DCF、多模型估值、ROIC、Piotroski F-Score、Altman Z-Score，以及可选的美国宏观数据。
+- **投资组合中心**：支持多币种折算、权威交易流水、持仓重建、收益归因、组合健康、策略画像和大盘基准对比。
+- **组合量化分析**：提供风险体检、压力测试、情景分析、蒙特卡洛模拟和约束组合优化；结果每周后台预计算，也保留手动刷新。
+- **AI 研究助手**：支持流式多轮对话、只读研究工具、引用、长期记忆、投资决策记录，以及可选的 Exa 联网研究。
+- **机会发现与舆情**：可选 Perplexity / Exa 机会发现和 Adanos 多源舆情，带本地验证、预算限制和持久化历史。
+- **桌面与 iPhone 前端**：桌面端位于 `/`，独立 iPhone PWA 位于 `/mobile/`，两端共用同一套认证和 API。
+- **多用户与管理**：JWT 登录、注册审核、管理员设置和按用户隔离的数据访问。
+
+外部数据缺失或覆盖不足时，界面会明确显示“数据不足”，不会把缺失值当作 0，也不会编造财务数据。
 
 ## 技术栈
 
 | 层 | 技术 |
 |---|---|
-| 前端 | React 19、TypeScript、Vite、TanStack Query、react-markdown、remark-gfm |
-| 后端 | FastAPI、SQLAlchemy 2、Alembic、Pydantic Settings |
+| 桌面与移动前端 | React 19、TypeScript、Vite、TanStack Query |
+| API | FastAPI、SQLAlchemy 2、Alembic、Pydantic Settings |
 | 后台任务 | Celery、Redis |
 | 数据库 | PostgreSQL 16 |
-| 数据源 | yfinance、Finnhub MCP、FMP（仅历史日线与公司资料）、Tavily、SEC EDGAR / edgartools |
-| AI | 可配置的 OpenAI-compatible API（对话、工具调用、总结、记忆抽取）、可选 Exa 联网搜索 |
-| 网关 | Caddy（HTTPS 和 Basic Auth） |
+| 数据处理 | pandas、NumPy、SciPy、yfinance、edgartools |
+| 网关 | nginx、Caddy |
 | 部署 | Docker Compose |
+
+## 架构
+
+```mermaid
+flowchart LR
+    U[浏览器 / PWA] --> C[Caddy]
+    C --> D[桌面前端]
+    C --> M[iPhone 前端]
+    D --> A[FastAPI]
+    M --> A
+    A --> P[(PostgreSQL)]
+    A --> R[(Redis)]
+    R --> W[Celery Worker]
+    R --> S[SEC / IBKR Worker]
+    B[Celery Beat] --> R
+    Q[Market Stream] --> R
+    A --> F[Finnhub MCP]
+    A --> E[外部行情 / 新闻 / AI / SEC]
+    W --> E
+    S --> E
+```
 
 ## 快速开始
 
 ### 环境要求
 
-- Docker Engine 与 Docker Compose
-- Finnhub API Key
-- Tavily API Key
-- OpenAI-compatible API Key 和 Base URL
+- Docker Engine
+- Docker Compose v2
+- 建议至少 4 GB 内存
 
-### 1. 获取代码并配置环境变量
+所有第三方 Provider 都是可选项。没有 API Key 时应用仍可启动，对应功能会降级或显示数据不足。
+
+### 1. 获取代码
 
 ```bash
 git clone https://github.com/Uhmmu/stock-monitor.git
@@ -57,205 +78,147 @@ cd stock-monitor
 cp .env.example .env
 ```
 
-至少填写以下配置：
+### 2. 设置基础配置
+
+编辑 `.env`，至少修改以下值：
 
 ```env
-POSTGRES_PASSWORD=change-this
-DATABASE_URL=postgresql+psycopg://stock:change-this@postgres:5432/stock_monitor
+POSTGRES_DB=stock_monitor
+POSTGRES_USER=stock
+POSTGRES_PASSWORD=replace-with-a-strong-password
+DATABASE_URL=postgresql+psycopg://stock:replace-with-a-strong-password@postgres:5432/stock_monitor
 
-FINNHUB_API_KEY=your-finnhub-key
-TAVILY_API_KEY=your-tavily-key
-MARKETAUX_API_KEY=                  # 可选；用于补充市场/个股新闻
-MARKETAUX_ENABLED=true
-MARKET_NEWS_ENABLED=true
-FINNHUB_MARKET_NEWS_ENABLED=true
-MARKETAUX_MARKET_NEWS_ENABLED=true
-MARKET_NEWS_POLL_MINUTES=60
-MARKETAUX_MARKET_REQUESTS_RESERVE=12
-MARKET_NEWS_MAX_ITEMS=20
-FMP_API_KEY=your-fmp-key
-FMP_DAILY_REQUEST_LIMIT=150
-FMP_REQUEST_RESERVE=10
-FMP_SYNC_ENABLED=true
-FMP_PROFILE_SYNC_ENABLED=true
-FMP_PRICE_SYNC_ENABLED=true
-FMP_TRANSLATION_ENABLED=true
-
-OPENAI_API_KEY=your-key
-OPENAI_BASE_URL=https://api.openai.com/v1
-MODEL_SIMPLE=gpt-5.4-mini
-MODEL_MEDIUM=gpt-5.6-luna
-MODEL_IMPORTANT=gpt-5.6-sol
-
-# 可选：启用手动机会发现
-PERPLEXITY_API_KEY=your-perplexity-key
-PERPLEXITY_SEARCH_URL=https://api.perplexity.ai/search
-PERPLEXITY_MAX_MONTHLY_BUDGET_USD=10
-PERPLEXITY_MAX_RUN_COST_USD=1
-
-# 可选：启用 Reddit、X.com、新闻与 Polymarket 聚合舆情
-ADANOS_API_KEY=your-adanos-key
-# 可选：最多两个 Key；第一个直连，只有收到 429 时第二个才经 SOCKS5h 代理重试
-ADANOS_API_KEYS=your-adanos-key-1,your-adanos-key-2
-ADANOS_API_BASE_URL=https://api.adanos.org
-ADANOS_PROXY_URL=socks5h://host.docker.internal:10808
-
-# 生产环境必须修改
-JWT_SECRET=generate-a-long-random-secret
-ADMIN_INIT_PASSWORD=generate-a-strong-admin-password
-
-SITE_DOMAINS="stocks.example.com, www.stocks.example.com"
-AUTH_USER=admin
-AUTH_PASSWORD_HASH=   # caddy hash-password 生成
+JWT_SECRET=replace-with-a-long-random-secret
+ADMIN_USERNAME=admin
+ADMIN_INIT_PASSWORD=replace-with-a-strong-admin-password
+SEC_USER_AGENT=Stock Monitor admin@example.com
 ```
 
-不要把 `.env`、API Key、JWT 密钥或真实密码提交到 GitHub。
+`POSTGRES_PASSWORD` 和 `DATABASE_URL` 中的密码必须一致。可以使用 `openssl rand -hex 32` 生成随机密钥。
 
-Adanos Key 仅由 FastAPI 服务端读取。登录后的“舆情”板块通过后端并发查询四个来源，
-单个来源失败不会影响其余来源；成功结果缓存 5 分钟，浏览器不会接触 Key。配置
-`ADANOS_API_KEYS` 时，第一个 Key 始终直连；仅当单个来源返回 429 时，才用第二个
-Key 经 `ADANOS_PROXY_URL` 重试。代理必须为 `socks5h`，不可用时第二个 Key 不会直连回退。
-
-### 可选：AI 研究助手
-
-AI 对话、工具层、总结、长期记忆、投资决策和富内容默认开启，但 `AI_API_KEY` 与 `AI_API_BASE` 只能由服务端配置，浏览器不会接触密钥。若不打算启用，请显式设置 `AI_ENABLED=false`，不要依赖"有表无配置"的隐式状态：
-
-```env
-AI_ENABLED=true
-AI_API_BASE=https://api.openai.com/v1
-AI_API_KEY=your-key
-AI_MODEL=gpt-5.6-sol
-```
-
-对话上下文由会话摘要、最近未摘要消息、已确认记忆和活跃决策组成，三类记录相互独立且可分别关闭。模型没有写工具：记忆和决策的落库都需要用户显式确认。
-
-### 可选：AI 对话联网研究
-
-AI 对话支持“不联网”、Exa 普通 Search，以及 Minimal、Low、Medium、High、X-High 五档 Exa Agent Deep Search。默认关闭且默认模式为“不联网”；启用时只在服务端设置 `EXA_API_KEY`，浏览器不会接触 Key、API Base、内部预算或 Provider Run ID。High 与 X-High 默认需要费用确认，X-High 不会被自动选择。
-
-普通搜索和 Deep Search 是两条独立链路：普通搜索调用 `/search` 并由当前主模型组织答案；Deep Search 创建持久化 `/agent/runs`，支持刷新恢复与主动取消，完成后再交给当前主模型轻量整理。生产配置、费用、隐私边界和测试命令见 [docs/external-search.md](docs/external-search.md) 与 [docs/exa-deep-search.md](docs/exa-deep-search.md)。
-
-### 2. 启动服务
+### 3. 启动本地环境
 
 ```bash
 docker compose up -d --build
 docker compose ps
 ```
 
-API 容器启动时会自动执行 Alembic migration。生产环境中，后端代码变化后需要重建所有共享后端构建上下文的服务：`api`、`worker`、`sec-worker`、`beat`。
+打开 <http://127.0.0.1:8080>。API 健康检查：
 
 ```bash
-docker compose build api worker sec-worker beat
-docker compose up -d api worker sec-worker beat
-docker compose build frontend
-docker compose up -d frontend
+curl http://127.0.0.1:8080/api/health
 ```
 
-配置 Caddy 域名后，访问 `SITE_DOMAINS` 中的任一 HTTPS 地址。多个域名使用英文逗号和空格分隔；旧的 `SITE_DOMAIN` 配置仍然兼容。本地开发可以使用：
+API 启动时会自动执行数据库迁移。首次启动且数据库中没有管理员时，会使用 `ADMIN_USERNAME` 和 `ADMIN_INIT_PASSWORD` 创建管理员账户。
+
+## 可选 Provider
+
+按需要在 `.env` 中启用，不要把真实 Key 提交到 Git：
+
+| 能力 | 主要配置 |
+|---|---|
+| Finnhub 行情与新闻 | `FINNHUB_API_KEY` |
+| Alpaca 实时行情 | `ALPACA_MARKET_DATA_ENABLED`、`ALPACA_API_KEY`、`ALPACA_API_SECRET` |
+| Tiingo 行情与新闻 | `TIINGO_MARKET_DATA_ENABLED`、`TIINGO_API_TOKEN`、`TIINGO_NEWS_ENABLED` |
+| FMP 公司资料与历史日线 | `FMP_API_KEY` |
+| Tavily / Marketaux 新闻 | `TAVILY_API_KEY`、`MARKETAUX_API_KEY` |
+| AI 总结与报告 | `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`MODEL_*` |
+| AI 对话 | `AI_ENABLED`、`AI_API_BASE`、`AI_API_KEY`、`AI_MODEL` |
+| Exa 联网研究 | `EXA_ENABLED`、`EXA_API_KEY` |
+| Perplexity 机会发现 | `PERPLEXITY_API_KEY` |
+| Adanos 舆情 | `ADANOS_API_KEY` 或 `ADANOS_API_KEYS` |
+| Alpha Vantage 宏观数据 | `ALPHA_VANTAGE_ENABLED`、`ALPHA_VANTAGE_API_KEY` |
+| IBKR 只读账户同步 | `IBKR_CP_*` 或 `IBKR_FLEX_*`，参见 [IBKR 文档](docs/integrations/ibkr.md) |
+
+AI、搜索、机会发现和舆情 Key 只由服务端读取，浏览器不会接触这些凭据。IBKR 集成必须使用经过验证的 `socks5h` 代理并采用 fail-closed 配置，禁止代理失败后直连。
+
+## 生产部署
+
+设置生产域名后，使用不包含本地 override 的 Compose 文件启动完整栈：
+
+```env
+SITE_DOMAINS="stocks.example.com, www.stocks.example.com"
+```
 
 ```bash
-docker compose -f compose.yaml -f compose.override.yaml up -d
+docker compose -f compose.yaml up -d --build
+docker compose -f compose.yaml ps
 ```
 
-### 3. 创建用户
+Caddy 会负责 HTTPS，并将 `/`、`/mobile/` 和 `/api` 分别路由到桌面前端、iPhone 前端和 FastAPI。
 
-首次启动时，应用会根据 `ADMIN_INIT_PASSWORD` 创建管理员账号。普通用户可以在登录页申请注册，管理员在“系统设置”中审核账号。
-
-### 4. 添加自选股
-
-登录后进入“自选股”，添加股票代码，例如 `AAPL`、`MSFT` 或 `NVDA`。后台任务会逐步拉取行情、财报、新闻和模型快照。
-
-FMP 配额按 UTC 自然日记账。每次 HTTP 尝试都会先原子预留并持久化，实际可用量为 `FMP_DAILY_REQUEST_LIMIT - FMP_REQUEST_RESERVE`；耗尽后保存当前队列位置，下一 UTC 日从未完成股票继续。公开读取接口只访问数据库与图表缓存，不会触发 FMP 请求。公司资料默认按 180 天长缓存处理，Yahoo 仍是财务报表来源。
-
-“基本面 → 股权与股本”的股本统计使用 Yahoo 24 小时缓存；上游失败时保留并标记最近一次有效缓存。SEC Form 4 与 13F 继续复用现有 SEC 同步任务，13F 会明确提示季度申报的天然滞后。投资日历由后台每 12 小时同步 Yahoo 的财报、分红和拆股结构化数据，页面请求不会直接调用上游。当前版本不会声称支持尚未验证的 IPO、公司活动、宏观日历、政府交易或付费 FMP 端点，也不需要新增环境变量。
-
-### 新闻采集与总结
-
-- “全市场”新闻默认每小时处理一次，Finnhub 是主源；Marketaux 是补充源，按独立状态和每日预留额度运行。没有 `MARKETAUX_API_KEY` 时，Finnhub 市场新闻仍可正常工作。
-- 个股新闻按现有轮询周期采集。所有新闻先经过字段校验、追踪参数清理、精确去重、相似事件聚类、质量/重要度评分和软性多样性重排，再写入数据库。
-- 市场新闻重点覆盖宏观经济、央行利率、美股市场、政策监管、地缘政治、能源和科技等主题；个股新闻会提高财报、并购、监管、管理层变化和融资等事件的优先级，并降低标题党内容的排序。
-- 新闻卡片不下载或展示图片。点击“AI 总结”后才会对单条已入库新闻调用配置的 OpenAI-compatible 模型；AI 失败不会影响新闻抓取和入库。
+后端代码或依赖变化时，`api`、`worker`、`sec-worker`、`beat` 和 `market-stream` 使用同一个构建上下文，需要一起重建。生产升级前请先备份 PostgreSQL 和持久卷。
 
 ## 常用命令
 
 ```bash
-make up       # 构建并启动
+make up       # 构建并启动本地环境
 make down     # 停止服务
 make logs     # 查看日志
 make migrate  # 执行数据库迁移
-make test     # 运行后端测试
+make test     # 运行后端与桌面前端测试
 make backup   # 备份 PostgreSQL
 ```
 
-前端本地验证：
-
-```bash
-cd frontend
-npm test
-npm run build
-```
-
-后端专项测试：
+单独验证各部分：
 
 ```bash
 docker compose run --rm api pytest
+
+cd frontend
+npm ci
+npm test
+npm run build
+
+cd ../frontend-ios
+npm ci
+npm test
+npm run build
 ```
-
-## 多模型指标说明
-
-年度损益表、资产负债表和现金流量表优先由 yfinance 拉取并统一字段名，再由应用计算：
-
-- **ROIC**：NOPAT ÷ 投入资本，优先使用当前/上一年度平均投入资本。
-- **Piotroski F-Score**：九项会计信号。缺失信号不会直接计为失败，界面会显示例如 `6/8`。
-- **Altman Z-Score**：经典上市制造业模型。银行、保险等金融企业不适用；软件和 REIT 会标记较低适用性。
-
-模型页面会同时展示公式、计算口径、警告、来源和缺失字段。不同公司的财报口径与行业特征不同，请结合原始披露理解结果。
 
 ## 项目结构
 
 ```text
 stock-monitor/
 ├── backend/
-│   ├── app/api/             # FastAPI 路由、认证、交易日志、多模型 API
-│   ├── app/services/        # 行情、新闻、SEC、LLM、多模型计算
-│   ├── app/research/        # 只读 Research Data Gateway
-│   ├── app/ai/              # 无状态 AI Orchestrator 与会话层
-│   ├── app/ai_tools/        # 只读 AI 工具适配、策略与执行器
-│   ├── app/ai_memory/       # 长期记忆与投资决策
-│   ├── app/ai_rich_content/ # 确定性富内容块工厂
-│   ├── app/external_search/ # 可选 Exa Search / Agent Deep Search
-│   ├── app/tasks/           # Celery 定时任务和后台同步
-│   ├── alembic/versions/    # 数据库迁移
-│   └── tests/               # 后端测试
-├── frontend/src/            # React 单页应用
-├── frontend/src/features/   # AI 对话与记忆前端模块
-├── docs/                    # AI、搜索与 Gateway 边界文档
-├── finnhub-mcp/             # Finnhub MCP sidecar
-├── compose.yaml
-├── Caddyfile
-└── .env.example
+│   ├── app/api/                 # FastAPI 路由
+│   ├── app/services/            # 行情、新闻、SEC、组合与分析服务
+│   ├── app/tasks/               # Celery 任务与调度
+│   ├── app/research/            # 只读 Research Data Gateway
+│   ├── app/ai*/                 # AI 对话、工具、记忆与富内容
+│   ├── alembic/versions/        # 数据库迁移
+│   └── tests/                   # 后端测试
+├── frontend/                    # 桌面 React 应用
+├── frontend-ios/                # iPhone PWA
+├── packages/shared/             # 两端共享 API、类型与格式化
+├── finnhub-mcp/                 # Finnhub MCP sidecar
+├── docs/                        # 架构与集成文档
+├── compose.yaml                 # 生产服务拓扑
+└── compose.override.yaml        # 本地预览覆盖
 ```
 
-各模块的边界、配置、隐私约束和测试命令见 `docs/`：
-[research-data-gateway](docs/research-data-gateway.md)、
-[ai-tool-layer](docs/ai-tool-layer.md)、
-[ai-orchestrator](docs/ai-orchestrator.md)、
-[ai-conversations](docs/ai-conversations.md)、
-[ai-conversation-summary](docs/ai-conversation-summary.md)、
-[ai-long-term-memory](docs/ai-long-term-memory.md)、
-[ai-investment-decisions](docs/ai-investment-decisions.md)、
-[ai-rich-content](docs/ai-rich-content.md)、
-[ai-chat-frontend](docs/ai-chat-frontend.md)、
-[external-search](docs/external-search.md)、
-[exa-deep-search](docs/exa-deep-search.md)。
+## 深入文档
 
-## 数据与安全
+- [Research Data Gateway](docs/research-data-gateway.md)
+- [AI 工具层](docs/ai-tool-layer.md)
+- [AI Orchestrator](docs/ai-orchestrator.md)
+- [AI 对话](docs/ai-conversations.md)
+- [AI 长期记忆](docs/ai-long-term-memory.md)
+- [投资决策记录](docs/ai-investment-decisions.md)
+- [Exa 联网研究](docs/external-search.md)
+- [Exa Deep Search](docs/exa-deep-search.md)
+- [iPhone 前端](docs/frontend-ios.md)
+- [组合交易流水](docs/portfolio-ledger.md)
+- [IBKR 集成](docs/integrations/ibkr.md)
 
-- 外部 API 的覆盖范围、限流和字段完整性会影响页面结果。
-- 计算指标缺失时会明确显示“数据不足”，应用不会补造财务数据。
-- 生产环境请设置强密码、随机 `JWT_SECRET`、真实 `SEC_USER_AGENT`，并限制数据库与 Redis 的网络暴露。
-- 运行 `make backup` 定期备份 PostgreSQL；升级前建议先保留数据库和源码回滚副本。
+## 安全与数据说明
 
-## License
+- `.env`、数据库备份、API Key、Token、账户凭据和私钥不得提交到仓库。
+- 生产环境必须修改数据库密码、`JWT_SECRET`、管理员初始密码和 `SEC_USER_AGENT`。
+- PostgreSQL、Redis 和内部服务不应直接暴露到公网。
+- 外部 Provider 的覆盖、延迟、配额和字段口径会影响结果；使用数据前请核对来源与时间。
+- 组合分析基于历史数据和用户假设，仅用于研究，不构成收益承诺或交易建议。
 
-MIT
+## 项目状态
+
+这是一个持续迭代的个人项目，数据库迁移、API 和界面可能随版本变化。生产升级前请阅读提交记录、执行测试并保留可恢复备份。
