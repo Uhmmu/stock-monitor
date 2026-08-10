@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { post } from './api'
 import { SecuritySearchAutocomplete, type SecuritySearchResult } from './SecuritySearchAutocomplete'
+import { Sheet } from './Sheet'
 import './stock-compare.css'
 
 export type CompareDirection='higher_better'|'lower_better'|'neutral'
@@ -29,7 +30,7 @@ export type CompareResponse={
 type HistoryPoint={date:string;period:string|null;value:number;indexed:number|null}
 type CompareHistory={metric:CompareMetricDefinition;mode:'raw'|'indexed';series:{symbol:string;points:HistoryPoint[]}[];limitations:string[]}
 
-const viewLabels={raw:'当前值',rank:'排名',relative:'相对中位数',trend:'趋势'} as const
+const viewLabels={raw:'当前值',rank:'当前对比排名',relative:'相对中位数',trend:'趋势'} as const
 type ViewMode=keyof typeof viewLabels
 const trendLabels={improving:'改善',deteriorating:'恶化',stable:'稳定',rising:'上升',falling:'下降'}
 
@@ -50,6 +51,51 @@ export function filterCompareMetrics(metrics:CompareMetric[],query:string,catego
     &&(!needle||`${metric.definition.label} ${metric.definition.key}`.toLocaleLowerCase().includes(needle))
     &&(!hideUnavailable||metric.available_count>0)
     &&(!onlyDifferences||metric.is_differentiator))
+}
+
+export function buildCompareConclusion(metrics:CompareMetric[],symbol:string,currency:string|null='USD'){
+  const cell=(key:string)=>metrics.find(metric=>metric.definition.key===key)?.cells[symbol]
+  const value=(key:string)=>cell(key)?.value??null
+  const current=value('price'),target=currency==='USD'?value('consensus_fair_value'):null,dcf=currency==='USD'?value('dcf_base_value'):null
+  const distance=(goal:number|null)=>current&&goal!=null?(goal/current-1)*100:null
+  return {
+    current,target,dcf,targetDistance:distance(target),dcfDistance:distance(dcf),
+    day:value('day_change_pct'),month:value('return_1m_pct'),quarter:value('return_3m_pct'),
+    halfYear:value('return_6m_pct'),year:value('return_1y_pct'),highDistance:value('distance_52w_high_pct'),
+    agreement:value('valuation_model_agreement_pct'),priceAsOf:cell('price')?.as_of??null,valuationAsOf:cell('consensus_fair_value')?.as_of??null,
+  }
+}
+
+function signedPercent(value:number|null){
+  if(value==null||!Number.isFinite(value))return '数据不足'
+  return `${value>0?'+':''}${value.toFixed(Math.abs(value)>=100?0:1)}%`
+}
+
+function plainPercent(value:number|null){
+  if(value==null||!Number.isFinite(value))return '数据不足'
+  return `${value.toFixed(Math.abs(value)>=100?0:1)}%`
+}
+
+function conclusionPrice(value:number|null,currency:string|null){
+  if(value==null||!Number.isFinite(value))return '数据不足'
+  return `${value.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}${currency?` ${currency}`:''}`
+}
+
+function ConclusionCard({security,metrics}:{security:CompareSecurity;metrics:CompareMetric[]}){
+  const row=buildCompareConclusion(metrics,security.symbol,security.currency)
+  const distanceText=(value:number|null)=>value==null?'目标空间待同步':value>=0?`距目标价仍有 ${signedPercent(value)}`:`现价高于目标价 ${Math.abs(value).toFixed(1)}%`
+  const tone=(value:number|null)=>value==null?'':value>0?'positive':value<0?'negative':'neutral'
+  const market=[['当日',row.day],['1 个月',row.month],['3 个月',row.quarter],['6 个月',row.halfYear],['1 年',row.year]] as const
+  return <article className="compare-conclusion-card">
+    <div className="compare-conclusion-card-header"><div><b>{security.symbol}</b><span>{security.name||'公司资料待同步'}</span></div><small>{security.currency||'币种待同步'}</small></div>
+    <div className="compare-conclusion-prices">
+      <div><span>当前价</span><strong>{conclusionPrice(row.current,security.currency)}</strong></div>
+      <div className="primary"><span>模型共识目标价</span><strong>{security.currency==='USD'?conclusionPrice(row.target,security.currency):'币种待校验'}</strong><em className={tone(row.targetDistance)}>{security.currency==='USD'?distanceText(row.targetDistance):'暂不计算目标空间'}</em></div>
+      <div><span>DCF 基准价值</span><strong>{security.currency==='USD'?conclusionPrice(row.dcf,security.currency):'币种待校验'}</strong><em className={tone(row.dcfDistance)}>{security.currency==='USD'?distanceText(row.dcfDistance):'暂不计算目标空间'}</em></div>
+    </div>
+    <dl>{market.map(([label,value])=><div key={label}><dt>{label}涨跌</dt><dd className={tone(value)}>{signedPercent(value)}</dd></div>)}</dl>
+    <footer><span>距 52 周高点 <b>{signedPercent(row.highDistance)}</b></span><span>估值模型一致度 <b>{plainPercent(row.agreement)}</b></span><small>行情 {row.priceAsOf||'待同步'} · 估值 {row.valuationAsOf||'待同步'}</small></footer>
+  </article>
 }
 
 function relativeText(cell:CompareCell){
@@ -110,12 +156,6 @@ export function StockCompare({watchlist=[]}:{watchlist:string[]}){
     if(symbols.length)params.set('symbols',symbols.join(','));else params.delete('symbols')
     window.history.replaceState({},'',`/?${params}`)
   },[symbols.join('|')])
-  useEffect(()=>{
-    if(!historyMetric)return
-    const close=(event:KeyboardEvent)=>event.key==='Escape'&&setHistoryMetric(null)
-    window.addEventListener('keydown',close)
-    return()=>window.removeEventListener('keydown',close)
-  },[historyMetric])
   const comparison=useQuery({
     queryKey:['stock-compare',symbols],queryFn:()=>post<CompareResponse>('/compare',{symbols}),enabled:symbols.length>=2,staleTime:60_000,
   })
@@ -128,6 +168,7 @@ export function StockCompare({watchlist=[]}:{watchlist:string[]}){
   const add=(symbol:string)=>setSymbols(current=>current.length>=6||current.includes(symbol)?current:[...current,symbol])
   const selectedHistory=comparison.data?.metrics.find(metric=>metric.definition.key===historyMetric)?.definition
   const columnStyle={'--compare-columns':comparison.data?.securities.length||2} as CSSProperties
+  const limitations=comparison.data?.limitations.filter(item=>!item.toLocaleLowerCase().startsWith('percentile'))||[]
 
   return <div className="stock-compare">
     <section className="compare-selector">
@@ -145,9 +186,10 @@ export function StockCompare({watchlist=[]}:{watchlist:string[]}){
     {comparison.isLoading&&<div className="empty compare-empty">正在聚合已入库数据…</div>}
     {comparison.isError&&<div className="error">对比数据暂不可用，请稍后重试。</div>}
     {comparison.data&&<>
+      <section className="compare-conclusions"><div className="section-title"><div><p>DECISION SNAPSHOT</p><h2>关键结论</h2></div><small>目标空间按最新已存价格重新计算；模型共识不是券商目标价或收益承诺</small></div><div>{comparison.data.securities.map(item=><ConclusionCard security={item} metrics={comparison.data.metrics} key={item.symbol}/>)}</div></section>
       <section className="compare-universe">{comparison.data.securities.map(item=><article key={item.symbol}><b>{item.symbol}</b><strong>{item.name||'公司资料待同步'}</strong><span>{[item.sector,item.industry].filter(Boolean).join(' · ')||'分类待同步'}</span><small>{[item.currency,item.instrument_type].filter(Boolean).join(' · ')}</small></article>)}</section>
-      <section><div className="section-title"><div><p>COMPARE HIGHLIGHTS</p><h2>优势与劣势</h2></div><small>基于有明确方向的组内排名；不生成主观总分</small></div><div className="compare-highlights">{comparison.data.highlights.map(item=><HighlightCard item={item} key={item.symbol}/>)}</div></section>
-      {!!comparison.data.category_winners.length&&<section><div className="section-title"><div><p>CATEGORY WINNERS</p><h2>维度胜者</h2></div><small>按该维度明确领先项计数，并列时不强行决胜</small></div><div className="compare-winners">{comparison.data.category_winners.map(item=><article key={item.category}><span>{item.category}</span><b>{item.symbol||item.ties?.join(' / ')||'无明确胜者'}</b><small>{item.evidence?.slice(0,3).map(row=>`${row.label} #${row.rank}`).join(' · ')||'有效指标不足'}</small>{!!item.tradeoffs?.length&&<em>权衡：{item.tradeoffs.slice(0,2).map(row=>`${row.label} #${row.rank}`).join(' · ')}</em>}</article>)}</div></section>}
+      <section><div className="section-title"><div><p>COMPARE HIGHLIGHTS</p><h2>优势与劣势</h2></div><small>只比较当前所选股票；不生成主观总分</small></div><div className="compare-highlights">{comparison.data.highlights.map(item=><HighlightCard item={item} key={item.symbol}/>)}</div></section>
+      {!!comparison.data.category_winners.length&&<section><div className="section-title"><div><p>CATEGORY WINNERS</p><h2>维度胜者</h2></div><small>按当前所选股票的明确领先项计数，并列时不强行决胜</small></div><div className="compare-winners">{comparison.data.category_winners.map(item=><article key={item.category}><span>{item.category}</span><b>{item.symbol||item.ties?.join(' / ')||'无明确胜者'}</b><small>{item.evidence?.slice(0,3).map(row=>`${row.label} #${row.rank}`).join(' · ')||'有效指标不足'}</small>{!!item.tradeoffs?.length&&<em>权衡：{item.tradeoffs.slice(0,2).map(row=>`${row.label} #${row.rank}`).join(' · ')}</em>}</article>)}</div></section>}
       <section className="compare-matrix-section">
         <div className="section-title"><div><p>METRIC MATRIX</p><h2>指标矩阵</h2></div><small>{visible.length} / {comparison.data.metrics.length} 项</small></div>
         <div className="compare-toolbar">
@@ -159,13 +201,13 @@ export function StockCompare({watchlist=[]}:{watchlist:string[]}){
           <div className="compare-row compare-head" role="row" style={columnStyle}><div role="columnheader">指标</div>{comparison.data.securities.map(item=><div role="columnheader" key={item.symbol}>{item.symbol}</div>)}</div>
           {visible.map(metric=><div className={`compare-row${metric.is_differentiator?' differentiator':''}`} role="row" style={columnStyle} key={metric.definition.key}>
             <button className="compare-metric-label" role="rowheader" title={metric.definition.description} disabled={!metric.definition.supports_history} onClick={()=>metric.definition.supports_history&&setHistoryMetric(metric.definition.key)}><b>{metric.definition.label}</b><span>{metric.definition.category} · {metric.definition.source}</span>{metric.period_mismatch&&<em>期间不一致</em>}{metric.definition.supports_history&&<small>查看历史 →</small>}</button>
-            {comparison.data.securities.map(security=>{const cell=metric.cells[security.symbol];return <div role="cell" data-label={security.symbol} className={`${cell?.is_best?'best ':''}${cell?.is_worst?'worst ':''}${cell?.status||'missing'}`} key={security.symbol} title={[cell?.period,cell?.as_of,cell?.source].filter(Boolean).join(' · ')}><strong>{cell?cellText(cell,metric.definition,mode,comparison.data.securities.length):'数据不足'}</strong>{cell?.rank!=null&&mode==='raw'&&<span>#{cell.rank}{cell.percentile!=null?` · 组内 P${Math.round(cell.percentile)}`:''}</span>}{cell?.status==='stale'&&<em>较旧</em>}</div>})}
+            {comparison.data.securities.map(security=>{const cell=metric.cells[security.symbol];return <div role="cell" data-label={security.symbol} className={`${cell?.is_best?'best ':''}${cell?.is_worst?'worst ':''}${cell?.status||'missing'}`} key={security.symbol} title={[cell?.period,cell?.as_of,cell?.source].filter(Boolean).join(' · ')}><strong>{cell?cellText(cell,metric.definition,mode,comparison.data.securities.length):'数据不足'}</strong>{cell?.rank!=null&&mode==='raw'&&<span>当前对比第 {cell.rank}</span>}{cell?.status==='stale'&&<em>较旧</em>}</div>})}
           </div>)}
           {!visible.length&&<div className="empty">当前筛选下没有指标。</div>}
         </div>
       </section>
-      {!!comparison.data.limitations.length&&<section className="compare-limitations"><b>数据边界</b>{comparison.data.limitations.map(item=><p key={item}>{item}</p>)}</section>}
+      {!!limitations.length&&<section className="compare-limitations"><b>数据边界</b>{limitations.map(item=><p key={item}>{item}</p>)}</section>}
     </>}
-    {historyMetric&&<div className="compare-history-backdrop" onClick={()=>setHistoryMetric(null)}><section className="compare-history" role="dialog" aria-modal="true" aria-label={`${selectedHistory?.label||'指标'}历史`} onClick={event=>event.stopPropagation()}><header><div><p className="eyebrow">HISTORICAL COMPARISON</p><h2>{selectedHistory?.label||'指标历史'}</h2></div><button aria-label="关闭历史图" onClick={()=>setHistoryMetric(null)}>×</button></header>{history.isLoading?<div className="empty">正在读取历史快照…</div>:history.data?<TrendChart history={history.data}/>:<div className="empty">历史数据不可用。</div>}</section></div>}
+    <Sheet open={!!historyMetric} onClose={()=>setHistoryMetric(null)} title={`${selectedHistory?.label||'指标'}历史`} size="wide"><section className="compare-history-content"><div className="compare-history-heading"><p className="eyebrow">HISTORICAL COMPARISON</p><button type="button" onClick={()=>setHistoryMetric(null)}>关闭</button></div>{history.isLoading?<div className="empty">正在读取历史快照…</div>:history.data?<TrendChart history={history.data}/>:<div className="empty">历史数据不可用。</div>}</section></Sheet>
   </div>
 }
