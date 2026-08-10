@@ -3,6 +3,19 @@ from __future__ import annotations
 from .schemas import ScenarioDefinition
 
 
+VISIBLE_SCENARIO_CODES = (
+    "soft_landing",
+    "recession",
+    "inflation_rebound",
+    "rapid_cuts",
+    "growth_repricing",
+    "ai_continues",
+    "ai_capex_cools",
+    "usd_strength",
+    "yen_reversal",
+)
+
+
 PRESETS = [
     ScenarioDefinition(code="tech_bear_2022", name="2022 科技股熊市", description="本地覆盖区间内的科技股下跌回放。", mode="historical_replay", start_date="2022-01-03", end_date="2022-10-14"),
     ScenarioDefinition(code="rapid_hikes_2022", name="2022 快速加息", description="快速加息主要阶段真实区间回放。", mode="historical_replay", start_date="2022-03-16", end_date="2022-12-14"),

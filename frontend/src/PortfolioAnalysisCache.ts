@@ -38,6 +38,15 @@ export function latestFreshAnalysis<TResult>(
   return runs?.find(run => run.analysis_type === analysisType && run.status === 'completed' && run.is_fresh && matches(run as PortfolioAnalysisRun<TResult>)) as PortfolioAnalysisRun<TResult> | undefined
 }
 
+export function latestCompletedAnalysis<TResult>(
+  runs: PortfolioAnalysisRun[] | undefined,
+  analysisType: AnalysisType,
+  matches: (run: PortfolioAnalysisRun<TResult>) => boolean = () => true,
+) {
+  const matching = runs?.filter(run => run.analysis_type === analysisType && run.status === 'completed' && matches(run as PortfolioAnalysisRun<TResult>)) || []
+  return (matching.find(run => run.is_fresh) || matching[0]) as PortfolioAnalysisRun<TResult> | undefined
+}
+
 function comparable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(comparable)
   if (value && typeof value === 'object') {
@@ -56,5 +65,5 @@ export function cacheTimeLabel(run: PortfolioAnalysisRun | undefined) {
   if (!run) return ''
   const completed = new Date(run.completed_at || run.created_at).toLocaleString('zh-CN')
   const expires = new Date(run.expires_at).toLocaleDateString('zh-CN')
-  return `已显示 ${completed} 的保存结果，有效至 ${expires}`
+  return run.is_fresh ? `已显示 ${completed} 的保存结果，有效至 ${expires}` : `已显示 ${completed} 的上次结果（原有效期至 ${expires}，等待每周刷新）`
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { cashFlowAdjustedGrowth, chartPoints, deriveLivePortfolio, fmtHealthScore, fmtMoney, fmtNum, fmtPercent, type PortfolioSummary, type PositionView } from './Portfolio'
 import { normalizeRealtimeQuote } from './realtime'
 import { findSavedScenarioRun, type ScenarioHistoryRun } from './PortfolioScenarios'
-import { latestFreshAnalysis, requestsMatch, type PortfolioAnalysisRun } from './PortfolioAnalysisCache'
+import { cacheTimeLabel, latestCompletedAnalysis, latestFreshAnalysis, requestsMatch, type PortfolioAnalysisRun } from './PortfolioAnalysisCache'
 
 describe('fmtMoney', () => {
   it('renders an explicit gap instead of fabricating a value', () => {
@@ -154,13 +154,13 @@ describe('findSavedScenarioRun', () => {
     expect(findSavedScenarioRun(runs, 'recession')?.job_id).toBe(3)
   })
 
-  it('does not reuse pending, expired, or unrelated analysis runs', () => {
+  it('falls back to a completed stale result but ignores pending or unrelated runs', () => {
     const runs: ScenarioHistoryRun[] = [
       run({ job_id: 5, is_fresh: false }),
       run({ job_id: 4, status: 'pending' }),
       run({ job_id: 3, analysis_type: 'stress_test' }),
     ]
-    expect(findSavedScenarioRun(runs, 'recession')).toBeUndefined()
+    expect(findSavedScenarioRun(runs, 'recession')?.job_id).toBe(5)
   })
 })
 
@@ -177,5 +177,27 @@ describe('portfolio analysis cache matching', () => {
       { analysis_type: 'monte_carlo', status: 'completed', is_fresh: true, job_id: 1 },
     ] as PortfolioAnalysisRun[]
     expect(latestFreshAnalysis(runs, 'monte_carlo')?.job_id).toBe(1)
+  })
+
+  it('prefers a fresh completed result over a newer stale result', () => {
+    const runs = [
+      { analysis_type: 'monte_carlo', status: 'completed', is_fresh: false, job_id: 2 },
+      { analysis_type: 'monte_carlo', status: 'completed', is_fresh: true, job_id: 1 },
+    ] as PortfolioAnalysisRun[]
+    expect(latestCompletedAnalysis(runs, 'monte_carlo')?.job_id).toBe(1)
+  })
+
+  it('falls back to the latest completed result and ignores pending or failed runs', () => {
+    const runs = [
+      { analysis_type: 'monte_carlo', status: 'failed', is_fresh: false, job_id: 3 },
+      { analysis_type: 'monte_carlo', status: 'pending', is_fresh: false, job_id: 2 },
+      { analysis_type: 'monte_carlo', status: 'completed', is_fresh: false, job_id: 1 },
+    ] as PortfolioAnalysisRun[]
+    expect(latestCompletedAnalysis(runs, 'monte_carlo')?.job_id).toBe(1)
+  })
+
+  it('labels stale cached results explicitly', () => {
+    const stale = { completed_at: '2026-07-28T01:00:00Z', created_at: '2026-07-28T01:00:00Z', expires_at: '2026-08-04T01:00:00Z', is_fresh: false } as PortfolioAnalysisRun
+    expect(cacheTimeLabel(stale)).toContain('等待每周刷新')
   })
 })

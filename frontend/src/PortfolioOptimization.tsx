@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, post } from './api'
 import { AnalysisDisclaimer } from './PortfolioScenarios'
-import { cacheTimeLabel, latestFreshAnalysis, requestsMatch, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
+import { cacheTimeLabel, latestCompletedAnalysis, requestsMatch, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
 
 type OptResult={status:string;message?:string;constraint_conflicts?:string[];objective:string;portfolio_value:number;current_metrics:Record<string,number|null>;optimized_metrics:Record<string,number|null>;cash_weight:number;weight_changes:{symbol:string;current_weight:number;target_weight:number;change:number;sector:string}[];risk_contribution_changes:{symbol:string;current:number;optimized:number}[];suggested_trades:{symbol:string;current_weight:number;target_weight:number;trade_amount:number;fractional_share_change:number|null;action:'increase'|'reduce'|'hold';reason_codes:string[]}[];turnover:number;estimated_trade_count:number;estimated_trade_amount:number;constraint_satisfaction:{satisfied:boolean;issues:string[]};stress_comparison:{scenario_code:string;current_return:number;optimized_return:number}[];assumptions:Record<string,string>;warnings:string[]}
 type Job={status:string;result:OptResult|null;error_message:string|null}
@@ -24,7 +24,7 @@ export function PortfolioOptimizationView({portfolioId,symbols}:{portfolioId:num
   const currentRequest={portfolio_id:portfolioId,objective:objective==='custom'?(target?'target_return':'risk_parity'):objective,target_return:target?Number(target)/100:null,covariance_method:'ledoit_wolf',constraints:{long_only:true,min_position_weight:0,max_position_weight:maxPosition/100,max_sector_weight:maxSector/100,min_cash_weight:cash/100,max_cash_weight:.4,max_turnover:turnover/100,minimum_positions:null,locked_symbols:locked,do_not_sell_symbols:noSell,excluded_symbols:[],allow_new_symbols:false,only_current_positions:true,minimum_trade_amount:minimumTrade,fractional_shares:fractional}}
   const launch=useMutation({mutationFn:()=>post<{job_id:number}>('/portfolio/analysis/optimize',currentRequest),onMutate:()=>setLaunchedRequest(currentRequest),onSuccess:data=>setJobId(data.job_id)})
   const job=useQuery({queryKey:['portfolio-analysis-job',jobId],queryFn:()=>api<Job>(`/portfolio/analysis/jobs/${jobId}`),enabled:jobId!=null,refetchInterval:q=>['pending','running'].includes(q.state.data?.status||'')?2000:false})
-  const savedRun=latestFreshAnalysis<OptResult>(history.data?.runs,'optimization',run=>requestsMatch(run.input_request,currentRequest))
+  const savedRun=latestCompletedAnalysis<OptResult>(history.data?.runs,'optimization',run=>requestsMatch(run.input_request,currentRequest))
   const liveResult=requestsMatch(launchedRequest||undefined,currentRequest)&&job.data?.status==='completed'?job.data.result:null
   const data=liveResult||savedRun?.result
   const isRunning=launch.isPending||['pending','running'].includes(job.data?.status||'')
@@ -33,7 +33,7 @@ export function PortfolioOptimizationView({portfolioId,symbols}:{portfolioId:num
   useEffect(()=>{
     if(restoredCache.current||!history.data)return
     restoredCache.current=true
-    const cached=latestFreshAnalysis<OptResult>(history.data.runs,'optimization')
+    const cached=latestCompletedAnalysis<OptResult>(history.data.runs,'optimization')
     if(!cached)return
     const request=cached.input_request
     const savedObjective=request.objective

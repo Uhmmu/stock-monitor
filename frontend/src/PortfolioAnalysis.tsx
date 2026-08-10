@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AreaSeries, ColorType, LineSeries, createChart, type Time } from 'lightweight-charts'
 import { post } from './api'
 import { Sheet } from './Sheet'
-import { cacheTimeLabel, latestFreshAnalysis, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
+import { cacheTimeLabel, latestCompletedAnalysis, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
 import { chartThemeTokens, getResolvedTheme, subscribeTheme, type ThemeMode } from './theme'
 
 export type RiskPoint={date:string;value:number}
@@ -65,7 +65,7 @@ export function PortfolioRiskAnalysis({portfolioId,currency,healthContent}:{port
   const [settingsOpen,setSettingsOpen]=useState(false)
   const [launchedMode,setLaunchedMode]=useState<'common_start'|'dynamic_available'|null>(null)
   const run=useMutation({mutationFn:(selectedMode:'common_start'|'dynamic_available')=>post<PortfolioRiskResult>('/portfolio/analysis/metrics',{portfolio_id:portfolioId,mode:selectedMode,covariance_method:'ledoit_wolf',confidence_level:.95}),onMutate:selectedMode=>setLaunchedMode(selectedMode),onSuccess:()=>client.invalidateQueries({queryKey:['portfolio-analysis-history']})})
-  const savedRun=latestFreshAnalysis<PortfolioRiskResult>(history.data?.runs,'metrics',item=>item.result?.data_period.mode===mode)
+  const savedRun=latestCompletedAnalysis<PortfolioRiskResult>(history.data?.runs,'metrics',item=>item.result?.data_period.mode===mode)
   const liveResult=launchedMode===mode?run.data:null
   const data=liveResult||savedRun?.result
   const controls=(mobile=false)=><div className="risk-toolbar"><div><button className={mode==='common_start'?'active':''} onClick={()=>setMode('common_start')} disabled={run.isPending}>完整持仓共同区间</button><button className={mode==='dynamic_available'?'active':''} onClick={()=>setMode('dynamic_available')} disabled={run.isPending}>动态可用区间</button></div><button className="risk-run" onClick={()=>{run.mutate(mode);if(mobile)setSettingsOpen(false)}} disabled={run.isPending}>{run.isPending?'计算中…':data?'重新计算':'运行组合风险分析'}</button></div>
@@ -73,7 +73,7 @@ export function PortfolioRiskAnalysis({portfolioId,currency,healthContent}:{port
   useEffect(()=>{
     if(restoredCache.current||!history.data)return
     restoredCache.current=true
-    const cached=latestFreshAnalysis<PortfolioRiskResult>(history.data.runs,'metrics')
+    const cached=latestCompletedAnalysis<PortfolioRiskResult>(history.data.runs,'metrics')
     if(cached?.result?.data_period.mode)setMode(cached.result.data_period.mode)
   },[history.data])
   return <div className="portfolio-risk-analysis">

@@ -148,6 +148,10 @@ celery_app.conf.beat_schedule = {
     # Flex users are enrolled only after one successful manual import. The
     # due check is cheap and request_sync provides a per-user database lock.
     "sync-ibkr-flex-due": {"task": "app.tasks.celery_app.ensure_ibkr_flex_fresh", "schedule": 900},
+    "preload-portfolio-analyses": {
+        "task": "app.tasks.celery_app.ensure_portfolio_analysis_fresh",
+        "schedule": 3600,
+    },
 }
 
 
@@ -2263,3 +2267,12 @@ def run_portfolio_analysis(run_id: int):
     with SessionLocal() as db:
         result = execute_analysis_job(db, run_id)
         return {"job_id": run_id, "status": result.get("status", "completed")}
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_portfolio_analysis_fresh")
+def ensure_portfolio_analysis_fresh(force: bool = False):
+    """Hourly due check for the bounded weekly portfolio-analysis preload."""
+    from app.services.portfolio_analysis.jobs import schedule_due_preloads
+
+    with SessionLocal() as db:
+        return schedule_due_preloads(db, force=force)

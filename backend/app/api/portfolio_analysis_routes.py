@@ -11,7 +11,7 @@ from app.models import User
 from app.services.portfolio.transaction_service import get_or_create_default_portfolio
 from app.services.portfolio_analysis import PortfolioAnalysisRequest, run_metrics_analysis
 from app.services.portfolio_analysis.jobs import create_analysis_job
-from app.services.portfolio_analysis.scenario_presets import preset_catalog
+from app.services.portfolio_analysis.scenario_presets import VISIBLE_SCENARIO_CODES, preset_catalog
 from app.services.portfolio_analysis.schemas import ExpectedReturnRequest, MonteCarloInput, OptimizationRequest, ScenarioAnalysisRequest, StressTestRequest
 from app.services.portfolio_analysis.expected_return import run_expected_return
 from app.services.portfolio_analysis.optimizer import optimization_presets
@@ -44,7 +44,7 @@ def get_metrics(portfolio_id: int, user: User = Depends(get_current_user), db: S
 
 @router.get("/scenarios/presets")
 def scenario_presets():
-    return {"presets": preset_catalog()}
+    return {"presets": preset_catalog(), "featured_codes": list(VISIBLE_SCENARIO_CODES)}
 
 
 def _queue(db: Session, portfolio, analysis_type: str, payload: dict) -> dict:

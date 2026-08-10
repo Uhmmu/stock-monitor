@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, post } from './api'
 import { Sheet } from './Sheet'
 import { AnalysisDisclaimer } from './PortfolioScenarios'
-import { cacheTimeLabel, latestFreshAnalysis, requestsMatch, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
+import { cacheTimeLabel, latestCompletedAnalysis, requestsMatch, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
 
 type MonteResult={status:string;message?:string;initial_value:number;horizon_years:number;simulations:number;method:string;terminal_value_percentiles:Record<string,number>;probability_of_loss:number;probability_loss_over_10_percent:number;probability_loss_over_20_percent:number;probability_reach_target:number|null;max_drawdown:{median:number;p10:number;p90:number;probability_over_20_percent:number;probability_over_30_percent:number};fan_chart:{day:number;p5:number;p25:number;p50:number;p75:number;p95:number}[];sample_paths:number[][];terminal_value_sample:number[];max_drawdown_sample:number[];confidence:'high'|'medium'|'low';limitations:string[];cache_hit:boolean}
 type ExpectedResult={status:string;portfolio:{bear:number;base:number;bull:number;confidence:string};assets:{symbol:string;bear:number;base:number;bull:number;confidence:string;drivers:string[];warnings:string[]}[];warnings:string[]}
@@ -32,7 +32,7 @@ function Histogram({values,percent=false}:{values:number[];percent?:boolean}){
 function ExpectedReturnPanel({portfolioId}:{portfolioId:number}){
   const client=useQueryClient()
   const history=usePortfolioAnalysisHistory()
-  const savedRun=latestFreshAnalysis<ExpectedResult>(history.data?.runs,'expected_return')
+  const savedRun=latestCompletedAnalysis<ExpectedResult>(history.data?.runs,'expected_return')
   const mutation=useMutation({mutationFn:()=>post<ExpectedResult>('/portfolio/analysis/expected-return',{portfolio_id:portfolioId}),onSuccess:()=>client.invalidateQueries({queryKey:['portfolio-analysis-history']})})
   const data=mutation.data||savedRun?.result
   const confidenceLabel=(value:string)=>value==='high'?'高':value==='medium'?'中':'低'
@@ -49,7 +49,7 @@ export function MonteCarloView({portfolioId}:{portfolioId:number}){
   const currentRequest={portfolio_id:portfolioId,horizon_years:horizon,simulations,method,block_length:10,rebalance_frequency:rebalance,monthly_contribution:contribution,target_value:target?Number(target):null,confidence_levels:[.8,.95],random_seed:seed===''?null:Number(seed)}
   const launch=useMutation({mutationFn:()=>post<{job_id:number}>('/portfolio/analysis/monte-carlo',{...currentRequest,force_refresh:true}),onMutate:()=>setLaunchedRequest(currentRequest),onSuccess:data=>setJobId(data.job_id)})
   const job=useQuery({queryKey:['portfolio-analysis-job',jobId],queryFn:()=>api<Job>(`/portfolio/analysis/jobs/${jobId}`),enabled:jobId!=null,refetchInterval:q=>['pending','running'].includes(q.state.data?.status||'')?2000:false})
-  const savedRun=latestFreshAnalysis<MonteResult>(history.data?.runs,'monte_carlo',run=>requestsMatch(run.input_request,currentRequest))
+  const savedRun=latestCompletedAnalysis<MonteResult>(history.data?.runs,'monte_carlo',run=>requestsMatch(run.input_request,currentRequest))
   const liveResult=requestsMatch(launchedRequest||undefined,currentRequest)&&job.data?.status==='completed'?job.data.result:null
   const data=liveResult||savedRun?.result
   const isRunning=launch.isPending||['pending','running'].includes(job.data?.status||'')
@@ -58,7 +58,7 @@ export function MonteCarloView({portfolioId}:{portfolioId:number}){
   useEffect(()=>{
     if(restoredCache.current||!history.data)return
     restoredCache.current=true
-    const cached=latestFreshAnalysis<MonteResult>(history.data.runs,'monte_carlo')
+    const cached=latestCompletedAnalysis<MonteResult>(history.data.runs,'monte_carlo')
     if(!cached)return
     const request=cached.input_request
     if(request.horizon_years===1||request.horizon_years===3||request.horizon_years===5)setHorizon(request.horizon_years)

@@ -10,6 +10,7 @@ import { MonteCarloView } from './PortfolioMonteCarlo'
 import { PortfolioOptimizationView } from './PortfolioOptimization'
 import { chartThemeTokens, getResolvedTheme, subscribeTheme, type ThemeMode } from './theme'
 import { PortfolioAnalysisHistory } from './PortfolioAnalysisHistory'
+import { usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
 import { RealtimeQuoteCard } from './RealtimeMarketCard'
 import { RealtimeMarketEventList } from './RealtimeMarketEvents'
 import { mergeRealtimeMarketEvents, useMarketEvents, useRealtimeQuotes, type RealtimeQuote } from './realtime'
@@ -452,6 +453,7 @@ function emptyManualForm(today:string) {
 
 export function PortfolioModule() {
   const client = useQueryClient()
+  usePortfolioAnalysisHistory()
   const today = new Date().toISOString().slice(0,10)
   const [subtab,setSubtab] = useState<PortfolioTab>('overview')
   const [entryOpen,setEntryOpen] = useState(false)
@@ -471,8 +473,8 @@ export function PortfolioModule() {
   const benchmark = useQuery({queryKey:['portfolio-benchmark'],queryFn:()=>api<PortfolioBenchmark>('/portfolio/benchmark'),enabled:subtab==='overview',staleTime:15*60_000,refetchInterval:15*60_000})
   const performance = useQuery({queryKey:['portfolio-performance',performanceRange],queryFn:()=>api<PerformanceSeries>(`/portfolio/performance?range=${performanceRange}`),enabled:subtab==='overview',staleTime:30_000})
   const attribution = useQuery({queryKey:['portfolio-attribution'],queryFn:()=>api<ReturnAttribution>('/portfolio/attribution'),enabled:subtab==='overview',staleTime:30_000})
-  const health = useQuery({queryKey:['portfolio-health'],queryFn:()=>api<PortfolioHealth>('/portfolio/health'),enabled:subtab==='health',staleTime:60_000})
-  const interpretation = useQuery({queryKey:['portfolio-interpretation'],queryFn:()=>api<PersonalizedInterpretation>('/portfolio/interpretation'),enabled:subtab==='health',staleTime:60_000})
+  const health = useQuery({queryKey:['portfolio-health'],queryFn:()=>api<PortfolioHealth>('/portfolio/health'),staleTime:60_000})
+  const interpretation = useQuery({queryKey:['portfolio-interpretation'],queryFn:()=>api<PersonalizedInterpretation>('/portfolio/interpretation'),staleTime:60_000})
   const transactions = useQuery({queryKey:['portfolio-transactions',historyType],queryFn:()=>api<TransactionRow[]>(`/portfolio/transactions${historyType==='all'?'':`?event_type=${historyType}`}`),enabled:subtab==='history'&&historyView==='activity'})
   const completedTrades = useQuery({queryKey:['portfolio-completed-trades'],queryFn:()=>api<CompletedTrade[]>('/portfolio/completed-trades'),enabled:subtab==='history'&&historyView==='completed'})
   const openLots = useQuery({queryKey:['portfolio-open-lots'],queryFn:()=>api<OpenLot[]>('/portfolio/open-lots'),enabled:subtab==='history'&&historyView==='lots'})

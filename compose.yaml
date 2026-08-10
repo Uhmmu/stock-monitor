@@ -57,6 +57,11 @@ services:
 
   worker:
     <<: *backend
+    environment:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
     healthcheck:
       disable: true

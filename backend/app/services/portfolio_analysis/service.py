@@ -59,8 +59,25 @@ def _position_snapshot(db: Session, portfolio: Portfolio) -> tuple[list[dict], l
     return positions, warnings
 
 
-def run_metrics_analysis(db: Session, portfolio: Portfolio, request: PortfolioAnalysisRequest) -> dict:
-    positions, warnings = _position_snapshot(db, portfolio)
+def run_metrics_analysis(
+    db: Session,
+    portfolio: Portfolio,
+    request: PortfolioAnalysisRequest,
+    *,
+    run: PortfolioAnalysisRun | None = None,
+    positions_override: list[dict] | None = None,
+    snapshot_warnings: list[str] | None = None,
+) -> dict:
+    """Run metrics, optionally completing an already-claimed scheduled row.
+
+    Manual calls leave ``run`` unset and therefore create exactly one new run.
+    Scheduled batches pass their immutable position snapshot so the worker does
+    not re-read the portfolio after the batch was claimed.
+    """
+    if positions_override is None:
+        positions, warnings = _position_snapshot(db, portfolio)
+    else:
+        positions, warnings = list(positions_override), list(snapshot_warnings or [])
     total_value = sum(float(row["market_value"]) for row in positions)
     snapshot = {
         "portfolio_id": portfolio.id, "base_currency": portfolio.base_currency,
@@ -73,13 +90,14 @@ def run_metrics_analysis(db: Session, portfolio: Portfolio, request: PortfolioAn
         "price_adjustment": "本地验证 EOD；缺失时 FMP 优先、Yahoo auto_adjust 回退",
         "annualization_days": 252,
     }
-    run = PortfolioAnalysisRun(
-        portfolio_id=portfolio.id, analysis_type="metrics", status="running",
-        input_snapshot_json=_finite_json(snapshot), assumptions_json=assumptions,
-        result_json={}, model_version=MODEL_VERSION,
-    )
-    db.add(run)
-    db.flush()
+    if run is None:
+        run = PortfolioAnalysisRun(
+            portfolio_id=portfolio.id, analysis_type="metrics", status="running",
+            input_snapshot_json=_finite_json(snapshot), assumptions_json=assumptions,
+            result_json={}, model_version=MODEL_VERSION,
+        )
+        db.add(run)
+        db.flush()
     if not positions or total_value <= 0:
         result = {
             "run_id": run.id, "status": "insufficient_data", "portfolio_value": total_value,

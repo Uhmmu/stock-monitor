@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, post } from './api'
 import { Sheet } from './Sheet'
-import { cacheTimeLabel, latestFreshAnalysis, requestsMatch, type PortfolioAnalysisRun, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
+import { cacheTimeLabel, latestCompletedAnalysis, requestsMatch, type PortfolioAnalysisRun, usePortfolioAnalysisHistory } from './PortfolioAnalysisCache'
 
 type ScenarioMode = 'historical_replay' | 'proxy_scenario' | 'custom_scenario'
 type Preset = {
@@ -19,6 +19,7 @@ type Preset = {
   start_date: string | null
   end_date: string | null
 }
+type ScenarioPresetsResponse = { presets: Preset[]; featured_codes?: string[] }
 type StressAsset = {
   symbol: string
   sector: string
@@ -55,13 +56,15 @@ export type StressResult = {
 type Job = { job_id: number; status: 'pending' | 'running' | 'completed' | 'failed'; result: StressResult | null; error_message: string | null }
 export type ScenarioHistoryRun = PortfolioAnalysisRun<StressResult>
 
+const DEFAULT_FEATURED_SCENARIO_CODES = ['soft_landing', 'recession', 'inflation_rebound', 'rapid_cuts', 'growth_repricing', 'ai_continues', 'ai_capex_cools', 'usd_strength', 'yen_reversal']
+
 const pct = (value: number | null | undefined) => value == null ? '—' : `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
 const money = (value: number) => new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value)
 const methodLabels: Record<StressAsset['method'], string> = { actual: '真实行情', proxy: '代理估算', factor_model: '因子模型' }
 
 export function findSavedScenarioRun(runs: PortfolioAnalysisRun[] | undefined, code: string | null) {
   if (!code) return undefined
-  return latestFreshAnalysis<StressResult>(runs, 'scenario_analysis', run => run.result?.scenario.code === code)
+  return latestCompletedAnalysis<StressResult>(runs, 'scenario_analysis', run => run.result?.scenario.code === code)
 }
 
 function useAnalysisJob(jobId: number | null) {
@@ -101,7 +104,7 @@ export function StressTestView({ portfolioId }: { portfolioId: number }) {
   const queryClient = useQueryClient()
   const history = usePortfolioAnalysisHistory()
   const restoredCache = useRef(false)
-  const presets = useQuery({ queryKey: ['portfolio-scenario-presets'], queryFn: () => api<{ presets: Preset[] }>('/portfolio/analysis/scenarios/presets'), staleTime: 3600_000 })
+  const presets = useQuery({ queryKey: ['portfolio-scenario-presets'], queryFn: () => api<ScenarioPresetsResponse>('/portfolio/analysis/scenarios/presets'), staleTime: 3600_000 })
   const [mode, setMode] = useState<ScenarioMode>('proxy_scenario')
   const [preset, setPreset] = useState('recession')
   const [start, setStart] = useState('2022-01-03')
@@ -119,7 +122,7 @@ export function StressTestView({ portfolioId }: { portfolioId: number }) {
   const job = useAnalysisJob(jobId)
   const matching = presets.data?.presets.filter(row => row.mode === mode) || []
   const isRunning = launch.isPending || ['pending', 'running'].includes(job.data?.status || '')
-  const savedRun = latestFreshAnalysis<StressResult>(history.data?.runs, 'stress_test', run => requestsMatch(run.input_request, currentRequest))
+  const savedRun = latestCompletedAnalysis<StressResult>(history.data?.runs, 'stress_test', run => requestsMatch(run.input_request, currentRequest))
   const liveResult = requestsMatch(launchedRequest || undefined, currentRequest) && job.data?.status === 'completed' ? job.data.result : null
   const result = liveResult || savedRun?.result
 
@@ -130,7 +133,7 @@ export function StressTestView({ portfolioId }: { portfolioId: number }) {
   useEffect(() => {
     if (restoredCache.current || !history.data) return
     restoredCache.current = true
-    const cached = latestFreshAnalysis<StressResult>(history.data.runs, 'stress_test')
+    const cached = latestCompletedAnalysis<StressResult>(history.data.runs, 'stress_test')
     if (!cached) return
     const request = cached.input_request
     if (request.mode === 'historical_replay' || request.mode === 'proxy_scenario' || request.mode === 'custom_scenario') setMode(request.mode)
@@ -161,7 +164,7 @@ export function StressTestView({ portfolioId }: { portfolioId: number }) {
 
 export function ScenarioAnalysisView({ portfolioId }: { portfolioId: number }) {
   const queryClient = useQueryClient()
-  const presets = useQuery({ queryKey: ['portfolio-scenario-presets'], queryFn: () => api<{ presets: Preset[] }>('/portfolio/analysis/scenarios/presets'), staleTime: 3600_000 })
+  const presets = useQuery({ queryKey: ['portfolio-scenario-presets'], queryFn: () => api<ScenarioPresetsResponse>('/portfolio/analysis/scenarios/presets'), staleTime: 3600_000 })
   const history = usePortfolioAnalysisHistory()
   const [selected, setSelected] = useState<string | null>(null)
   const [runningCode, setRunningCode] = useState<string | null>(null)
@@ -173,7 +176,8 @@ export function ScenarioAnalysisView({ portfolioId }: { portfolioId: number }) {
     onSuccess: data => setJobId(data.job_id),
   })
   const job = useAnalysisJob(jobId)
-  const cards = presets.data?.presets.filter(row => ['soft_landing', 'recession', 'inflation_rebound', 'rapid_cuts', 'growth_repricing', 'ai_continues', 'ai_capex_cools', 'usd_strength', 'yen_reversal'].includes(row.code)) || []
+  const featuredCodes = Array.isArray(presets.data?.featured_codes) ? presets.data.featured_codes : DEFAULT_FEATURED_SCENARIO_CODES
+  const cards = presets.data?.presets.filter(row => featuredCodes.includes(row.code)) || []
   const savedRun = findSavedScenarioRun(history.data?.runs, selected)
   const liveResult = runningCode === selected && job.data?.status === 'completed' ? job.data.result : null
   const result = liveResult || savedRun?.result
@@ -182,7 +186,7 @@ export function ScenarioAnalysisView({ portfolioId }: { portfolioId: number }) {
 
   useEffect(() => {
     if (selected || !history.data) return
-    const cached = latestFreshAnalysis<StressResult>(history.data.runs, 'scenario_analysis')
+    const cached = latestCompletedAnalysis<StressResult>(history.data.runs, 'scenario_analysis')
     if (cached?.result?.scenario.code) setSelected(cached.result.scenario.code)
   }, [history.data, selected])
 
