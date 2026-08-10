@@ -301,6 +301,8 @@
 [data-theme="dark"] .news-tickers .ticker-chip{background:var(--solid);border-color:var(--line)}
 [data-theme="dark"] .ticker-chip.temporary{border-color:rgba(142,142,147,.30);background:rgba(142,142,147,.10)}
 [data-theme="dark"] .ticker-chip.temporary button:first-child{color:#a1a1a6}
+[data-theme="dark"] .news-tickers .ticker-chip.active{border-color:var(--accent);background:var(--accent)}
+[data-theme="dark"] .ticker-chip.active button:first-child{color:#fff}
 [data-theme="dark"] .ticker-chip .ticker-remove{border-left-color:rgba(255,255,255,.14);color:#8e8e93}
 [data-theme="dark"] .ticker-chip .ticker-remove:hover{background:rgba(255,255,255,.10);color:#f5f5f7}
 [data-theme="dark"] .snapshot-empty{background:rgba(28,28,30,.55);color:#a1a1a6}
