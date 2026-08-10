@@ -18,6 +18,7 @@ import { RealtimeProviderHealthPanel } from './RealtimeProviderHealthPanel'
 import { IbkrIntegrationTest } from './IbkrIntegrationTest'
 import { IbkrAccount } from './IbkrAccount'
 import { MacroDataSourcePanel, MacroFundamentals } from './MacroFundamentals'
+import { StockCompare } from './StockCompare'
 import { ThemeToggle } from './ThemeToggle'
 import { providerValuesDiffer } from './financialComparison'
 import { subscribeTheme, getResolvedTheme, type ThemeMode } from './theme'
@@ -194,6 +195,7 @@ function NavIcon({name}:{name:string}) {
     calendar:<><path d="M6 2v4M18 2v4M3 9h18"/><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 13h2M14 13h2M8 17h2M14 17h2"/></>,
     financials:<><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h3M13 12h3M8 16h3M13 16h3"/></>,
     crossmodel:<><path d="M4 18V7M10 18V4M16 18v-8M22 18H2"/><path d="m5 11 5-3 4 4 6-6"/></>,
+    compare:<><path d="M4 5h6v14H4zM14 5h6v14h-6z"/><path d="M6 9h2M6 13h2M16 9h2M16 13h2"/></>,
     technical:<><path d="M3 17 8 12l4 3 8-9"/><path d="M4 21h16M7 9v6M12 11v7M17 4v8"/></>,
     sec:<><path d="M6 2h9l4 4v16H6z"/><path d="M14 2v5h5M9 12h6M9 16h6"/></>,
     congress:<><circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 4-7 8-7s7 2 8 7"/></>,
@@ -342,12 +344,12 @@ function TechnicalIndicatorPositions({heatmap}:{heatmap?:HistoricalCausalHeatmap
   </section>
 }
 
-function CompanyProfileSheet({symbol,onClose,onAskAI}:{symbol:string|null;onClose:()=>void;onAskAI:(symbol:string)=>void}) {
+function CompanyProfileSheet({symbol,onClose,onAskAI,onCompare}:{symbol:string|null;onClose:()=>void;onAskAI:(symbol:string)=>void;onCompare:(symbol:string)=>void}) {
   const profile = useQuery({queryKey:['company-profile',symbol],queryFn:()=>api<CompanyProfile>(`/company-profile/${symbol}`),enabled:!!symbol})
   const [section,setSection]=useState<'overview'|'market'>('overview')
   useEffect(()=>setSection('overview'),[symbol])
   const p=profile.data
-  return <Sheet open={symbol!==null} onClose={onClose} title="公司概览"><div className="company-profile-tabs"><nav aria-label="公司概览分区"><button className={section==='overview'?'active':''} onClick={()=>setSection('overview')}>总览</button><button className={section==='market'?'active':''} onClick={()=>setSection('market')}>市场快照</button></nav>{section==='overview'?(p?.status==='ready'?<article className="company-profile"><header><ProfileLogo symbol={p.symbol} url={p.logo_url}/><div><p className="eyebrow">FMP CACHED PROFILE</p><h2>{p.company_name||p.symbol} <small>{p.symbol}</small></h2></div></header><div className="company-profile-actions"><button onClick={()=>onAskAI(p.symbol)}>询问 AI <span>→</span></button>{p.website&&<a href={p.website} target="_blank" rel="noreferrer">访问公司网站 ↗</a>}</div><dl><div><dt>CEO</dt><dd>{p.ceo||'数据不足'}</dd></div><div><dt>交易所</dt><dd>{p.exchange_full_name||p.exchange||'数据不足'}</dd></div><div><dt>IPO 日期</dt><dd>{p.ipo_date||'数据不足'}</dd></div><div><dt>员工数</dt><dd>{p.employee_count?.toLocaleString()||'数据不足'}</dd></div><div><dt>本地分类</dt><dd>{localizeSector(p.local_classification.sector,'数据不足')} · {localizeIndustry(p.local_classification.industry,'数据不足')}</dd></div><div><dt>资料更新</dt><dd>{p.profile_fetched_at?formatDate(p.profile_fetched_at):'数据不足'}</dd></div></dl><section><h3>公司简介</h3><p>{p.description_zh||p.description_en||'公司简介暂不可用。'}</p>{p.description_zh&&p.description_en&&<details><summary>查看英文原文</summary><p>{p.description_en}</p></details>}{p.translation_status==='pending'&&<small>中文简介正在后台翻译，当前展示英文原文。</small>}</section></article>:<div className="empty">{profile.isLoading?'正在读取本地资料…':'公司资料尚未同步，股票其他功能不受影响。'}</div>):symbol&&<MarketSnapshot symbol={symbol}/>}</div></Sheet>
+  return <Sheet open={symbol!==null} onClose={onClose} title="公司概览"><div className="company-profile-tabs"><nav aria-label="公司概览分区"><button className={section==='overview'?'active':''} onClick={()=>setSection('overview')}>总览</button><button className={section==='market'?'active':''} onClick={()=>setSection('market')}>市场快照</button></nav>{section==='overview'?(p?.status==='ready'?<article className="company-profile"><header><ProfileLogo symbol={p.symbol} url={p.logo_url}/><div><p className="eyebrow">FMP CACHED PROFILE</p><h2>{p.company_name||p.symbol} <small>{p.symbol}</small></h2></div></header><div className="company-profile-actions"><button onClick={()=>onAskAI(p.symbol)}>询问 AI <span>→</span></button><button onClick={()=>onCompare(p.symbol)}>加入个股对比 <span>→</span></button>{p.website&&<a href={p.website} target="_blank" rel="noreferrer">访问公司网站 ↗</a>}</div><dl><div><dt>CEO</dt><dd>{p.ceo||'数据不足'}</dd></div><div><dt>交易所</dt><dd>{p.exchange_full_name||p.exchange||'数据不足'}</dd></div><div><dt>IPO 日期</dt><dd>{p.ipo_date||'数据不足'}</dd></div><div><dt>员工数</dt><dd>{p.employee_count?.toLocaleString()||'数据不足'}</dd></div><div><dt>本地分类</dt><dd>{localizeSector(p.local_classification.sector,'数据不足')} · {localizeIndustry(p.local_classification.industry,'数据不足')}</dd></div><div><dt>资料更新</dt><dd>{p.profile_fetched_at?formatDate(p.profile_fetched_at):'数据不足'}</dd></div></dl><section><h3>公司简介</h3><p>{p.description_zh||p.description_en||'公司简介暂不可用。'}</p>{p.description_zh&&p.description_en&&<details><summary>查看英文原文</summary><p>{p.description_en}</p></details>}{p.translation_status==='pending'&&<small>中文简介正在后台翻译，当前展示英文原文。</small>}</section></article>:<div className="empty">{profile.isLoading?'正在读取本地资料…':'公司资料尚未同步，股票其他功能不受影响。'}</div>):symbol&&<MarketSnapshot symbol={symbol}/>}</div></Sheet>
 }
 
 function TechnicalAnalysisCenter() {
@@ -459,18 +461,19 @@ export default function App() {
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const mobileTabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['reports','报告中心'],['journal','交易日志'],['settings','管理设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
+  const mobileTabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析'],['reports','报告中心'],['journal','交易日志'],['settings','管理设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
   const desktopNavGroups = [
     {title:'概览与资产',items:[['overview','总览'],['watchlist','自选股'],['holdings','持仓']]},
     {title:'研究与决策',items:[['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现']]},
     {title:'市场情报',items:[['news','新闻中心'],['macro','美国宏观']]},
-    {title:'公司分析',items:[['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析']]},
+    {title:'公司分析',items:[['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析']]},
     {title:'记录与系统',items:[['reports','报告中心'],['journal','交易日志'],['settings','管理设置']]},
     {title:'IBKR',items:[['ibkr','IBKR'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]},
   ]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['compare','个股横向对比'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
   const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ibkr-test')window.history.pushState({},'','/admin/integrations/ibkr');else if(key==='ibkr')window.history.pushState({},'','/ibkr');else if(key==='ai'){if(!window.location.pathname.startsWith('/ai'))window.history.pushState({},'', '/ai/new')}else if(key==='decisions')window.history.pushState({},'','/investment-decisions');else if(window.location.pathname.startsWith('/ai')||window.location.pathname.startsWith('/investment-decisions')||window.location.pathname.startsWith('/admin/integrations/ibkr')||window.location.pathname==='/ibkr')window.history.pushState({},'',`/?tab=${key}`)}
   const askAI=(symbol:string)=>{setSelectedProfileSymbol(null);setActiveTicker(symbol);setTab('ai');window.history.pushState({},'',`/ai/new?symbol=${encodeURIComponent(symbol)}&context=company`);window.dispatchEvent(new PopStateEvent('popstate'))}
+  const compareStock=(symbol:string)=>{const peer=watchlist.data?.find(item=>item.ticker!==symbol)?.ticker;setSelectedProfileSymbol(null);setTab('compare');window.history.pushState({},'',`/?tab=compare&symbols=${[symbol,peer].filter(Boolean).join(',')}`)}
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
   const viewIndices = demoMode ? demoIndices : indices.data
   const viewAlerts = demoMode ? demoAlerts : alerts.data
@@ -513,6 +516,7 @@ export default function App() {
       {tab==='macro'&&<MacroFundamentals isAdmin={authUser.role==='admin'}/>}
       {tab==='financials'&&<FinancialStatementsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onStatementMetric={setSelectedStatementMetric} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='crossmodel'&&<CrossModelCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} onMetric={setSelectedModel} onWeight={setSelectedWeight} active={activeTicker} setActive={setActiveTicker}/>}
+      {tab==='compare'&&<StockCompare watchlist={watchlist.data?.map(item=>item.ticker)||[]}/>}
       {tab==='technical'&&<TechnicalAnalysisCenter/>}
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
@@ -523,7 +527,7 @@ export default function App() {
     <Sheet open={selectedReport!==null} onClose={()=>setSelectedReport(null)} title={report.data?typeNames[report.data.report_type]||report.data.report_type:'报告'}>
       {report.data?<article className="report-detail sheet-report"><p className="eyebrow">{typeNames[report.data.report_type]} · {report.data.model}</p><h2>{report.data.title}</h2><div className="report-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{report.data.content}</ReactMarkdown></div><h3>信息来源</h3>{report.data.sources.map((s,i)=><a href={s.url} target="_blank" rel="noreferrer" key={i}>{i+1}. {s.title}</a>)}</article>:<div className="empty">加载中…</div>}
     </Sheet>
-    <CompanyProfileSheet symbol={selectedProfileSymbol} onClose={()=>setSelectedProfileSymbol(null)} onAskAI={askAI}/>
+    <CompanyProfileSheet symbol={selectedProfileSymbol} onClose={()=>setSelectedProfileSymbol(null)} onAskAI={askAI} onCompare={compareStock}/>
     <Sheet open={selectedModel!==null} onClose={()=>setSelectedModel(null)} title={selectedModel?.label||'指标说明'}>
       {selectedModel&&<article className="model-drawer"><p className="eyebrow">MODEL EXPLAINER · 指标学习</p><h2>{selectedModel.label}</h2><strong>{formatCrossMetric(selectedModel)}</strong>{selectedModel.applicability&&<div className={`applicability ${selectedModel.applicability}`}>适用性：{{medium:'中',low:'低',not_applicable:'不适用'}[selectedModel.applicability]}</div>}{selectedModel.peer_median!=null&&<div className="drawer-peer"><span>同行中位数</span><b>{selectedModel.peer_median.toFixed(2)}{selectedModel.unit==='multiple'?'×':selectedModel.unit==='%'?'%':''}</b><em>{selectedModel.comparison}</em></div>}<p>{selectedModel.explanation}</p>{selectedModel.missing_fields?.length?<div className="missing-data"><b>{selectedModel.status==='not_applicable'?'不适用':'数据不足'}</b><p>{selectedModel.status==='not_applicable'?'该公司类型不使用此模型。':`缺少：${selectedModel.missing_fields.map(fieldLabel).join('、')}`}</p></div>:null}{selectedModel.warnings?.map(warning=><div className="metric-warning" key={warning}>{warning}</div>)}<div className="learn-block"><b>公式 Formula</b><p>{selectedModel.formula}</p></div><div className="learn-block"><b>参考区间 Reference Range</b><p>{selectedModel.recommended_range}</p></div>{selectedModel.note&&<div className="explainer"><b>计算说明</b><p>{selectedModel.note}</p></div>}</article>}
     </Sheet>

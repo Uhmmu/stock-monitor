@@ -10,6 +10,7 @@ from app.ai.router import router as ai_router
 from app.ai_tools.router import router as ai_tools_router
 from app.ai_memory.router import router as ai_memory_router
 from app.api.auth_routes import router as auth_router
+from app.api.compare_routes import router as compare_router
 from app.api.discovery_routes import router as discovery_router
 from app.api.investment_routes import router as investment_router
 from app.api.macro_routes import admin_router as macro_admin_router, router as macro_router
@@ -73,6 +74,7 @@ app.middleware("http")(research_audit_middleware)
 app.add_exception_handler(ResearchError, research_error_handler)
 app.include_router(public_router)
 app.include_router(auth_router)
+app.include_router(compare_router)
 app.include_router(router)
 app.include_router(portfolio_router)
 app.include_router(portfolio_analysis_router)
