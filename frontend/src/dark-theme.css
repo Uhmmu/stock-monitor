@@ -598,6 +598,7 @@
   background:linear-gradient(145deg,rgba(10,132,255,.16),rgba(28,28,30,.78));
   border-color:rgba(10,132,255,.25);
 }
+[data-theme="dark"] .portfolio-benchmark,
 [data-theme="dark"] .benchmark-grid article,
 [data-theme="dark"] .scenario-result-toolbar,
 [data-theme="dark"] .portfolio-strategy-entry,

@@ -535,11 +535,6 @@ export function PortfolioModule() {
       client.invalidateQueries({queryKey:['portfolio-interpretation']})
     },
   })
-  const saveBenchmark = useMutation({
-    mutationFn:(payload:{start_date:string;portfolio_return_percent:number})=>api<PortfolioBenchmark>('/portfolio/benchmark',{method:'PUT',body:JSON.stringify(payload)}),
-    onSuccess:data=>client.setQueryData(['portfolio-benchmark'],data),
-  })
-
   const s = summary.data
   const live = useMemo(()=>deriveLivePortfolio(s,realtime.quotes),[s,realtime.quotes])
   const displayPositions = live?.positions||[]
@@ -617,7 +612,6 @@ export function PortfolioModule() {
         <RealtimeMarketEventList events={liveEvents} title="组合盘中事件" subtitle="持仓的突破、VWAP、放量与指标事件" compact/>
         <PortfolioPerformanceChart data={performance.data} loading={performance.isLoading} error={performance.isError} range={performanceRange} onRange={setPerformanceRange} currency={s.base_currency}/>
         <ReturnAttributionPreview data={attribution.data} positions={live?.positions||s.positions} currency={s.base_currency} loading={attribution.isLoading}/>
-        <PortfolioBenchmarkSection data={benchmark.data} loading={benchmark.isLoading} saving={saveBenchmark.isPending} error={saveBenchmark.error} onSave={payload=>saveBenchmark.mutate(payload)}/>
       </>}
     </div>}
 
@@ -904,6 +898,16 @@ function PositionAccountPanel({data}:{data:PositionLedgerDetail}) {
     {section==='lots'&&<div className="position-ledger-list">{data.open_lots.map(row=><article key={row.lot_id}><b>{row.opened_at||'日期不足'}</b><span>{row.quantity==null?'—':fmtNum(row.quantity)} 股</span><span>批次成本 {fmtMoney(row.cost_basis,s.currency)}</span><span>{row.matching_method}</span></article>)}{!data.open_lots.length&&<div className="empty">暂无开放成本批次。</div>}</div>}
     {section==='completed'&&<div className="position-ledger-list">{data.completed_trades.map(row=><article key={row.id}><b>{row.closed_at?new Date(row.closed_at).toLocaleDateString('zh-CN'):'—'}</b><span>{fmtNum(row.quantity||0)} 股</span><span>{fmtMoney(row.average_entry_price,s.currency)} → {fmtMoney(row.average_exit_price,s.currency)}</span><strong className={(row.net_pnl||0)>=0?'positive':'negative'}>{fmtMoney(row.net_pnl,s.currency)}</strong></article>)}{!data.completed_trades.length&&<div className="empty">暂无已完成交易。</div>}</div>}
   </section>
+}
+
+export function PortfolioBenchmarkOverview() {
+  const client = useQueryClient()
+  const benchmark = useQuery({queryKey:['portfolio-benchmark'],queryFn:()=>api<PortfolioBenchmark>('/portfolio/benchmark'),staleTime:15*60_000,refetchInterval:15*60_000})
+  const save = useMutation({
+    mutationFn:(payload:{start_date:string;portfolio_return_percent:number})=>api<PortfolioBenchmark>('/portfolio/benchmark',{method:'PUT',body:JSON.stringify(payload)}),
+    onSuccess:data=>client.setQueryData(['portfolio-benchmark'],data),
+  })
+  return <PortfolioBenchmarkSection data={benchmark.data} loading={benchmark.isLoading} saving={save.isPending} error={save.error} onSave={payload=>save.mutate(payload)}/>
 }
 
 function PortfolioBenchmarkSection({data,loading,saving,error,onSave}:{
