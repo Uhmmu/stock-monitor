@@ -134,6 +134,7 @@ class Settings(BaseSettings):
     adanos_api_key: str = ""
     adanos_api_keys: str = ""
     adanos_api_base_url: str = "https://api.adanos.org"
+    adanos_proxy_url: str = ""
     adanos_request_timeout_seconds: float = 5.0
 
     # Isolated, administrator-only, read-only IBKR integration test module.

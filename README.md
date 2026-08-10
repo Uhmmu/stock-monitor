@@ -95,9 +95,10 @@ PERPLEXITY_MAX_RUN_COST_USD=1
 
 # 可选：启用 Reddit、X.com、新闻与 Polymarket 聚合舆情
 ADANOS_API_KEY=your-adanos-key
-# 可选：多个 Key 轮询分流，遇到限流或上游错误时自动切换
+# 可选：最多两个 Key；第一个直连，只有收到 429 时第二个才经 SOCKS5h 代理重试
 ADANOS_API_KEYS=your-adanos-key-1,your-adanos-key-2
 ADANOS_API_BASE_URL=https://api.adanos.org
+ADANOS_PROXY_URL=socks5h://host.docker.internal:10808
 
 # 生产环境必须修改
 JWT_SECRET=generate-a-long-random-secret
@@ -112,8 +113,8 @@ AUTH_PASSWORD_HASH=   # caddy hash-password 生成
 
 Adanos Key 仅由 FastAPI 服务端读取。登录后的“舆情”板块通过后端并发查询四个来源，
 单个来源失败不会影响其余来源；成功结果缓存 5 分钟，浏览器不会接触 Key。配置
-`ADANOS_API_KEYS` 时，四个来源会在 Key 池中轮询分流；单个 Key 返回
-401、403、429 或可重试的 5xx 时，会自动尝试池中的下一个 Key。
+`ADANOS_API_KEYS` 时，第一个 Key 始终直连；仅当单个来源返回 429 时，才用第二个
+Key 经 `ADANOS_PROXY_URL` 重试。代理必须为 `socks5h`，不可用时第二个 Key 不会直连回退。
 
 ### 可选：AI 研究助手
 

@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -75,9 +76,6 @@ class SentimentSourceInsight:
 
 _cache: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
 _cache_lock = asyncio.Lock()
-_key_cursor = 0
-_key_lock = asyncio.Lock()
-_KEY_FAILOVER_STATUSES = {401, 403, 429, 500, 502, 503, 504}
 
 
 def _number(value: Any) -> float | None:
@@ -109,23 +107,24 @@ def _trend(value: Any) -> SentimentTrend | None:
 
 
 def configured_api_keys(settings: Settings) -> list[str]:
-    raw_values = [
+    pooled = [
         item.strip()
         for item in settings.adanos_api_keys.replace("\n", ",").replace(";", ",").split(",")
+        if item.strip()
     ]
-    raw_values.append(settings.adanos_api_key.strip())
-    return list(dict.fromkeys(item for item in raw_values if item))
+    api_keys = list(dict.fromkeys(item for item in (pooled or [settings.adanos_api_key.strip()]) if item))
+    if len(api_keys) > 2:
+        logger.error("Adanos disabled: ADANOS_API_KEYS must contain at most two distinct keys")
+        return []
+    return api_keys
 
 
-async def _source_key_orders(api_keys: list[str], count: int) -> list[list[str]]:
-    global _key_cursor
-    async with _key_lock:
-        start = _key_cursor % len(api_keys)
-        _key_cursor = (_key_cursor + 1) % len(api_keys)
-    return [
-        [api_keys[(start + source_index + offset) % len(api_keys)] for offset in range(len(api_keys))]
-        for source_index in range(count)
-    ]
+def _valid_proxy_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        return parsed.scheme == "socks5h" and bool(parsed.hostname and parsed.port)
+    except ValueError:
+        return False
 
 
 def source_alignment(bullish_values: list[float]) -> str:
@@ -196,45 +195,40 @@ def build_stock_sentiment_insights(
 
 
 async def _fetch_compare_source(
-    client: httpx.AsyncClient,
+    primary_client: httpx.AsyncClient,
+    secondary_client: httpx.AsyncClient | None,
     source: SentimentSourceKey,
     symbol: str,
     days: int,
     *,
     base_url: str,
-    api_keys: list[str],
+    primary_key: str,
+    secondary_key: str | None,
 ) -> SentimentSourceInsight | None:
-    for position, api_key in enumerate(api_keys):
-        try:
-            response = await client.get(
-                f"{base_url.rstrip('/')}{SOURCE_CONFIG[source]['path']}",
-                params={"tickers": symbol, "days": days},
-                headers={"X-API-Key": api_key},
+    url = f"{base_url.rstrip('/')}{SOURCE_CONFIG[source]['path']}"
+    params = {"tickers": symbol, "days": days}
+    try:
+        response = await primary_client.get(url, params=params, headers={"X-API-Key": primary_key})
+        if response.status_code == 429 and secondary_key and secondary_client:
+            logger.warning("Adanos %s primary quota exhausted for %s; trying proxied secondary", source, symbol)
+            response = await secondary_client.get(
+                url, params=params, headers={"X-API-Key": secondary_key},
             )
-            if response.status_code == 404:
-                return None
-            if response.status_code in _KEY_FAILOVER_STATUSES and position + 1 < len(api_keys):
-                logger.warning(
-                    "Adanos %s compare returned %s for %s; trying alternate key",
-                    source,
-                    response.status_code,
-                    symbol,
-                )
-                continue
-            response.raise_for_status()
-            payload = response.json()
-            stocks = payload.get("stocks") if isinstance(payload, dict) else None
-            row = next(
-                (
-                    item for item in stocks or []
-                    if isinstance(item, dict) and str(item.get("ticker") or "").upper() == symbol
-                ),
-                None,
-            )
-            return normalize_source_insight(source, row)
-        except (httpx.HTTPError, ValueError, TypeError) as exc:
-            logger.warning("Adanos %s compare request failed for %s: %s", source, symbol, type(exc).__name__)
+        if response.status_code == 404:
             return None
+        response.raise_for_status()
+        payload = response.json()
+        stocks = payload.get("stocks") if isinstance(payload, dict) else None
+        row = next(
+            (
+                item for item in stocks or []
+                if isinstance(item, dict) and str(item.get("ticker") or "").upper() == symbol
+            ),
+            None,
+        )
+        return normalize_source_insight(source, row)
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        logger.warning("Adanos %s compare request failed for %s: %s", source, symbol, type(exc).__name__)
     return None
 
 
@@ -244,6 +238,7 @@ async def get_stock_sentiment_insights(
     *,
     config: Settings | None = None,
     client: httpx.AsyncClient | None = None,
+    secondary_client: httpx.AsyncClient | None = None,
     use_cache: bool = True,
 ) -> dict[str, Any] | None:
     settings = config or get_settings()
@@ -262,29 +257,48 @@ async def get_stock_sentiment_insights(
             if cached:
                 _cache.pop(cache_key, None)
 
-    owns_client = client is None
-    active_client = client or httpx.AsyncClient(
+    owns_primary = client is None
+    primary_client = client or httpx.AsyncClient(
         timeout=httpx.Timeout(settings.adanos_request_timeout_seconds),
         follow_redirects=True,
         trust_env=False,
     )
+    secondary_key = api_keys[1] if len(api_keys) == 2 else None
+    proxy_url = getattr(settings, "adanos_proxy_url", "").strip()
+    owns_secondary = False
+    active_secondary = secondary_client
+    if secondary_key and not _valid_proxy_url(proxy_url):
+        logger.error("Adanos secondary disabled: ADANOS_PROXY_URL must be a valid socks5h URL")
+        secondary_key = None
+        active_secondary = None
+    elif secondary_key and active_secondary is None:
+        active_secondary = httpx.AsyncClient(
+            proxy=proxy_url,
+            timeout=httpx.Timeout(settings.adanos_request_timeout_seconds),
+            follow_redirects=True,
+            trust_env=False,
+        )
+        owns_secondary = True
     try:
         source_keys = list(SOURCE_CONFIG)
-        key_orders = await _source_key_orders(api_keys, len(source_keys))
         sources = await asyncio.gather(*(
             _fetch_compare_source(
-                active_client,
+                primary_client,
+                active_secondary,
                 source,
                 normalized_symbol,
                 lookback_days,
                 base_url=settings.adanos_api_base_url,
-                api_keys=key_orders[index],
+                primary_key=api_keys[0],
+                secondary_key=secondary_key,
             )
-            for index, source in enumerate(source_keys)
+            for source in source_keys
         ))
     finally:
-        if owns_client:
-            await active_client.aclose()
+        if owns_primary:
+            await primary_client.aclose()
+        if owns_secondary and active_secondary:
+            await active_secondary.aclose()
 
     result = build_stock_sentiment_insights(
         normalized_symbol,

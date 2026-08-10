@@ -18,6 +18,7 @@ def config(**overrides):
         "adanos_api_key": "test-key",
         "adanos_api_keys": "",
         "adanos_api_base_url": "https://adanos.test",
+        "adanos_proxy_url": "socks5h://proxy.test:10808",
         "adanos_request_timeout_seconds": 5.0,
     }
     values.update(overrides)
@@ -63,11 +64,13 @@ def test_normalizes_numeric_strings_and_rejects_incomplete_rows():
     assert normalize_source_insight("news", {"buzz_score": 50}) is None
 
 
-def test_configured_key_pool_deduplicates_and_keeps_legacy_fallback():
+def test_configured_key_pool_is_ordered_and_legacy_only_fills_an_empty_pool():
     assert configured_api_keys(config(
-        adanos_api_keys=" key-a, key-b;key-a\nkey-c ",
-        adanos_api_key="key-b",
-    )) == ["key-a", "key-b", "key-c"]
+        adanos_api_keys=" key-a, key-b;key-a ",
+        adanos_api_key="legacy-key",
+    )) == ["key-a", "key-b"]
+    assert configured_api_keys(config(adanos_api_keys="", adanos_api_key="legacy-key")) == ["legacy-key"]
+    assert configured_api_keys(config(adanos_api_keys="key-a,key-b,key-c")) == []
 
 
 @pytest.mark.parametrize(("values", "expected"), [
@@ -126,37 +129,99 @@ def test_fetches_four_sources_and_keeps_partial_success():
     assert all(call[1]["params"] == {"tickers": "AAPL", "days": 30} for call in client.calls)
 
 
-def test_load_balances_four_sources_evenly_across_two_keys():
-    from app.services import adanos
-
-    adanos._key_cursor = 0
+def test_primary_success_never_calls_secondary():
     payload = Response({"stocks": [{
         "ticker": "AAPL", "company_name": "Apple", "buzz_score": 70,
         "bullish_pct": 55, "trend": "stable", "mentions": 100, "trade_count": 20,
     }]})
-    client = Client({source: payload for source in ("reddit", "x", "news", "polymarket")})
+    primary = Client({source: payload for source in ("reddit", "x", "news", "polymarket")})
+    secondary = Client({})
     result = asyncio.run(get_stock_sentiment_insights(
         "AAPL",
         config=config(adanos_api_keys="key-a,key-b", adanos_api_key=""),
-        client=client,
+        client=primary,
+        secondary_client=secondary,
         use_cache=False,
     ))
-    used_keys = [call[1]["headers"]["X-API-Key"] for call in client.calls]
     assert result is not None and result["available_sources"] == 4
-    assert used_keys.count("key-a") == 2
-    assert used_keys.count("key-b") == 2
+    assert len(primary.calls) == 4
+    assert all(call[1]["headers"] == {"X-API-Key": "key-a"} for call in primary.calls)
+    assert secondary.calls == []
 
 
 def test_rate_limited_key_fails_over_to_alternate_key():
-    from app.services import adanos
+    primary = Client({source: Response({}, 429) for source in ("reddit", "x", "news", "polymarket")})
+    secondary = Client({source: Response({"stocks": [{
+        "ticker": "AAPL", "buzz_score": 60, "bullish_pct": 50,
+        "trend": "stable", "mentions": 100, "trade_count": 20,
+    }]}) for source in ("reddit", "x", "news", "polymarket")})
+    result = asyncio.run(get_stock_sentiment_insights(
+        "AAPL",
+        config=config(adanos_api_keys="key-a,key-b", adanos_api_key=""),
+        client=primary,
+        secondary_client=secondary,
+        use_cache=False,
+    ))
+    assert result is not None and result["available_sources"] == 4
+    assert len(primary.calls) == len(secondary.calls) == 4
+    assert all(call[1]["headers"] == {"X-API-Key": "key-a"} for call in primary.calls)
+    assert all(call[1]["headers"] == {"X-API-Key": "key-b"} for call in secondary.calls)
 
-    class FailoverClient:
-        def __init__(self):
+
+@pytest.mark.parametrize("status", [401, 403, 404, 500, 502, 503, 504])
+def test_non_quota_failures_never_use_secondary(status):
+    primary = Client({source: Response({}, status) for source in ("reddit", "x", "news", "polymarket")})
+    secondary = Client({})
+    result = asyncio.run(get_stock_sentiment_insights(
+        "AAPL", config=config(adanos_api_keys="key-a,key-b"),
+        client=primary, secondary_client=secondary, use_cache=False,
+    ))
+    assert result is None
+    assert secondary.calls == []
+
+
+def test_primary_connection_failure_never_uses_secondary():
+    class BrokenPrimary(Client):
+        async def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            raise httpx.ConnectError("failed", request=httpx.Request("GET", url))
+
+    primary = BrokenPrimary({})
+    secondary = Client({})
+    result = asyncio.run(get_stock_sentiment_insights(
+        "AAPL", config=config(adanos_api_keys="key-a,key-b"),
+        client=primary, secondary_client=secondary, use_cache=False,
+    ))
+    assert result is None
+    assert len(primary.calls) == 4
+    assert secondary.calls == []
+
+
+@pytest.mark.parametrize("proxy_url", ["", "http://proxy.test:10808", "socks5h://proxy.test:bad"])
+def test_invalid_proxy_disables_secondary_without_direct_fallback(proxy_url):
+    primary = Client({source: Response({}, 429) for source in ("reddit", "x", "news", "polymarket")})
+    secondary = Client({})
+    result = asyncio.run(get_stock_sentiment_insights(
+        "AAPL", config=config(adanos_api_keys="key-a,key-b", adanos_proxy_url=proxy_url),
+        client=primary, secondary_client=secondary, use_cache=False,
+    ))
+    assert result is None
+    assert secondary.calls == []
+
+
+def test_owned_clients_bind_secondary_to_socks5h(monkeypatch):
+    clients = []
+
+    class OwnedClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
             self.calls = []
+            self.closed = False
+            clients.append(self)
 
         async def get(self, url, **kwargs):
             self.calls.append((url, kwargs))
-            if kwargs["headers"]["X-API-Key"] == "key-a":
+            if "proxy" not in self.kwargs:
                 return Response({}, 429)
             source = url.split("/")[3]
             metric = "trade_count" if source == "polymarket" else "mentions"
@@ -165,18 +230,43 @@ def test_rate_limited_key_fails_over_to_alternate_key():
                 "trend": "stable", metric: 100,
             }]})
 
-    adanos._key_cursor = 0
-    client = FailoverClient()
+        async def aclose(self):
+            self.closed = True
+
+    monkeypatch.setattr("app.services.adanos.httpx.AsyncClient", OwnedClient)
     result = asyncio.run(get_stock_sentiment_insights(
-        "AAPL",
-        config=config(adanos_api_keys="key-a,key-b", adanos_api_key=""),
-        client=client,
-        use_cache=False,
+        "AAPL", config=config(adanos_api_keys="key-a,key-b"), use_cache=False,
     ))
-    used_keys = [call[1]["headers"]["X-API-Key"] for call in client.calls]
     assert result is not None and result["available_sources"] == 4
-    assert used_keys.count("key-a") == 2
-    assert used_keys.count("key-b") == 4
+    assert len(clients) == 2
+    assert clients[0].kwargs["trust_env"] is False and "proxy" not in clients[0].kwargs
+    assert clients[1].kwargs["trust_env"] is False
+    assert clients[1].kwargs["proxy"] == "socks5h://proxy.test:10808"
+    assert all(client.closed for client in clients)
+
+
+def test_single_key_never_creates_secondary_client(monkeypatch):
+    clients = []
+
+    class OwnedClient(Client):
+        def __init__(self, **kwargs):
+            payload = Response({"stocks": [{
+                "ticker": "AAPL", "buzz_score": 60, "bullish_pct": 50,
+                "trend": "stable", "mentions": 100, "trade_count": 20,
+            }]})
+            super().__init__({source: payload for source in ("reddit", "x", "news", "polymarket")})
+            self.kwargs = kwargs
+            clients.append(self)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("app.services.adanos.httpx.AsyncClient", OwnedClient)
+    result = asyncio.run(get_stock_sentiment_insights(
+        "AAPL", config=config(adanos_api_keys="", adanos_api_key="key-a"), use_cache=False,
+    ))
+    assert result is not None
+    assert len(clients) == 1 and "proxy" not in clients[0].kwargs
 
 
 def test_missing_key_returns_null_without_http():
