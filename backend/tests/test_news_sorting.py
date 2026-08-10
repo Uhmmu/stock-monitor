@@ -3,9 +3,9 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.api.routes import list_market_news
+from app.api.routes import list_market_news, list_news
 from app.database import Base
-from app.models import NewsItem
+from app.models import NewsItem, WatchlistItem
 
 
 def _row(title: str, quality: float, importance: float, published_at: datetime) -> NewsItem:
@@ -43,3 +43,19 @@ def test_market_news_supports_ranked_and_latest_sorting():
     assert [row["title"] for row in latest["items"]] == [
         "newest", "high-quality-old", "high-quality-important",
     ]
+
+
+def test_company_news_uses_rolling_week_instead_of_calendar_week():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add(WatchlistItem(ticker="AAPL"))
+        row = _row("six-days-old", .9, .8, datetime.now(UTC) - timedelta(days=6))
+        row.scope = "company"
+        row.ticker = "AAPL"
+        db.add(row)
+        db.commit()
+
+        result = list_news("AAPL", None, "latest", db)
+
+    assert [item["title"] for item in result] == ["six-days-old"]

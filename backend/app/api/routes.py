@@ -818,12 +818,6 @@ def _news_out(item: NewsItem, *, detail: bool = False) -> dict:
     return data
 
 
-def _current_week_start() -> date_type:
-    """本市场时区 ISO 周的周一；历史新闻仍保留在数据库中。"""
-    today = datetime.now(UTC).astimezone(ZoneInfo(get_settings().market_timezone)).date()
-    return today - timedelta(days=today.isocalendar()[2] - 1)
-
-
 def _news_order(sort: Literal["ranked", "latest"]):
     timestamp = func.coalesce(NewsItem.published_at, NewsItem.found_at)
     if sort == "latest":
@@ -852,9 +846,8 @@ def list_news(
         end = datetime.combine(date + timedelta(days=1), datetime.min.time(), tzinfo=zone).astimezone(UTC)
         query = query.where(timestamp >= start, timestamp < end)
     else:
-        # 列表默认只展示本周；更早新闻仍可由日期 API 和 Research Gateway 查询。
-        week_start = datetime.combine(_current_week_start(), datetime.min.time(), tzinfo=zone).astimezone(UTC)
-        query = query.where(timestamp >= week_start)
+        # Rolling window avoids an empty list when the calendar week resets on Monday.
+        query = query.where(timestamp >= datetime.now(UTC) - timedelta(days=7))
     query = query.order_by(*_news_order(sort)).limit(200)
     return [_news_out(item) for item in db.scalars(query).all()]
 
