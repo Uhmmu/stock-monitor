@@ -850,9 +850,10 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
   const [weeklyOpen,setWeeklyOpen] = useState(false)
   const [selectedNewsId,setSelectedNewsId] = useState<number|null>(null)
   const [scope,setScope] = useState<'market'|'company'>('company')
+  const [sortMode,setSortMode] = useState<'ranked'|'latest'>('ranked')
   const current = active||tickers[0]||''
-  const companyNews = useQuery({queryKey:['news',current],queryFn:()=>api<NewsRow[]>(`/news?ticker=${current}`),enabled:scope==='company'&&!!current,refetchInterval:q=>(q.state.data as NewsRow[]|undefined)?.some(n=>['pending','queued','processing'].includes(n.ai_summary_status))?2000:false})
-  const marketNews = useQuery({queryKey:['news','market'],queryFn:()=>api<MarketNewsResponse>('/news/market'),enabled:scope==='market',refetchInterval:q=>(q.state.data as MarketNewsResponse|undefined)?.items.some(n=>['pending','queued','processing'].includes(n.ai_summary_status))?2000:false})
+  const companyNews = useQuery({queryKey:['news',current,sortMode],queryFn:()=>api<NewsRow[]>(`/news?ticker=${current}&sort=${sortMode}`),enabled:scope==='company'&&!!current,refetchInterval:q=>(q.state.data as NewsRow[]|undefined)?.some(n=>['pending','queued','processing'].includes(n.ai_summary_status))?2000:false})
+  const marketNews = useQuery({queryKey:['news','market',sortMode],queryFn:()=>api<MarketNewsResponse>(`/news/market?sort=${sortMode}`),enabled:scope==='market',refetchInterval:q=>(q.state.data as MarketNewsResponse|undefined)?.items.some(n=>['pending','queued','processing'].includes(n.ai_summary_status))?2000:false})
   const news = scope==='market' ? marketNews.data?.items : companyNews.data
   const archive = useQuery({queryKey:['news-archive',current],queryFn:()=>api<NewsArchive|null>(`/news/archive?ticker=${current}`),enabled:scope==='company'&&!!current})
   const weekly = useQuery({queryKey:['news-weekly',current],queryFn:()=>api<WeeklyArchive[]>(`/news/weekly?ticker=${current}`),enabled:scope==='company'&&!!current&&weeklyOpen})
@@ -884,7 +885,7 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
     <Sheet open={weeklyOpen} onClose={()=>setWeeklyOpen(false)} title={`${current} 历史每周新闻`}>
       {weekly.isLoading?<div className="empty">加载中…</div>:weekly.data?.length?<div className="weekly-list">{weekly.data.map(w=><article className="report-detail" key={`${w.iso_year}-${w.iso_week}`}><p className="eyebrow">{w.week_start} ~ {w.week_end} · {w.iso_year}W{w.iso_week} · v{w.version} · {w.model}</p><div className="report-content"><ReactMarkdown rehypePlugins={[rehypeSanitize]}>{keyFactsOnly(w.content)}</ReactMarkdown></div></article>)}</div>:<div className="empty">暂无历史每周新闻。</div>}
     </Sheet></>}
-    <div className="section-title"><h2>{scope==='market'?'市场要闻':`${current} 新闻`}</h2><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'刷新中…':'刷新新闻'}</button></div>
+    <div className="section-title"><h2>{scope==='market'?'市场要闻':`${current} 新闻`}</h2><div className="rating-bar"><div className="segmented compact" role="group" aria-label="新闻排序方式">{([['ranked','综合排序'],['latest','最新优先']] as const).map(([key,label])=><button type="button" key={key} className={sortMode===key?'active':''} aria-pressed={sortMode===key} onClick={()=>setSortMode(key)}>{label}</button>)}</div><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'刷新中…':'刷新新闻'}</button></div></div>
     {scope==='market'&&marketNews.data?.last_updated_at&&<p className="market-updated">最近更新：{formatDate(marketNews.data.last_updated_at)}</p>}
     {refresh.isSuccess&&<p className="saved">已触发后台采集，稍后刷新查看。</p>}
     <div className="news-list">{news?.map(item=>{const no=orderNo(item.id);return <article className="news-card" key={item.id}>

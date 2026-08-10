@@ -2,6 +2,7 @@ import hashlib
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date as date_type, datetime, timedelta
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -823,8 +824,25 @@ def _current_week_start() -> date_type:
     return today - timedelta(days=today.isocalendar()[2] - 1)
 
 
+def _news_order(sort: Literal["ranked", "latest"]):
+    timestamp = func.coalesce(NewsItem.published_at, NewsItem.found_at)
+    if sort == "latest":
+        return timestamp.desc(), NewsItem.id.desc()
+    return (
+        NewsItem.quality_score.desc().nullslast(),
+        NewsItem.importance_score.desc().nullslast(),
+        timestamp.desc(),
+        NewsItem.id.desc(),
+    )
+
+
 @router.get("/news")
-def list_news(ticker: str = Query(...), date: date_type | None = None, db: Session = Depends(get_db)):
+def list_news(
+    ticker: str = Query(...),
+    date: date_type | None = None,
+    sort: Literal["ranked", "latest"] = Query("ranked"),
+    db: Session = Depends(get_db),
+):
     value = _require_watched_ticker(db, ticker, "news")
     query = select(NewsItem).where(NewsItem.ticker == value, NewsItem.scope == "company")
     zone = ZoneInfo(get_settings().market_timezone)
@@ -837,17 +855,23 @@ def list_news(ticker: str = Query(...), date: date_type | None = None, db: Sessi
         # 列表默认只展示本周；更早新闻仍可由日期 API 和 Research Gateway 查询。
         week_start = datetime.combine(_current_week_start(), datetime.min.time(), tzinfo=zone).astimezone(UTC)
         query = query.where(timestamp >= week_start)
-    query = query.order_by(NewsItem.importance_score.desc().nullslast(), NewsItem.quality_score.desc().nullslast(), NewsItem.published_at.desc().nullslast(), NewsItem.found_at.desc()).limit(200)
+    query = query.order_by(*_news_order(sort)).limit(200)
     return [_news_out(item) for item in db.scalars(query).all()]
 
 
 @router.get("/news/market")
-def list_market_news(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), topic: str | None = None, db: Session = Depends(get_db)):
+def list_market_news(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    topic: str | None = None,
+    sort: Literal["ranked", "latest"] = Query("ranked"),
+    db: Session = Depends(get_db),
+):
     query = select(NewsItem).where(NewsItem.scope == "market")
     if topic:
         query = query.where(NewsItem.topic == topic)
     total = len(db.scalars(query).all())
-    rows = db.scalars(query.order_by(NewsItem.importance_score.desc().nullslast(), NewsItem.quality_score.desc().nullslast(), NewsItem.published_at.desc().nullslast()).offset(offset).limit(limit)).all()
+    rows = db.scalars(query.order_by(*_news_order(sort)).offset(offset).limit(limit)).all()
     return {"items": [_news_out(item) for item in rows], "total": total, "generated_at": datetime.now(UTC), "last_updated_at": max((item.found_at for item in rows), default=None), "sources": sorted({item.provider for item in rows})}
 
 
