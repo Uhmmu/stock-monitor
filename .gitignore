@@ -7,3 +7,5 @@ venv/
 .env
 .git
 .claude/
+CLAUDE.md
+AGENTS.md
