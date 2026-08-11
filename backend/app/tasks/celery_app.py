@@ -27,6 +27,7 @@ from app.models import (
     InvestigationStatus,
     InvestmentCalendarSyncRun,
     MacroSyncRun,
+    IndustryPulseSyncRun,
     NewsItem,
     NewsProviderState,
     PortfolioPosition,
@@ -80,6 +81,8 @@ from app.services.investment_calendar import sync_calendar
 from app.services.ownership import refresh_share_statistics
 from app.services.macro.definitions import RAW_SERIES
 from app.services.macro.sync import can_start_sync, run_macro_sync
+from app.services.industry_pulse.service import _snapshot_payload, sync_pulse
+from app.services.industry_pulse.narrative import generate_node_narrative
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -151,6 +154,10 @@ celery_app.conf.beat_schedule = {
     "preload-portfolio-analyses": {
         "task": "app.tasks.celery_app.ensure_portfolio_analysis_fresh",
         "schedule": 3600,
+    },
+    "sync-industry-pulse-due": {
+        "task": "app.tasks.celery_app.ensure_industry_pulse_fresh",
+        "schedule": 1800,
     },
 }
 
@@ -2276,3 +2283,80 @@ def ensure_portfolio_analysis_fresh(force: bool = False):
 
     with SessionLocal() as db:
         return schedule_due_preloads(db, force=force)
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_industry_pulse")
+def sync_industry_pulse():
+    """Daily deterministic Industry Pulse update; AI remains post-commit optional."""
+    if not settings.industry_pulse_enabled:
+        return {"status": "disabled"}
+    lock = None
+    try:
+        import redis
+        lock = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=1, socket_timeout=1).lock("stock-monitor:industry-pulse:sync", timeout=settings.industry_pulse_sync_lock_seconds, blocking=False)
+        if not lock.acquire(blocking=False):
+            return {"status": "running"}
+    except Exception:
+        lock = None
+        logger.debug("Industry Pulse Redis lock unavailable; using durable active-run guard", exc_info=True)
+    db = None
+    try:
+        db = SessionLocal()
+        try:
+            result = sync_pulse(db, trigger_type="scheduled")
+        except Exception as exc:
+            db.rollback()
+            run = db.scalar(select(IndustryPulseSyncRun).where(IndustryPulseSyncRun.status == "running").order_by(IndustryPulseSyncRun.started_at.desc()).limit(1))
+            if run:
+                run.status, run.finished_at = "failed", datetime.now(UTC)
+                run.error_summary_json = {"error": type(exc).__name__, "message": str(exc)[:500]}
+                db.commit()
+            raise
+        if settings.industry_pulse_ai_enabled and settings.openai_api_key and result.get("status") == "completed":
+            from app.models import IndustryPulseNode, IndustryPulseSnapshot
+            as_of = date.fromisoformat(result["trading_date"])
+            generated = 0
+            rows = db.scalars(select(IndustryPulseSnapshot).join(IndustryPulseNode, IndustryPulseNode.id == IndustryPulseSnapshot.node_id).where(IndustryPulseSnapshot.trading_date == as_of, IndustryPulseNode.taxonomy == "base", IndustryPulseNode.level == "sector")).all()
+            for snapshot in rows:
+                node = db.get(IndustryPulseNode, snapshot.node_id)
+                if not node:
+                    continue
+                generated_result = generate_node_narrative(db, node_id=node.id, trading_date=as_of, node={"id": node.id, "name": node.name, "node_key": node.node_key}, snapshot=_snapshot_payload(db, snapshot))
+                generated += int(generated_result.get("status") == "completed" and not generated_result.get("cached"))
+            run = db.get(IndustryPulseSyncRun, result.get("run_id"))
+            if run:
+                run.ai_summaries_generated = generated
+                run.luna_calls = generated
+            db.commit()
+            result["ai_summaries_generated"] = generated
+        logger.info(
+            "industry pulse sync status=%s etf_total=%s yfinance=%s finnhub=%s failed=%s sectors=%s unavailable=%s focus=%s duration_ms=%s",
+            result.get("status"), result.get("etf_total"), result.get("yfinance_success"), result.get("finnhub_fallback"),
+            result.get("failed"), result.get("sector_calculated"), result.get("sector_unavailable"), result.get("focus_signal_count"), result.get("duration_ms"),
+        )
+        return result
+    finally:
+        if db:
+            db.close()
+        if lock:
+            try:
+                lock.release()
+            except Exception:
+                logger.debug("Industry Pulse Redis lock release failed", exc_info=True)
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_industry_pulse_fresh")
+def ensure_industry_pulse_fresh(force: bool = False):
+    """Cheap DB due check so beat restarts do not duplicate a daily run."""
+    if not settings.industry_pulse_enabled:
+        return {"status": "disabled"}
+    with SessionLocal() as db:
+        active = db.scalar(select(IndustryPulseSyncRun).where(IndustryPulseSyncRun.status == "running", IndustryPulseSyncRun.started_at >= datetime.now(UTC) - timedelta(seconds=settings.industry_pulse_sync_lock_seconds)).order_by(IndustryPulseSyncRun.started_at.desc()).limit(1))
+        if active and not force:
+            return {"status": "running", "run_id": active.id}
+        latest = db.scalar(select(IndustryPulseSyncRun).where(IndustryPulseSyncRun.status == "completed").order_by(IndustryPulseSyncRun.finished_at.desc()).limit(1))
+        due = force or latest is None or latest.finished_at is None or latest.finished_at <= datetime.now(UTC) - timedelta(hours=settings.industry_pulse_refresh_hours)
+    if not due:
+        return {"status": "not_due", "run_id": latest.id if latest else None}
+    queued = sync_industry_pulse.delay()
+    return {"status": "queued", "task_id": queued.id}

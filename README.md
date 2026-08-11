@@ -15,6 +15,7 @@ Stock Monitor 把行情、自选股、新闻、SEC 披露、基本面、估值�
 ## 核心能力
 
 - **市场雷达**：聚合 Alpaca、Tiingo、Finnhub 和 Yahoo 行情，保存标准化快照，通过 SSE 推送实时价格与盘中事件。
+- **行业板块检测（桌面端）**：以 11/50/229 的基础行业分类和 5/25/92 的 AI 产业链图谱组织 64 个 ETF 代理；按日优先 yfinance、失败回退 Finnhub，持久化确定性 Pulse / Heat / Risk / Focus / Relative Strength 快照，AI 摘要可选，页面只读已保存结果，不在加载时调用 Provider 或 AI。
 - **异动与新闻**：监控自选股价格和成交量变化，聚合公司新闻、市场新闻及调查上下文，并支持按需 AI 总结。
 - **基本面研究**：提供财务报表、公司资料、分析师评级、SEC 8-K / 10-Q / 10-K、Form 4、13F、技术分析和个股横向比较。
 - **估值与宏观**：包含 DCF、多模型估值、ROIC、Piotroski F-Score、Altman Z-Score，以及可选的美国宏观数据。
@@ -69,6 +70,8 @@ flowchart LR
 - 建议至少 4 GB 内存
 
 所有第三方 Provider 都是可选项。没有 API Key 时应用仍可启动，对应功能会降级或显示数据不足。
+
+行业板块检测使用 yfinance 批量日线，单个标的失败时回退 Finnhub；分析按低频批次写入数据库，页面读取持久化结果，不会在加载时触发上游行情或 AI。AI 摘要由 `INDUSTRY_PULSE_AI_ENABLED` 控制。
 
 ### 1. 获取代码
 
@@ -128,6 +131,7 @@ API 启动时会自动执行数据库迁移。首次启动且数据库中没有�
 | Perplexity 机会发现 | `PERPLEXITY_API_KEY` |
 | Adanos 舆情 | `ADANOS_API_KEY` 或 `ADANOS_API_KEYS` |
 | Alpha Vantage 宏观数据 | `ALPHA_VANTAGE_ENABLED`、`ALPHA_VANTAGE_API_KEY` |
+| 行业板块检测 | `INDUSTRY_PULSE_*`；Finnhub 回退时使用 `FINNHUB_API_KEY` |
 | IBKR 只读账户同步 | `IBKR_CP_*` 或 `IBKR_FLEX_*`，参见 [IBKR 文档](docs/integrations/ibkr.md) |
 
 AI、搜索、机会发现和舆情 Key 只由服务端读取，浏览器不会接触这些凭据。IBKR 集成必须使用经过验证的 `socks5h` 代理并采用 fail-closed 配置，禁止代理失败后直连。

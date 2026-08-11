@@ -161,6 +161,51 @@ def fetch_quote(ticker: str) -> dict:
     return payload
 
 
+def fetch_historical_candles(ticker: str, days: int = 500, timeout: int | None = None) -> list[dict]:
+    """Fetch bounded daily OHLCV candles for low-frequency fallback consumers.
+
+    Finnhub's quote endpoint has no volume; the candle endpoint is therefore
+    kept separate so callers can mark missing/partial history explicitly.
+    """
+    settings = get_settings()
+    if not settings.finnhub_api_key:
+        raise RuntimeError("Finnhub API key is unavailable")
+    end = datetime.now(UTC)
+    start = end - timedelta(days=max(30, int(days * 1.8)))
+    query = urlencode({
+        "symbol": ticker.upper(),
+        "resolution": "D",
+        "from": int(start.timestamp()),
+        "to": int(end.timestamp()),
+    })
+    request = Request(
+        f"https://finnhub.io/api/v1/stock/candle?{query}",
+        headers={"X-Finnhub-Token": settings.finnhub_api_key, "User-Agent": "stock-monitor/2.0"},
+    )
+    with urlopen(request, timeout=timeout or _REQUEST_TIMEOUT) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict) or payload.get("s") not in {"ok", "no_data"}:
+        raise RuntimeError("Finnhub candle response was invalid")
+    if payload.get("s") != "ok":
+        return []
+    timestamps = payload.get("t") or []
+    opens = payload.get("o") or []
+    highs = payload.get("h") or []
+    lows = payload.get("l") or []
+    closes = payload.get("c") or []
+    volumes = payload.get("v") or []
+    rows: list[dict] = []
+    for index, timestamp in enumerate(timestamps):
+        if index >= len(opens) or index >= len(highs) or index >= len(lows) or index >= len(closes):
+            continue
+        rows.append({
+            "date": datetime.fromtimestamp(int(timestamp), tz=UTC).date().isoformat(),
+            "open": opens[index], "high": highs[index], "low": lows[index], "close": closes[index],
+            "volume": volumes[index] if index < len(volumes) else None,
+        })
+    return rows[-max(30, int(days)):]
+
+
 def fetch_recommendations(ticker: str) -> list[dict]:
     """分析师买/持/卖评级分布（按期倒序）。"""
     payload = _run(_call_tool("finnhub_stock_estimates",

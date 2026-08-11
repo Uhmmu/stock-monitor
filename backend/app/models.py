@@ -2081,6 +2081,208 @@ class MacroApiUsage(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class IndustryPulseNode(Base):
+    """Persisted canonical industry/theme taxonomy node.
+
+    Provider labels remain evidence only; this table is the application's
+    stable taxonomy and graph identity.  ``taxonomy`` distinguishes the base
+    industry tree from the AI/theme graph while ``parent_id`` supports both
+    hierarchies without introducing a second node table.
+    """
+
+    __tablename__ = "industry_pulse_nodes"
+    __table_args__ = (
+        UniqueConstraint("taxonomy", "node_key", name="uq_industry_pulse_nodes_taxonomy_key"),
+        Index("ix_industry_pulse_nodes_taxonomy_parent", "taxonomy", "parent_id"),
+        Index("ix_industry_pulse_nodes_enabled", "enabled"),
+        CheckConstraint("taxonomy IN ('base', 'ai')", name="ck_industry_pulse_nodes_taxonomy"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    taxonomy: Mapped[str] = mapped_column(String(16), default="base")
+    node_key: Mapped[str] = mapped_column(String(192))
+    slug: Mapped[str | None] = mapped_column(String(128))
+    name: Mapped[str] = mapped_column(String(192))
+    name_zh: Mapped[str | None] = mapped_column(String(192))
+    level: Mapped[str] = mapped_column(String(24), default="leaf")
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("industry_pulse_nodes.id", ondelete="SET NULL"))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class IndustryPulseRelation(Base):
+    """Directed AI-chain/theme edge between persisted taxonomy nodes."""
+
+    __tablename__ = "industry_pulse_relations"
+    __table_args__ = (
+        UniqueConstraint("source_node_id", "target_node_id", "relation_type", name="uq_industry_pulse_relations_edge"),
+        Index("ix_industry_pulse_relations_source_node_id", "source_node_id"),
+        Index("ix_industry_pulse_relations_target_node_id", "target_node_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_node_id: Mapped[int] = mapped_column(ForeignKey("industry_pulse_nodes.id", ondelete="CASCADE"))
+    target_node_id: Mapped[int] = mapped_column(ForeignKey("industry_pulse_nodes.id", ondelete="CASCADE"))
+    relation_type: Mapped[str] = mapped_column(String(32), default="downstream")
+    weight: Mapped[float] = mapped_column(Float, default=1.0)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IndustryPulseInstrument(Base):
+    """ETF/security proxy mapping for a taxonomy node.
+
+    A mapping is intentionally many-to-many.  ``role`` controls aggregation;
+    benchmarks and references are stored for comparison but excluded from
+    effective sector weights by the calculator.
+    """
+
+    __tablename__ = "industry_pulse_instruments"
+    __table_args__ = (
+        UniqueConstraint("node_id", "ticker", "role", name="uq_industry_pulse_instruments_node_ticker_role"),
+        Index("ix_industry_pulse_instruments_node_enabled", "node_id", "enabled"),
+        Index("ix_industry_pulse_instruments_ticker", "ticker"),
+        CheckConstraint("mapping_type IN ('etf_proxy', 'primary_industry', 'secondary_industry', 'theme_exposure')", name="ck_industry_pulse_instruments_mapping_type"),
+        CheckConstraint("role IN ('primary', 'secondary', 'reference', 'benchmark')", name="ck_industry_pulse_instruments_role"),
+        CheckConstraint("purity >= 0 AND purity <= 1", name="ck_industry_pulse_instruments_purity"),
+        CheckConstraint("exposure >= 0 AND exposure <= 1", name="ck_industry_pulse_instruments_exposure"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_industry_pulse_instruments_confidence"),
+        CheckConstraint("liquidity >= 0 AND liquidity <= 1", name="ck_industry_pulse_instruments_liquidity"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    node_id: Mapped[int] = mapped_column(ForeignKey("industry_pulse_nodes.id", ondelete="CASCADE"))
+    security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id", ondelete="SET NULL"))
+    ticker: Mapped[str] = mapped_column(String(32))
+    instrument_type: Mapped[str] = mapped_column(String(16), default="etf")
+    mapping_type: Mapped[str] = mapped_column(String(24), default="etf_proxy", index=True)
+    role: Mapped[str] = mapped_column(String(24), default="primary", index=True)
+    purity: Mapped[float] = mapped_column(Float, default=1.0)
+    exposure: Mapped[float] = mapped_column(Float, default=1.0)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    liquidity: Mapped[float] = mapped_column(Float, default=1.0)
+    provider_symbol: Mapped[str | None] = mapped_column(String(32))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    health_status: Mapped[str] = mapped_column(String(16), default="UNAVAILABLE")
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_trading_date: Mapped[date | None] = mapped_column(Date)
+    data_quality: Mapped[float | None] = mapped_column(Float)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class IndustryPulseSnapshot(Base):
+    """Point-in-time deterministic pulse for one node and trading date."""
+
+    __tablename__ = "industry_pulse_snapshots"
+    __table_args__ = (
+        UniqueConstraint("node_id", "trading_date", name="uq_industry_pulse_snapshots_node_date"),
+        Index("ix_industry_pulse_snapshots_node_date", "node_id", "trading_date"),
+        Index("ix_industry_pulse_snapshots_date", "trading_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    node_id: Mapped[int] = mapped_column(ForeignKey("industry_pulse_nodes.id", ondelete="CASCADE"), index=True)
+    trading_date: Mapped[date] = mapped_column(Date, index=True)
+    pulse: Mapped[float | None] = mapped_column(Float)
+    trend_score: Mapped[float | None] = mapped_column(Float)
+    relative_strength_score: Mapped[float | None] = mapped_column(Float)
+    volume_score: Mapped[float | None] = mapped_column(Float)
+    momentum_score: Mapped[float | None] = mapped_column(Float)
+    breadth_score: Mapped[float | None] = mapped_column(Float)
+    consensus_score: Mapped[float | None] = mapped_column(Float)
+    heat: Mapped[float | None] = mapped_column(Float)
+    risk: Mapped[float | None] = mapped_column(Float)
+    change_1d: Mapped[float | None] = mapped_column(Float)
+    change_5d: Mapped[float | None] = mapped_column(Float)
+    change_20d: Mapped[float | None] = mapped_column(Float)
+    mood: Mapped[str | None] = mapped_column(String(32))
+    regime: Mapped[str | None] = mapped_column(String(32))
+    direction: Mapped[str | None] = mapped_column(String(24))
+    data_quality: Mapped[str | None] = mapped_column(String(16))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    coverage_quality: Mapped[float | None] = mapped_column(Float)
+    proxy_based_on_parent: Mapped[bool] = mapped_column(Boolean, default=False)
+    metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    benchmark_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    calculation_version: Mapped[str] = mapped_column(String(32), default="v1")
+    source: Mapped[str] = mapped_column(String(32), default="yahoo")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class IndustryPulseFocusSignal(Base):
+    """Persisted deterministic focus/ranking signal for one node/date."""
+
+    __tablename__ = "industry_pulse_focus_signals"
+    __table_args__ = (
+        UniqueConstraint("node_id", "trading_date", "signal_type", name="uq_industry_pulse_focus_node_date_type"),
+        Index("ix_industry_pulse_focus_date_type", "trading_date", "signal_type"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    node_id: Mapped[int] = mapped_column(ForeignKey("industry_pulse_nodes.id", ondelete="CASCADE"), index=True)
+    trading_date: Mapped[date] = mapped_column(Date, index=True)
+    signal_type: Mapped[str] = mapped_column(String(32), index=True)
+    score: Mapped[float | None] = mapped_column(Float)
+    rank: Mapped[int | None] = mapped_column(Integer)
+    severity: Mapped[str | None] = mapped_column(String(16))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IndustryPulseSyncRun(Base):
+    """Durable telemetry for the daily/due Industry Pulse task."""
+
+    __tablename__ = "industry_pulse_sync_runs"
+    __table_args__ = (Index("ix_industry_pulse_sync_runs_started", "started_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(24), default="running", index=True)
+    trigger_type: Mapped[str] = mapped_column(String(24), default="scheduled", index=True)
+    etf_total: Mapped[int] = mapped_column(Integer, default=0)
+    yfinance_success: Mapped[int] = mapped_column(Integer, default=0)
+    finnhub_fallback: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    sector_calculated: Mapped[int] = mapped_column(Integer, default=0)
+    sector_unavailable: Mapped[int] = mapped_column(Integer, default=0)
+    focus_signal_count: Mapped[int] = mapped_column(Integer, default=0)
+    ai_summaries_generated: Mapped[int] = mapped_column(Integer, default=0)
+    luna_calls: Mapped[int] = mapped_column(Integer, default=0)
+    sol_calls: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    error_summary_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class IndustryPulseNarrative(Base):
+    """Optional cached Luna explanation, isolated from numeric snapshots."""
+
+    __tablename__ = "industry_pulse_narratives"
+    __table_args__ = (
+        UniqueConstraint("node_id", "trading_date", name="uq_industry_pulse_narratives_node_date"),
+        Index("ix_industry_pulse_narratives_date", "trading_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    node_id: Mapped[int] = mapped_column(ForeignKey("industry_pulse_nodes.id", ondelete="CASCADE"), index=True)
+    trading_date: Mapped[date] = mapped_column(Date, index=True)
+    summary: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(String(128))
+    input_hash: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 # Register integration-owned tables in the same metadata whenever core models
 # are imported (tests, application runtime, and Alembic must see one graph).
 from app.integrations.ibkr import db_models as _ibkr_db_models  # noqa: E402,F401

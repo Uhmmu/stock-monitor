@@ -29,6 +29,20 @@ class Settings(BaseSettings):
     price_poll_minutes: int = 5
     price_snapshot_provider_order: str = "alpaca,tiingo,finnhub,yfinance"
     price_snapshot_stale_seconds: int = 900
+    # Industry/Sector Pulse is an independent, low-frequency daily pipeline.
+    # Its provider order intentionally differs from live quote routing: the
+    # calculation must prefer yfinance daily candles and only then fall back
+    # to Finnhub historical candles.
+    industry_pulse_enabled: bool = True
+    industry_pulse_refresh_hours: int = 20
+    industry_pulse_history_days: int = 500
+    industry_pulse_backfill_days: int = 252
+    industry_pulse_provider_timeout_seconds: float = 30.0
+    industry_pulse_exposure_threshold: float = 0.30
+    industry_pulse_liquidity_floor: float = 0.05
+    industry_pulse_sync_lock_seconds: int = 7200
+    industry_pulse_ai_enabled: bool = True
+    industry_pulse_score_weights: str = '{"trend":0.25,"relative_strength":0.25,"volume":0.15,"momentum":0.10,"breadth":0.15,"consensus":0.10}'
     # Server-only realtime market data. Providers remain opt-in so missing
     # credentials never prevent the API, workers, or migrations from starting.
     alpaca_market_data_enabled: bool = False

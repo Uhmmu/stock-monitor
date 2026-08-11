@@ -13,6 +13,7 @@ from app.api.auth_routes import router as auth_router
 from app.api.compare_routes import router as compare_router
 from app.api.discovery_routes import router as discovery_router
 from app.api.investment_routes import router as investment_router
+from app.api.industry_pulse_routes import router as industry_pulse_router
 from app.api.macro_routes import admin_router as macro_admin_router, router as macro_router
 from app.api.market_routes import router as market_router
 from app.api.portfolio_analysis_routes import router as portfolio_analysis_router
@@ -33,6 +34,7 @@ from app.models import User
 from app.integrations.ibkr import formal_router as ibkr_formal_router, router as ibkr_router
 from app.integrations.ibkr.client_portal_client import close_client_portal_client
 from app.integrations.ibkr.flex_client import close_flex_client
+from app.services.industry_pulse.service import ensure_seed_data
 from app.research import router as research_router
 from app.research.exceptions import ResearchError
 from app.research.router import research_audit_middleware, research_error_handler
@@ -47,6 +49,8 @@ async def lifespan(app: FastAPI):
     if get_settings().exa_enabled:
         get_external_search_registry().get("exa")
     with SessionLocal() as db:
+        ensure_seed_data(db)
+        db.commit()
         if not db.scalar(select(User).where(User.role == 'admin')):
             db.add(User(
                 username=os.getenv('ADMIN_USERNAME', 'admin'),
@@ -81,6 +85,7 @@ app.include_router(portfolio_analysis_router)
 app.include_router(discovery_router)
 app.include_router(sentiment_router)
 app.include_router(investment_router)
+app.include_router(industry_pulse_router)
 app.include_router(macro_router)
 app.include_router(macro_admin_router)
 app.include_router(market_router)
