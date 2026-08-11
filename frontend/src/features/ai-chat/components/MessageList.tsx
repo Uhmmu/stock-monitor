@@ -29,21 +29,22 @@ function PersistedDeepRun({ runId }: { runId: string }) {
   return <DeepSearchRunDetails run={query.data}/>
 }
 
-function MessageActions({ content, onRegenerate, canRegenerate, assistant, onSaveDecision, onShowMemory, onRemember }: { content: string; onRegenerate?: () => void; canRegenerate: boolean; assistant?:boolean; onSaveDecision?:()=>void; onShowMemory?:()=>void; onRemember?:()=>void }) {
+function MessageActions({ content, onRegenerate, canRegenerate, assistant, savingDecision, onSaveDecision, onShowMemory, onRemember }: { content: string; onRegenerate?: () => void; canRegenerate: boolean; assistant?:boolean; savingDecision?:boolean; onSaveDecision?:()=>void; onShowMemory?:()=>void; onRemember?:()=>void }) {
   const [copied, setCopied] = useState(false)
   return <div className="ai-message-actions">
     <button onClick={async () => { await navigator.clipboard.writeText(content); setCopied(true); window.setTimeout(() => setCopied(false), 1200) }}>{copied ? '已复制' : '复制'}</button>
     {canRegenerate && onRegenerate && <button onClick={onRegenerate}>重新生成</button>}
     {!assistant&&onRemember&&<button onClick={onRemember}>记住这条</button>}
-    {assistant&&onSaveDecision&&<button onClick={onSaveDecision}>保存为投资决策</button>}
+    {assistant&&onSaveDecision&&<button onClick={onSaveDecision} disabled={savingDecision} aria-busy={savingDecision}>{savingDecision?'AI 正在总结…':'保存为投资决策'}</button>}
     {assistant&&onShowMemory&&<button onClick={onShowMemory}>查看使用的记忆</button>}
   </div>
 }
 
-function Message({ message, isLatestAssistant, activities, onCitation, onRegenerate, onSaveDecision, onShowMemory, onRemember, interrupted }: {
+function Message({ message, isLatestAssistant, activities, savingDecisionId, onCitation, onRegenerate, onSaveDecision, onShowMemory, onRemember, interrupted }: {
   message: AIMessage
   isLatestAssistant: boolean
   activities: Activity[]
+  savingDecisionId?: number
   onCitation: (citations: Citation[], key: string) => void
   onRegenerate: (message: AIMessage) => void
   onSaveDecision: (message:AIMessage)=>void
@@ -75,17 +76,18 @@ function Message({ message, isLatestAssistant, activities, onCitation, onRegener
     </div> : pending ? <div className="ai-thinking"><i/><i/><i/><span>{statusText[message.status]}</span></div> : null}
     {(message.status !== 'completed' || interrupted) && <div className={`ai-message-status ${message.status}`} role={message.status === 'failed' ? 'alert' : 'status'}>{interrupted ? '生成已中断，刷新不会自动重新提交。' : statusText[message.status] || message.error_message_safe || '回答状态异常'}</div>}
     {message.deep_search_run_id && <PersistedDeepRun runId={message.deep_search_run_id}/>} 
-    {hasContent && !pending && <MessageActions content={message.content} assistant canRegenerate={isLatestAssistant && ['completed', 'partial', 'failed', 'cancelled'].includes(message.status)} onRegenerate={() => onRegenerate(message)} onSaveDecision={()=>onSaveDecision(message)} onShowMemory={()=>onShowMemory(message)}/>} 
+    {hasContent && !pending && <MessageActions content={message.content} assistant savingDecision={message.id===savingDecisionId} canRegenerate={isLatestAssistant && ['completed', 'partial', 'failed', 'cancelled'].includes(message.status)} onRegenerate={() => onRegenerate(message)} onSaveDecision={()=>onSaveDecision(message)} onShowMemory={()=>onShowMemory(message)}/>}
   </article>
 }
 
-export function MessageList({ messages, loading, hasOlder, loadOlder, loadingOlder, activities, onCitation, onRegenerate, onSaveDecision, onShowMemory, onRemember, activeGeneration }: {
+export function MessageList({ messages, loading, hasOlder, loadOlder, loadingOlder, activities, savingDecisionId, onCitation, onRegenerate, onSaveDecision, onShowMemory, onRemember, activeGeneration }: {
   messages: AIMessage[]
   loading: boolean
   hasOlder: boolean
   loadOlder: () => void
   loadingOlder: boolean
   activities: Record<string, Activity[]>
+  savingDecisionId?: number
   onCitation: (citations: Citation[], key: string) => void
   onRegenerate: (message: AIMessage) => void
   onSaveDecision: (message:AIMessage)=>void
@@ -117,6 +119,7 @@ export function MessageList({ messages, loading, hasOlder, loadOlder, loadingOld
         message={message}
         isLatestAssistant={message.id === latestAssistantId}
         activities={activities[String(message.id)] || []}
+        savingDecisionId={savingDecisionId}
         onCitation={onCitation}
         onRegenerate={onRegenerate}
         onSaveDecision={onSaveDecision}

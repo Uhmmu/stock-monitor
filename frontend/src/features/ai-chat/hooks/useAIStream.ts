@@ -28,6 +28,15 @@ const temporaryMessage = (id: string, conversationId: number, role: 'user' | 'as
   created_at: now(), started_at: null, completed_at: null, cancelled_at: null, updated_at: now(),
 })
 
+export function persistAssistantMessage(items: AIMessage[], activeId: string | number, conversationId: number | null, persistedId: number, status: AIMessage['status']) {
+  let index = items.findIndex(item => item.id === activeId || item.id === persistedId)
+  if (index < 0) for (let cursor = items.length - 1; cursor >= 0; cursor -= 1) {
+    const item = items[cursor]
+    if (item.conversation_id === conversationId && typeof item.id === 'string' && item.id.startsWith('temp-assistant-')) { index = cursor; break }
+  }
+  return index < 0 ? items : items.map((item, cursor) => cursor === index ? { ...item, id: persistedId, status } : item)
+}
+
 function friendlyError(error: unknown): string {
   if (error instanceof AIAPIError) {
     const messages: Record<string, string> = {
@@ -144,7 +153,8 @@ export function useAIStream({ conversationId, onConversationCreated }: {
       } else if (event.type === 'message.persisted' && activeAssistant.current != null) {
         flushDelta()
         const id = activeAssistant.current
-        setLocalMessages(items => items.map(item => item.id === id ? { ...item, status: event.data.status } : item))
+        activeAssistant.current = event.data.assistant_message_id
+        setLocalMessages(items => persistAssistantMessage(items, id, activeConversation.current, event.data.assistant_message_id, event.data.status))
       } else if (event.type === 'response.completed') {
         flushDelta()
         const id = activeAssistant.current

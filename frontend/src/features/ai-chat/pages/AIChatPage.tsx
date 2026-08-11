@@ -341,6 +341,7 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
         loadOlder={() => messages.fetchNextPage()}
         loadingOlder={messages.isFetchingNextPage}
         activities={stream.activities}
+        savingDecisionId={saveDecision.isPending?saveDecision.variables:undefined}
         onCitation={openCitation}
         onRegenerate={regenerate}
         onSaveDecision={message=>typeof message.id==='number'&&!saveDecision.isPending&&saveDecision.mutate(message.id)}
@@ -351,6 +352,7 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
       <ChatMemorySuggestions memories={candidates.data?.items||[]} decisions={decisionDrafts.data?.items||[]}/>
       </>}
       {stream.error && <div className="ai-stream-error" role="alert"><span>{stream.error}</span><button onClick={() => stream.setError(null)}>关闭</button></div>}
+      {saveDecision.isPending&&<div className="ai-decision-progress" role="status" aria-live="polite"><div><strong>AI 正在提炼投资决策</strong><span>正在阅读整段对话，整理投资逻辑、风险与失效条件…</span></div><i role="progressbar" aria-label="投资决策提炼进度" aria-valuetext="处理中"><span/></i></div>}
       {activeDeepRun.data && ['pending', 'queued', 'running'].includes(activeDeepRun.data.status) && <DeepSearchProgress run={activeDeepRun.data} cancelling={cancelDeep.isPending} onCancel={() => cancelDeep.mutate(activeDeepRun.data!.run_id)}/>} 
       <MessageComposer
         value={draft}
@@ -392,11 +394,11 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
       {decisionPreview&&<div className="ai-decision-compare">
         <p className="ai-decision-summary"><b>AI 对话总结</b>{decisionPreview.conversation_summary}</p>
         <div className={decisionPreview.conflicts.length?'has-conflict':''}>
-          <DecisionPreviewCard label="本次对话产生的新决策" item={decisionPreview.candidate}/>
+          <DecisionPreviewCard label="本次对话产生的新决策（可修改）" item={decisionPreview.candidate} onChange={candidate=>setDecisionPreview({...decisionPreview,candidate})}/>
           {decisionPreview.conflicts.map(item=><DecisionPreviewCard key={item.id} label={`已有决策 #${item.decision_number}`} item={item}/>) }
         </div>
         {decisionPreview.conflicts.length>0&&<p className="ai-decision-conflict-note">检测到同一证券已有决策。合并会保留原序号，并创建一个带完整关联关系的新决策；不会覆盖历史记录。</p>}
-        <footer><button onClick={()=>setDecisionPreview(null)} disabled={finalizeDecision.isPending}>撤销</button>{decisionPreview.conflicts.length?<><button onClick={()=>finalizeDecision.mutate('keep_both')} disabled={finalizeDecision.isPending}>两条都保留</button><button onClick={()=>finalizeDecision.mutate('replace_existing')} disabled={finalizeDecision.isPending}>保留最新</button><button className="primary" onClick={()=>finalizeDecision.mutate('merge')} disabled={finalizeDecision.isPending}>{finalizeDecision.isPending?'Luna 正在合并…':'交给 Luna 合并'}</button></>:<button className="primary" onClick={()=>finalizeDecision.mutate('standalone')} disabled={finalizeDecision.isPending}>{finalizeDecision.isPending?'保存中…':'保存为决策草稿'}</button>}</footer>
+        <footer><button onClick={()=>setDecisionPreview(null)} disabled={finalizeDecision.isPending}>撤销</button>{decisionPreview.conflicts.length?<><button onClick={()=>finalizeDecision.mutate('keep_both')} disabled={finalizeDecision.isPending}>两条都保留</button><button onClick={()=>finalizeDecision.mutate('replace_existing')} disabled={finalizeDecision.isPending}>保留最新</button><button className="primary" onClick={()=>finalizeDecision.mutate('merge')} disabled={finalizeDecision.isPending||!decisionPreview.candidate.title.trim()||!decisionPreview.candidate.action.trim()}>{finalizeDecision.isPending?'Luna 正在合并…':'交给 Luna 合并'}</button></>:<button className="primary" onClick={()=>finalizeDecision.mutate('standalone')} disabled={finalizeDecision.isPending||!decisionPreview.candidate.title.trim()||!decisionPreview.candidate.action.trim()}>{finalizeDecision.isPending?'保存中…':'确认并保存草稿'}</button>}</footer>
       </div>}
     </ChatDialog>
     <ChatDialog open={rename !== null} title="重命名会话" onClose={() => setRename(null)}>
@@ -410,7 +412,9 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
   </div>
 }
 
-function DecisionPreviewCard({label,item}:{label:string;item:any}) {
+function DecisionPreviewCard({label,item,onChange}:{label:string;item:any;onChange?:(item:any)=>void}) {
   const sections:[string,string][]=[['投资逻辑','thesis'],['催化剂','catalysts'],['风险','risks'],['失效条件','invalidation_conditions'],['关键假设','assumptions'],['待解决问题','open_questions']]
-  return <article className="ai-decision-compare-card"><span>{label}</span><h3>{item.title}</h3><strong>{item.action}</strong><div>{sections.map(([name,key])=><section key={key}><b>{name}</b><p>{(item[key]||[]).join('；')||'数据不足 / 待补充'}</p></section>)}</div></article>
+  if(!onChange)return <article className="ai-decision-compare-card"><span>{label}</span><h3>{item.title}</h3><strong>{item.action}</strong><div>{sections.map(([name,key])=><section key={key}><b>{name}</b><p>{(item[key]||[]).join('；')||'数据不足 / 待补充'}</p></section>)}</div></article>
+  const patch=(value:Record<string,unknown>)=>onChange({...item,...value})
+  return <article className="ai-decision-compare-card editable"><span>{label}</span><div className="ai-decision-edit-meta"><label>标题<input required maxLength={240} value={item.title} onChange={event=>patch({title:event.target.value})}/></label><label>证券代码<input value={(item.symbols||[]).join(' / ')} onChange={event=>patch({symbols:event.target.value.split(/[\s,，/]+/).filter(Boolean).map((value:string)=>value.toUpperCase())})}/></label><label>决策类型<select value={item.decision_type} onChange={event=>patch({decision_type:event.target.value})}><option value="buy">买入</option><option value="add">加仓</option><option value="hold">持有</option><option value="reduce">减仓</option><option value="sell">卖出</option><option value="avoid">回避</option><option value="watch">观察</option><option value="portfolio">组合</option><option value="other">其他</option></select></label><label>时间周期<select value={item.time_horizon} onChange={event=>patch({time_horizon:event.target.value})}><option value="short_term">短期</option><option value="medium_term">中期</option><option value="long_term">长期</option><option value="event_driven">事件驱动</option><option value="unspecified">未指定</option></select></label></div><label className="ai-decision-action">最终目标<textarea required maxLength={4000} value={item.action} onChange={event=>patch({action:event.target.value})}/></label><div>{sections.map(([name,key])=><label key={key}>{name}<textarea value={(item[key]||[]).join('\n')} onChange={event=>patch({[key]:event.target.value.split('\n').map(value=>value.trim()).filter(Boolean)})}/></label>)}</div></article>
 }
