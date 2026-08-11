@@ -40,6 +40,7 @@
 .industry-sparkline polyline{stroke:var(--accent);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
 .industry-sparkline-empty{display:grid;height:48px;margin:13px 0 7px;place-items:center;border:1px dashed var(--line);border-radius:9px;color:var(--ink-4);font-size:9px}
 .industry-score-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px}
+.industry-score-grid.four{grid-template-columns:repeat(4,minmax(0,1fr))}
 .industry-score-cell{display:grid;gap:3px;min-width:0;padding:8px 9px;border-radius:10px;background:rgba(100,116,139,.055)}
 .industry-score-cell span{color:var(--ink-4);font-size:9px;font-weight:600}
 .industry-score-cell strong{font-size:15px;font-variant-numeric:tabular-nums}
@@ -57,6 +58,10 @@
 .industry-chain-facts small{color:var(--ink-4);font-size:9px}
 .industry-signal-note{margin:0;padding:12px 14px;border-radius:12px;background:rgba(100,116,139,.055);color:var(--ink-3);font-size:11px;line-height:1.7}
 .industry-signal-note b{margin-right:8px;color:var(--ink-2)}
+.industry-coverage-grid,.industry-breadth-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.industry-coverage-grid span,.industry-breadth-grid span{display:grid;gap:4px;padding:11px 12px;border:1px solid var(--line);border-radius:13px;background:var(--solid)}
+.industry-coverage-grid b,.industry-breadth-grid b{font-size:16px;font-variant-numeric:tabular-nums}
+.industry-coverage-grid small,.industry-breadth-grid small{color:var(--ink-4);font-size:9px}
 .industry-chain-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
 .industry-chain-group,.industry-focus-bucket{min-width:0;padding:18px;border:1px solid var(--line);border-radius:20px;background:var(--solid);box-shadow:var(--shadow-s)}
 .industry-chain-nodes{display:grid;gap:10px}
@@ -134,6 +139,13 @@
 .industry-proxy-row{border-top:1px solid var(--line-2);font-size:10px}
 .industry-proxy-row b{font-size:11px}
 .industry-proxy-row span{color:var(--ink-3);overflow-wrap:anywhere}
+.industry-breadth-grid{grid-template-columns:repeat(6,minmax(0,1fr));margin-top:12px}
+.industry-constituent-table{overflow:hidden;border:1px solid var(--line);border-radius:13px}
+.industry-constituent-head,.industry-constituent-row{display:grid;grid-template-columns:minmax(60px,.7fr) minmax(100px,1.1fr) minmax(60px,.65fr) minmax(90px,1fr) minmax(90px,1fr) minmax(65px,.7fr);gap:10px;align-items:center;padding:10px 13px}
+.industry-constituent-head{background:rgba(100,116,139,.065);color:var(--ink-4);font-size:9px;font-weight:700}
+.industry-constituent-row{border-top:1px solid var(--line-2);font-size:10px}
+.industry-constituent-row span{display:grid;gap:2px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.industry-constituent-row small{color:var(--ink-4);font-size:8px}
 .industry-detail-note{margin-top:28px;padding:15px 16px;border:1px solid rgba(70,124,187,.14);border-radius:14px;background:rgba(70,124,187,.07)}
 .industry-detail-note b{font-size:12px}
 .industry-detail-note p{margin:7px 0 0;color:var(--ink-2);font-size:12px;line-height:1.75;white-space:pre-wrap}
@@ -143,6 +155,7 @@
 @media(max-width:900px){
   .industry-card-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .industry-chain-grid{grid-template-columns:1fr}
+  .industry-coverage-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
   .industry-chain-banner{align-items:flex-start;flex-direction:column}
   .industry-chain-facts{width:100%}
   .industry-chain-facts span{flex:1}
@@ -183,6 +196,10 @@
   .industry-relative-grid{grid-template-columns:1fr}
   .industry-proxy-table{overflow-x:auto}
   .industry-proxy-head,.industry-proxy-row{min-width:460px}
+  .industry-score-grid.four{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .industry-breadth-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .industry-constituent-table{overflow-x:auto}
+  .industry-constituent-head,.industry-constituent-row{min-width:660px}
 }
 @media(prefers-reduced-motion:reduce){
   .industry-view-tabs button,.industry-pulse-card,.industry-focus-note,.industry-detail-toolbar button{transition:none}

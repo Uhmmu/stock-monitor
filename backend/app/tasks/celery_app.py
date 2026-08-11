@@ -2316,7 +2316,13 @@ def sync_industry_pulse():
             from app.models import IndustryPulseNode, IndustryPulseSnapshot
             as_of = date.fromisoformat(result["trading_date"])
             generated = 0
-            rows = db.scalars(select(IndustryPulseSnapshot).join(IndustryPulseNode, IndustryPulseNode.id == IndustryPulseSnapshot.node_id).where(IndustryPulseSnapshot.trading_date == as_of, IndustryPulseNode.taxonomy == "base", IndustryPulseNode.level == "sector")).all()
+            rows = db.scalars(select(IndustryPulseSnapshot).join(IndustryPulseNode, IndustryPulseNode.id == IndustryPulseSnapshot.node_id).where(
+                IndustryPulseSnapshot.trading_date == as_of,
+                or_(
+                    and_(IndustryPulseNode.taxonomy == "base", IndustryPulseNode.level == "sector"),
+                    and_(IndustryPulseNode.taxonomy == "ai", IndustryPulseNode.level == "group"),
+                ),
+            )).all()
             for snapshot in rows:
                 node = db.get(IndustryPulseNode, snapshot.node_id)
                 if not node:

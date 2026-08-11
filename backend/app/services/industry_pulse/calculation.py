@@ -327,6 +327,218 @@ def calculate_composite(
     }
 
 
+_ROLE_FACTORS = {"CORE": 1.0, "SECONDARY": .65, "ENABLER": .5}
+
+
+def calculate_basket_weights(
+    mappings: Iterable[dict[str, Any]], *, single_stock_max_weight: float = .18, top_three_max_weight: float = .45
+) -> dict[str, Any]:
+    """Exposure-adjusted weights with feasible concentration caps."""
+    rows = []
+    for mapping in mappings:
+        exposure = _num(mapping.get("exposure_weight", mapping.get("exposure")))
+        confidence = _num(mapping.get("confidence"))
+        role = str(mapping.get("constituent_role") or "SECONDARY").upper()
+        raw = (exposure or 0) * (confidence or 0) * _ROLE_FACTORS.get(role, .5)
+        if raw > 0 and mapping.get("ticker"):
+            rows.append({**mapping, "ticker": str(mapping["ticker"]).upper(), "raw_weight": raw})
+    if not rows:
+        return {"weights": {}, "members": [], "single_stock_cap": single_stock_max_weight, "top_three_cap_applied": False}
+    total = sum(row["raw_weight"] for row in rows)
+    weights = {row["ticker"]: row["raw_weight"] / total for row in rows}
+    # Five constituents require 20% each to sum to one; use the smallest
+    # feasible cap while staying inside the configured 15%-20% range.
+    cap = min(.20, max(float(single_stock_max_weight), 1 / len(rows)))
+    for _ in range(len(rows) + 2):
+        over = {symbol for symbol, weight in weights.items() if weight > cap + 1e-12}
+        if not over:
+            break
+        excess = sum(weights[symbol] - cap for symbol in over)
+        for symbol in over:
+            weights[symbol] = cap
+        recipients = {symbol: weight for symbol, weight in weights.items() if symbol not in over and weight < cap - 1e-12}
+        recipient_total = sum(recipients.values())
+        if not recipients:
+            break
+        for symbol, weight in recipients.items():
+            weights[symbol] += excess * (weight / recipient_total if recipient_total else 1 / len(recipients))
+    top_three_applied = False
+    if len(rows) >= 7:
+        for _ in range(4):
+            leaders = sorted(weights, key=weights.get, reverse=True)[:3]
+            leader_total = sum(weights[symbol] for symbol in leaders)
+            if leader_total <= top_three_max_weight + 1e-9:
+                top_three_applied = True
+                break
+            reduction = leader_total - top_three_max_weight
+            for symbol in leaders:
+                weights[symbol] *= top_three_max_weight / leader_total
+            recipients = [symbol for symbol in weights if symbol not in leaders and weights[symbol] < cap]
+            capacity = sum(cap - weights[symbol] for symbol in recipients)
+            if capacity + 1e-9 < reduction:
+                break
+            for symbol in recipients:
+                weights[symbol] += reduction * (cap - weights[symbol]) / capacity
+            top_three_applied = True
+    normalizer = sum(weights.values()) or 1.0
+    weights = {symbol: weight / normalizer for symbol, weight in weights.items()}
+    return {
+        "weights": weights,
+        "members": [{"ticker": row["ticker"], "role": row.get("constituent_role"), "exposure": row.get("exposure_weight", row.get("exposure")), "confidence": row.get("confidence"), "weight": weights[row["ticker"]], "source": row.get("classification_source"), "short_reason": row.get("short_reason")} for row in rows],
+        "single_stock_cap": cap,
+        "top_three_weight": sum(sorted(weights.values(), reverse=True)[:3]),
+        "top_three_cap_applied": top_three_applied,
+    }
+
+
+def _synthetic_rows(histories: dict[str, Iterable[Any]], weights: dict[str, float], *, minimum_constituents: int, minimum_coverage: float, as_of: date | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    returns_by_symbol: dict[str, dict[date, float]] = {}
+    for symbol, values in histories.items():
+        if symbol not in weights:
+            continue
+        rows = _rows(values, as_of)
+        returns_by_symbol[symbol] = {
+            current["date"]: current["close"] / previous["close"] - 1.0
+            for previous, current in zip(rows, rows[1:])
+            if previous["close"] > 0
+        }
+    days = sorted({day for rows in returns_by_symbol.values() for day in rows})
+    index_value = 100.0
+    output: list[dict[str, Any]] = []
+    latest = {"valid_constituents": 0, "effective_weight_coverage": 0.0}
+    for day in days:
+        returns: list[tuple[float, float]] = []
+        for symbol, symbol_weight in weights.items():
+            if (daily_return := returns_by_symbol.get(symbol, {}).get(day)) is not None:
+                returns.append((daily_return, symbol_weight))
+        coverage = sum(weight for _, weight in returns)
+        latest = {"valid_constituents": len(returns), "effective_weight_coverage": coverage}
+        if len(returns) < minimum_constituents or coverage < minimum_coverage:
+            continue
+        daily_return = sum(value * weight for value, weight in returns) / coverage
+        index_value *= 1 + daily_return
+        output.append({"date": day, "open": index_value, "high": index_value, "low": index_value, "close": index_value, "volume": None})
+    return output, latest
+
+
+def calculate_constituent_breadth(
+    histories: dict[str, Iterable[Any]], weights: dict[str, float], *, benchmark_rows: Iterable[Any] | None = None, as_of: date | None = None
+) -> dict[str, Any]:
+    benchmark = _rows(benchmark_rows or (), as_of)
+    metrics: dict[str, dict[str, Any]] = {}
+    for symbol, rows in histories.items():
+        if symbol in weights:
+            metrics[symbol] = calculate_etf_metrics(rows, benchmark_rows=benchmark, benchmark_name="SPY", as_of=as_of)
+    counters = {
+        "above_ma20": [0, 0], "above_ma50": [0, 0], "positive_5d": [0, 0],
+        "positive_20d": [0, 0], "improving_rs": [0, 0], "expanding_volume": [0, 0],
+    }
+    bullish = neutral = bearish = 0
+    returns20: list[float] = []
+    rs20: list[float] = []
+    volume_scores: list[tuple[float, float]] = []
+    details: list[dict[str, Any]] = []
+    for symbol, metric in metrics.items():
+        if metric.get("status") == "unavailable":
+            continue
+        close = _num(metric.get("close"))
+        ma20, ma50 = _num((metric.get("ma") or {}).get("ma20")), _num((metric.get("ma") or {}).get("ma50"))
+        return5, return20 = _num(metric.get("return_5d")), _num(metric.get("return_20d"))
+        rs_slope = _num(metric.get("rs_ratio_slope"))
+        relative_volume_value, volume_z = _num(metric.get("relative_volume")), _num(metric.get("volume_z"))
+        conditions: list[bool] = []
+        for key, value, predicate in (
+            ("above_ma20", ma20, close is not None and ma20 is not None and close > ma20),
+            ("above_ma50", ma50, close is not None and ma50 is not None and close > ma50),
+            ("positive_5d", return5, return5 is not None and return5 > 0),
+            ("positive_20d", return20, return20 is not None and return20 > 0),
+            ("improving_rs", rs_slope, rs_slope is not None and rs_slope > 0),
+            ("expanding_volume", relative_volume_value, relative_volume_value is not None and relative_volume_value >= 1.2),
+        ):
+            if value is not None:
+                counters[key][1] += 1
+                counters[key][0] += int(predicate)
+                conditions.append(predicate)
+        positives = sum(conditions)
+        if len(conditions) >= 4 and positives >= 4:
+            bullish += 1
+        elif len(conditions) >= 4 and positives <= 2:
+            bearish += 1
+        else:
+            neutral += 1
+        if return20 is not None:
+            returns20.append(return20)
+        if (value := _num(metric.get("rs_20d"))) is not None:
+            rs20.append(value)
+        if volume_z is not None:
+            volume_scores.append((max(-3.0, min(3.0, volume_z)), weights.get(symbol, 0)))
+        details.append({"ticker": symbol, "weight": weights.get(symbol), "return_5d": return5, "return_20d": return20, "rs_20d": metric.get("rs_20d"), "above_ma20": close is not None and ma20 is not None and close > ma20, "above_ma50": close is not None and ma50 is not None and close > ma50, "relative_volume": relative_volume_value, "volume_z": volume_z})
+    ratios = [positive / eligible * 100 for positive, eligible in counters.values() if eligible]
+    result = {f"{key}_count": value[0] for key, value in counters.items()}
+    result.update({f"{key}_eligible": value[1] for key, value in counters.items()})
+    result.update({
+        "bullish_count": bullish, "neutral_count": neutral, "bearish_count": bearish,
+        "breadth_score": sum(ratios) / len(ratios) if ratios else None,
+        "return_dispersion": statistics.pstdev(returns20) if len(returns20) > 1 else None,
+        "rs_dispersion": statistics.pstdev(rs20) if len(rs20) > 1 else None,
+        "constituent_volume_z": _weighted(volume_scores),
+        "constituents": details,
+    })
+    return result
+
+
+def calculate_basket_signal(
+    histories: dict[str, Iterable[Any]], mappings: Iterable[dict[str, Any]], *, benchmark_rows: Iterable[Any] | None = None,
+    as_of: date | None = None, minimum_constituents: int = 5, minimum_coverage: float = .60,
+    single_stock_max_weight: float = .18, top_three_max_weight: float = .45, weights: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    basket_weights = calculate_basket_weights(mappings, single_stock_max_weight=single_stock_max_weight, top_three_max_weight=top_three_max_weight)
+    synthetic, availability = _synthetic_rows(histories, basket_weights["weights"], minimum_constituents=minimum_constituents, minimum_coverage=minimum_coverage, as_of=as_of)
+    if availability["valid_constituents"] < minimum_constituents or availability["effective_weight_coverage"] < minimum_coverage or not synthetic:
+        return {"pulse": None, "status": "INSUFFICIENT_COVERAGE", "proxy_mode": "EQUITY_BASKET", "coverage_quality": availability["effective_weight_coverage"], "confidence": 0.0, "basket": {**basket_weights, **availability, "historical_membership_mode": "CURRENT_CONSTITUENT_RECONSTRUCTION"}}
+    metric = calculate_etf_metrics(synthetic, benchmark_rows=benchmark_rows, benchmark_name="SPY", as_of=as_of)
+    breadth = calculate_constituent_breadth(histories, basket_weights["weights"], benchmark_rows=benchmark_rows, as_of=as_of)
+    components = dict(metric.get("scores") or {})
+    components["breadth"] = breadth.get("breadth_score")
+    components["consensus"] = 100 - min(100.0, float(breadth.get("return_dispersion") or 0) * 5)
+    if breadth.get("constituent_volume_z") is not None:
+        components["volume"] = _score(breadth["constituent_volume_z"], -2, 3)
+    score_weights = weights or {"trend": .25, "relative_strength": .25, "volume": .15, "momentum": .10, "breadth": .15, "consensus": .10}
+    pulse = _weighted([(value, score_weights.get(name, 0)) for name, value in components.items() if value is not None])
+    classification_confidence = _weighted([(float(row.get("confidence") or 0), basket_weights["weights"].get(str(row.get("ticker", "")).upper(), 0)) for row in mappings]) or 0
+    count_quality = min(1.0, availability["valid_constituents"] / 8)
+    data_quality = float(metric.get("data_quality") or 0)
+    confidence = min(1.0, availability["effective_weight_coverage"] * classification_confidence * (.5 + .5 * count_quality) * (.7 + .3 * data_quality))
+    heat = _weighted([(_score(metric.get("rsi14"), 50, 80), .4), (_score(metric.get("return_20d"), -10, 20), .35), (_score(breadth.get("constituent_volume_z"), -1, 3), .25)])
+    risk = _weighted([(_score(metric.get("realized_vol20"), 10, 45), .6), (_score(breadth.get("return_dispersion"), 0, 12), .4)])
+    narrow = bool((metric.get("return_20d") or 0) > 0 and (breadth.get("positive_20d_count") or 0) / max(1, breadth.get("positive_20d_eligible") or 0) < .4)
+    basket = {**basket_weights, **availability, "synthetic_index_base": 100, "synthetic_points": len(synthetic), "historical_membership_mode": "CURRENT_CONSTITUENT_RECONSTRUCTION", "breadth": breadth, "narrow_leadership": narrow}
+    return {"pulse": pulse, "status": "ready", "proxy_mode": "EQUITY_BASKET", "components": components, "coverage_quality": availability["effective_weight_coverage"], "confidence": confidence, "heat": heat, "risk": risk, "mood": classify_mood(pulse, heat, risk, components.get("breadth"), components.get("consensus")), "members": list(basket_weights["weights"]), "metric": metric, "basket": basket}
+
+
+def calculate_hybrid_composite(etf: dict[str, Any], basket: dict[str, Any]) -> dict[str, Any]:
+    etf_ready, basket_ready = etf.get("pulse") is not None, basket.get("pulse") is not None
+    if not etf_ready:
+        return basket
+    if not basket_ready:
+        return {**etf, "proxy_mode": "DIRECT_ETF", "basket": basket.get("basket", {})}
+    etf_components, basket_components = etf.get("components") or {}, basket.get("components") or {}
+    components: dict[str, float | None] = {}
+    for name in {**etf_components, **basket_components}:
+        if name == "breadth":
+            components[name] = basket_components.get(name)
+        else:
+            basket_weight = .60 if name == "volume" else .55
+            components[name] = _weighted([(basket_components.get(name), basket_weight), (etf_components.get(name), 1 - basket_weight)])
+    pulse = _weighted([(components.get(name), weight) for name, weight in {"trend": .25, "relative_strength": .25, "volume": .15, "momentum": .10, "breadth": .15, "consensus": .10}.items()])
+    disagreement = abs(float(etf["pulse"]) - float(basket["pulse"]))
+    agreement_factor = 1.0 if disagreement <= 10 else .85 if disagreement <= 20 else .7
+    confidence = min(1.0, _weighted([(float(etf.get("confidence") or 0), .4), (float(basket.get("confidence") or 0), .6)]) or 0) * agreement_factor
+    heat = _weighted([(etf.get("heat"), .45), (basket.get("heat"), .55)])
+    risk = _weighted([(etf.get("risk"), .45), (basket.get("risk"), .55)])
+    return {"pulse": pulse, "status": "ready", "proxy_mode": "HYBRID", "components": components, "coverage_quality": max(float(etf.get("coverage_quality") or 0), float(basket.get("coverage_quality") or 0)), "confidence": confidence, "heat": heat, "risk": risk, "mood": classify_mood(pulse, heat, risk, components.get("breadth"), components.get("consensus")), "members": list(dict.fromkeys([*(etf.get("members") or []), *(basket.get("members") or [])])), "etf_signal": etf, "basket_signal": basket, "basket": basket.get("basket", {}), "etf_basket_disagreement": disagreement}
+
+
 def classify_mood(pulse: float | None, heat: float | None, risk: float | None, breadth: float | None, consensus: float | None, delta: float | None = None) -> str:
     if pulse is None:
         return "unavailable"
@@ -386,9 +598,12 @@ def calculate_focus(snapshots: Iterable[dict[str, Any]], previous: dict[int, dic
         "risk_off": [row for row in rows if (row.get("pulse") or 0) <= 40 and (row.get("risk") or 0) >= 65],
         "reversal": [row for row in rows if (previous and (previous.get(row.get("node_id"), {}).get("pulse") or 0) < 40) and (row.get("relative_strength") or 0) > 50 and ((row.get("volume_z") or 0) > 0 or row.get("direction") == "up")],
         "rotation": [row for row in rows if previous and (previous.get(row.get("node_id"), {}).get("pulse") or 0) < 50 <= (row.get("pulse") or 0) and (row.get("relative_strength") or 0) > 50 and (row.get("change_5d") or 0) > 0],
+        "breadth_expansion": [row for row in rows if (row.get("metrics_json", {}).get("basket", {}).get("breadth", {}).get("breadth_score") or 0) >= 60 and (row.get("change_5d") or 0) > 0 and (row.get("relative_strength") or 0) >= 55],
+        "narrow_leadership": [row for row in rows if row.get("metrics_json", {}).get("basket", {}).get("narrow_leadership")],
+        "internal_confirmation": [row for row in rows if row.get("metrics_json", {}).get("proxy_mode") == "HYBRID" and (row.get("metrics_json", {}).get("etf_signal", {}).get("pulse") or 0) >= 60 and (row.get("metrics_json", {}).get("basket_signal", {}).get("pulse") or 0) >= 60 and (row.get("metrics_json", {}).get("basket", {}).get("breadth", {}).get("breadth_score") or 0) >= 60],
     }
     for signal_type, candidates in candidates_by_type.items():
-        key = {"leaders": "pulse", "fastest_heating": "change_5d", "rs_breakout": "relative_strength", "volume_shock": "volume_z", "overheated": "heat", "cooling": "change_5d", "risk_off": "risk", "reversal": "relative_strength", "rotation": "relative_strength"}[signal_type]
+        key = {"leaders": "pulse", "fastest_heating": "change_5d", "rs_breakout": "relative_strength", "volume_shock": "volume_z", "overheated": "heat", "cooling": "change_5d", "risk_off": "risk", "reversal": "relative_strength", "rotation": "relative_strength", "breadth_expansion": "change_5d", "narrow_leadership": "pulse", "internal_confirmation": "pulse"}[signal_type]
         reverse = signal_type not in {"cooling"}
         candidates.sort(key=lambda row: float(row.get(key) or 0), reverse=reverse)
         for rank, row in enumerate(candidates[:5], 1):
@@ -397,6 +612,6 @@ def calculate_focus(snapshots: Iterable[dict[str, Any]], previous: dict[int, dic
 
 
 __all__ = [
-    "atr", "calculate_composite", "calculate_etf_metrics", "calculate_focus", "classify_mood",
+    "atr", "calculate_basket_signal", "calculate_basket_weights", "calculate_composite", "calculate_constituent_breadth", "calculate_etf_metrics", "calculate_focus", "calculate_hybrid_composite", "classify_mood",
     "detect_regime", "ema", "realized_volatility", "relative_strength", "relative_volume", "rsi", "sma",
 ]

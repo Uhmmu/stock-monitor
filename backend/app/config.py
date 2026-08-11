@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     industry_pulse_backfill_days: int = 252
     industry_pulse_provider_timeout_seconds: float = 30.0
     industry_pulse_exposure_threshold: float = 0.30
+    industry_pulse_constituent_confidence_threshold: float = 0.55
+    industry_pulse_min_constituents: int = 5
+    industry_pulse_min_effective_coverage: float = 0.60
+    industry_pulse_single_stock_max_weight: float = 0.18
+    industry_pulse_top_three_max_weight: float = 0.45
+    industry_pulse_yfinance_batch_size: int = 75
+    industry_pulse_propagation_history_days: int = 60
+    industry_pulse_classification_batch_size: int = 30
+    industry_pulse_metadata_hydrate_limit: int = 20
     industry_pulse_liquidity_floor: float = 0.05
     industry_pulse_sync_lock_seconds: int = 7200
     industry_pulse_ai_enabled: bool = True

@@ -2145,12 +2145,14 @@ class IndustryPulseInstrument(Base):
         UniqueConstraint("node_id", "ticker", "role", name="uq_industry_pulse_instruments_node_ticker_role"),
         Index("ix_industry_pulse_instruments_node_enabled", "node_id", "enabled"),
         Index("ix_industry_pulse_instruments_ticker", "ticker"),
+        Index("ix_industry_pulse_instruments_node_pulse", "node_id", "enabled_for_pulse"),
         CheckConstraint("mapping_type IN ('etf_proxy', 'primary_industry', 'secondary_industry', 'theme_exposure')", name="ck_industry_pulse_instruments_mapping_type"),
         CheckConstraint("role IN ('primary', 'secondary', 'reference', 'benchmark')", name="ck_industry_pulse_instruments_role"),
         CheckConstraint("purity >= 0 AND purity <= 1", name="ck_industry_pulse_instruments_purity"),
         CheckConstraint("exposure >= 0 AND exposure <= 1", name="ck_industry_pulse_instruments_exposure"),
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_industry_pulse_instruments_confidence"),
         CheckConstraint("liquidity >= 0 AND liquidity <= 1", name="ck_industry_pulse_instruments_liquidity"),
+        CheckConstraint("classification_source IN ('MANUAL', 'ETF_HOLDING', 'AI_CLASSIFIED', 'PROVIDER', 'INHERITED')", name="ck_industry_pulse_instruments_classification_source"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -2166,12 +2168,34 @@ class IndustryPulseInstrument(Base):
     liquidity: Mapped[float] = mapped_column(Float, default=1.0)
     provider_symbol: Mapped[str | None] = mapped_column(String(32))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    classification_source: Mapped[str] = mapped_column(String(24), default="PROVIDER", index=True)
+    source_etf: Mapped[str | None] = mapped_column(String(32))
+    constituent_role: Mapped[str | None] = mapped_column(String(24))
+    enabled_for_pulse: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    valid_from: Mapped[date | None] = mapped_column(Date)
+    valid_to: Mapped[date | None] = mapped_column(Date)
     health_status: Mapped[str] = mapped_column(String(16), default="UNAVAILABLE")
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_trading_date: Mapped[date | None] = mapped_column(Date)
     data_quality: Mapped[float | None] = mapped_column(Float)
     error_code: Mapped[str | None] = mapped_column(String(64))
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class IndustryPulseClassificationCache(Base):
+    """Idempotency cache for bounded Luna candidate classification."""
+
+    __tablename__ = "industry_pulse_classification_cache"
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    metadata_hash: Mapped[str] = mapped_column(String(64), index=True)
+    taxonomy_version: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    result_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text)
+    classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

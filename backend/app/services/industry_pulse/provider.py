@@ -209,7 +209,11 @@ def fetch_histories(
     settings = get_settings()
     lookback = max(30, int(days or settings.industry_pulse_history_days))
     symbols = tuple(dict.fromkeys(str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()))
-    primary = (yfinance_fetcher or fetch_yfinance_batch)(symbols, lookback)
+    fetch_primary = yfinance_fetcher or fetch_yfinance_batch
+    batch_size = max(1, int(settings.industry_pulse_yfinance_batch_size))
+    primary: dict[str, ProviderHistory] = {}
+    for offset in range(0, len(symbols), batch_size):
+        primary.update(fetch_primary(symbols[offset : offset + batch_size], lookback))
     fallback = finnhub_fetcher or fetch_finnhub_history
     fallback_symbols: list[str] = []
     for ticker in symbols:

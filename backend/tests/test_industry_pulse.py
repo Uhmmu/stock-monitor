@@ -9,6 +9,7 @@ from app.models import (
     HistoricalPrice,
     CompanyProfile,
     IndustryPulseFocusSignal,
+    IndustryPulseClassificationCache,
     IndustryPulseInstrument,
     IndustryPulseNode,
     IndustryPulseNarrative,
@@ -17,11 +18,14 @@ from app.models import (
     IndustryPulseSyncRun,
     Security,
     StockProfile,
+    PeerRelation,
+    ValuationSnapshot,
 )
-from app.services.industry_pulse.calculation import calculate_etf_metrics, calculate_focus, classify_mood
+from app.services.industry_pulse.calculation import calculate_basket_signal, calculate_basket_weights, calculate_constituent_breadth, calculate_etf_metrics, calculate_focus, calculate_hybrid_composite, classify_mood
 from app.services.industry_pulse.classification import classify_security
+from app.services.industry_pulse.constituents import ClassificationBatch, MembershipSuggestion, SymbolClassification, _normalize_classification_payload, bootstrap_ai_constituents
 from app.services.industry_pulse.provider import DailyBar, ProviderHistory, fetch_histories
-from app.services.industry_pulse.service import _merge_history, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, taxonomy_payload
+from app.services.industry_pulse.service import _merge_history, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, taxonomy_payload
 
 
 TABLES = [
@@ -29,9 +33,12 @@ TABLES = [
     Security.__table__,
     StockProfile.__table__,
     CompanyProfile.__table__,
+    PeerRelation.__table__,
+    ValuationSnapshot.__table__,
     IndustryPulseNode.__table__,
     IndustryPulseRelation.__table__,
     IndustryPulseInstrument.__table__,
+    IndustryPulseClassificationCache.__table__,
     IndustryPulseSnapshot.__table__,
     IndustryPulseFocusSignal.__table__,
     IndustryPulseSyncRun.__table__,
@@ -137,6 +144,8 @@ def test_seed_is_idempotent_and_overview_is_base_sectors_only(db):
     db.commit()
     assert first["nodes"] == second["nodes"]
     assert db.query(IndustryPulseNode).count() >= 400
+    accelerator = db.query(IndustryPulseNode).filter_by(node_key="ai.compute.accelerators").one()
+    assert {row.ticker for row in db.query(IndustryPulseInstrument).filter_by(node_id=accelerator.id).all()} >= {"SMH", "SOXX"}
     sector = db.query(IndustryPulseNode).filter_by(taxonomy="base", level="sector").first()
     db.add(IndustryPulseSnapshot(node_id=sector.id, trading_date=date(2026, 8, 10), pulse=70, mood="strong", heat=60, risk=20, coverage_quality=.9))
     db.commit()
@@ -199,3 +208,152 @@ def test_focus_gates_do_not_emit_unqualified_buckets():
     assert not any(item["signal_type"] == "volume_shock" and item["node_id"] == 1 for item in signals)
     assert any(item["signal_type"] == "risk_off" and item["node_id"] == 2 for item in signals)
     assert classify_mood(80, 90, 80, 70, 80) == "overheated"
+
+
+def test_focus_emits_breadth_narrow_and_internal_confirmation():
+    row = {"node_id": 1, "pulse": 70, "change_5d": 5, "relative_strength": 65, "coverage_quality": .8, "confidence": .8, "metrics_json": {"proxy_mode": "HYBRID", "basket": {"narrow_leadership": True, "breadth": {"breadth_score": 70}}, "etf_signal": {"pulse": 70}, "basket_signal": {"pulse": 72}}}
+    types = {item["signal_type"] for item in calculate_focus([row])}
+    assert {"breadth_expansion", "narrow_leadership", "internal_confirmation"} <= types
+
+
+def test_stock_membership_eligibility_checks_thresholds_dates_and_enabled(monkeypatch):
+    day = date(2026, 8, 10)
+    row = IndustryPulseInstrument(node_id=1, ticker="NVDA", instrument_type="stock", mapping_type="theme_exposure", role="reference", exposure=.8, confidence=.8, enabled=True, enabled_for_pulse=True, valid_from=day - timedelta(days=1))
+    assert _stock_mapping_active(row, day)
+    row.exposure = .2
+    assert not _stock_mapping_active(row, day)
+    row.exposure, row.confidence = .8, .4
+    assert not _stock_mapping_active(row, day)
+    row.confidence, row.valid_to = .8, day - timedelta(days=1)
+    assert not _stock_mapping_active(row, day)
+    row.valid_to, row.enabled_for_pulse = None, False
+    assert not _stock_mapping_active(row, day)
+
+
+def test_basket_weighting_caps_single_stock_and_top_three():
+    mappings = [{"ticker": f"S{index}", "exposure": 1 if index == 0 else .3, "confidence": 1, "constituent_role": "CORE"} for index in range(8)]
+    result = calculate_basket_weights(mappings)
+    assert sum(result["weights"].values()) == pytest.approx(1)
+    assert max(result["weights"].values()) <= .18 + 1e-9
+    assert result["top_three_weight"] <= .45 + 1e-9
+    five = calculate_basket_weights(mappings[:5])
+    assert five["single_stock_cap"] == pytest.approx(.20)
+    assert not five["top_three_cap_applied"]
+
+
+def test_synthetic_basket_and_breadth_are_causal_and_keep_denominators():
+    histories = {f"S{index}": _bars(300, slope=1 + index * .1) for index in range(6)}
+    mappings = [{"ticker": symbol, "exposure": .9, "confidence": .9, "constituent_role": "CORE"} for symbol in histories]
+    result = calculate_basket_signal(histories, mappings, benchmark_rows=histories["S0"], as_of=histories["S0"][-2]["date"])
+    assert result["status"] == "ready" and result["pulse"] is not None
+    assert result["basket"]["synthetic_index_base"] == 100
+    assert result["basket"]["historical_membership_mode"] == "CURRENT_CONSTITUENT_RECONSTRUCTION"
+    breadth = result["basket"]["breadth"]
+    assert breadth["above_ma20_count"] == 6 and breadth["above_ma20_eligible"] == 6
+    assert breadth["positive_20d_count"] == 6 and breadth["positive_20d_eligible"] == 6
+    assert all(item["return_20d"] is not None for item in breadth["constituents"])
+
+
+def test_basket_missing_member_and_minimum_threshold_return_null_not_zero():
+    histories = {f"S{index}": _bars(100) for index in range(4)}
+    mappings = [{"ticker": symbol, "exposure": .9, "confidence": .9, "constituent_role": "CORE"} for symbol in histories]
+    result = calculate_basket_signal(histories, mappings, benchmark_rows=histories["S0"], as_of=histories["S0"][-1]["date"])
+    assert result["status"] == "INSUFFICIENT_COVERAGE"
+    assert result["pulse"] is None
+
+
+def test_hybrid_fallback_and_disagreement_degrade_confidence():
+    etf = {"pulse": 80, "confidence": .8, "coverage_quality": .8, "components": {"trend": 80, "breadth": 50}, "heat": 70, "risk": 30, "mood": "strong", "members": ["ETF"]}
+    basket = {"pulse": 40, "confidence": .8, "coverage_quality": .8, "components": {"trend": 40, "breadth": 30}, "heat": 40, "risk": 50, "mood": "cooling", "members": ["AAA"], "basket": {}}
+    hybrid = calculate_hybrid_composite(etf, basket)
+    assert hybrid["proxy_mode"] == "HYBRID"
+    assert hybrid["confidence"] < .8 and hybrid["etf_basket_disagreement"] == 40
+    assert calculate_hybrid_composite(etf, {"pulse": None})["proxy_mode"] == "DIRECT_ETF"
+    assert calculate_hybrid_composite({"pulse": None}, basket)["pulse"] == 40
+
+
+def test_luna_bootstrap_is_idempotent_and_manual_membership_wins(db):
+    ensure_seed_data(db)
+    node = db.query(IndustryPulseNode).filter_by(node_key="ai.compute.accelerators").one()
+    db.add(IndustryPulseInstrument(node_id=node.id, ticker="NVDA", instrument_type="stock", mapping_type="theme_exposure", role="reference", exposure=1, confidence=1, enabled=True, enabled_for_pulse=True, classification_source="MANUAL", constituent_role="CORE"))
+    db.add(IndustryPulseInstrument(node_id=node.id, ticker="AMD", instrument_type="stock", mapping_type="theme_exposure", role="reference", exposure=.5, confidence=.6, enabled=True, enabled_for_pulse=True, classification_source="PROVIDER", constituent_role="SECONDARY"))
+    db.commit()
+    def fake(rows):
+        return ClassificationBatch(results=[SymbolClassification(symbol=row["symbol"], memberships=[MembershipSuggestion(node=row["candidate_nodes"][0], role="CORE", exposure_weight=.8, confidence=.8, short_reason="fixture evidence")]) for row in rows]), "gpt-5.6-luna"
+    first = bootstrap_ai_constituents(db, classifier=fake, hydrate=False)
+    second = bootstrap_ai_constituents(db, classifier=fake, hydrate=False)
+    assert first["classified"] > 100 and second["due"] == 0
+    rows = db.query(IndustryPulseInstrument).filter_by(node_id=node.id, ticker="NVDA").all()
+    assert len(rows) == 1 and rows[0].classification_source == "MANUAL"
+    amd = db.query(IndustryPulseInstrument).filter_by(node_id=node.id, ticker="AMD").one()
+    assert amd.classification_source == "AI_CLASSIFIED"
+
+
+def test_luna_flat_membership_response_is_normalized():
+    payload = {"memberships": [{"company_symbol": "NVDA", "node_id": "ai.compute.accelerators", "exposure": "CORE", "confidence": .95}]}
+    result = _normalize_classification_payload(payload)
+    assert result.results[0].symbol == "NVDA"
+    assert result.results[0].memberships[0].node == "ai.compute.accelerators"
+    assert result.results[0].memberships[0].exposure_weight == .9
+
+
+def test_chain_coverage_and_no_strong_node_semantics(db):
+    ensure_seed_data(db)
+    group = db.query(IndustryPulseNode).filter_by(taxonomy="ai", level="group").first()
+    db.add(IndustryPulseSnapshot(node_id=group.id, trading_date=date(2026, 8, 10), pulse=55, confidence=.8, coverage_quality=.8, metrics_json={"proxy_mode": "EQUITY_BASKET", "basket": {"valid_constituents": 6}}))
+    db.commit()
+    payload = ai_chain_payload(db)
+    assert payload["concentration"]["status"] == "NO_STRONG_NODES"
+    assert payload["breadth_summary"]["strong_nodes"] == 0
+    assert payload["coverage"]["equity_basket_nodes"] == 1
+    assert payload["coverage"]["calculable_nodes"] == 1
+
+
+def test_chain_concentration_can_move_from_concentrated_to_broad(db):
+    ensure_seed_data(db)
+    groups = db.query(IndustryPulseNode).filter_by(taxonomy="ai", level="group").all()
+    day = date(2026, 8, 10)
+    db.add_all([IndustryPulseSnapshot(node_id=node.id, trading_date=day, pulse=70, confidence=.8, coverage_quality=.8) for node in groups[:3]])
+    db.commit()
+    assert ai_chain_payload(db)["concentration"]["status"] == "CONCENTRATED"
+    db.add_all([IndustryPulseSnapshot(node_id=node.id, trading_date=day, pulse=70, confidence=.8, coverage_quality=.8) for node in groups[3:]])
+    db.commit()
+    assert ai_chain_payload(db)["concentration"]["status"] == "BROAD"
+
+
+def test_propagation_eligibility_and_deterministic_states(db):
+    ensure_seed_data(db)
+    edge = db.query(IndustryPulseRelation).filter_by(relation_type="downstream").first()
+    day = date(2026, 8, 10)
+    for index in range(60):
+        current = day - timedelta(days=59 - index)
+        db.add(IndustryPulseSnapshot(node_id=edge.source_node_id, trading_date=current, pulse=70, change_5d=2, confidence=.8, coverage_quality=.8))
+        db.add(IndustryPulseSnapshot(node_id=edge.target_node_id, trading_date=current, pulse=55, change_5d=2, confidence=.8, coverage_quality=.8))
+    db.commit()
+    def state():
+        return next(row for row in ai_chain_payload(db)["propagation_edges"] if row["source_id"] == edge.source_node_id and row["target_id"] == edge.target_node_id)["status"]
+    assert state() == "ACTIVE"
+    target = db.query(IndustryPulseSnapshot).filter_by(node_id=edge.target_node_id, trading_date=day).one()
+    target.confidence = .4
+    db.commit()
+    assert state() == "LOW_CONFIDENCE"
+    target.confidence, target.coverage_quality = .8, .4
+    db.commit()
+    assert state() == "INSUFFICIENT_COVERAGE"
+    target.coverage_quality, target.pulse, target.change_5d = .8, 45, 0
+    db.commit()
+    assert state() == "LAGGING"
+    source = db.query(IndustryPulseSnapshot).filter_by(node_id=edge.source_node_id, trading_date=day).one()
+    source.pulse = 50
+    db.commit()
+    assert state() == "DORMANT"
+
+
+def test_propagation_requires_minimum_history(db):
+    ensure_seed_data(db)
+    edge = db.query(IndustryPulseRelation).filter_by(relation_type="downstream").first()
+    day = date(2026, 8, 10)
+    db.add_all([IndustryPulseSnapshot(node_id=node_id, trading_date=day, pulse=70, confidence=.8, coverage_quality=.8) for node_id in (edge.source_node_id, edge.target_node_id)])
+    db.commit()
+    row = next(row for row in ai_chain_payload(db)["propagation_edges"] if row["source_id"] == edge.source_node_id and row["target_id"] == edge.target_node_id)
+    assert row["status"] == "INSUFFICIENT_HISTORY"
