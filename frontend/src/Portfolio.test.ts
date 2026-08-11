@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { cashFlowAdjustedGrowth, chartPoints, deriveLivePortfolio, fmtHealthScore, fmtMoney, fmtNum, fmtPercent, type PortfolioSummary, type PositionView } from './Portfolio'
+import { buildScenarioAnalysis } from './PortfolioScenarios'
 import { normalizeRealtimeQuote } from './realtime'
-import { findSavedScenarioRun, type ScenarioHistoryRun } from './PortfolioScenarios'
 import { cacheTimeLabel, latestCompletedAnalysis, latestFreshAnalysis, requestsMatch, type PortfolioAnalysisRun } from './PortfolioAnalysisCache'
 
 describe('fmtMoney', () => {
@@ -129,38 +129,12 @@ describe('live portfolio valuation', () => {
   })
 })
 
-describe('findSavedScenarioRun', () => {
-  const result = (code: string) => ({ status: 'completed', scenario: { code } }) as ScenarioHistoryRun['result']
-  const run = (overrides: Partial<ScenarioHistoryRun>): ScenarioHistoryRun => ({
-    job_id: 1,
-    analysis_type: 'scenario_analysis',
-    status: 'completed',
-    result: result('recession'),
-    input_request: {},
-    model_version: 'test',
-    created_at: '2026-07-28T01:00:00Z',
-    completed_at: '2026-07-28T01:00:00Z',
-    expires_at: '2026-08-04T01:00:00Z',
-    is_fresh: true,
-    error_message: null,
-    ...overrides,
-  })
+describe('merged pressure and scenario analysis', () => {
+  const params = { market: -20, tech: -25, rates: 100, usd: 5, fundamental: true }
 
-  it('reuses the latest completed result for the selected scenario', () => {
-    const runs: ScenarioHistoryRun[] = [
-      run({ job_id: 3, result: result('recession'), created_at: '2026-07-28T03:00:00Z' }),
-      run({ job_id: 2, result: result('growth_repricing'), created_at: '2026-07-28T02:00:00Z' }),
-    ]
-    expect(findSavedScenarioRun(runs, 'recession')?.job_id).toBe(3)
-  })
-
-  it('falls back to a completed stale result but ignores pending or unrelated runs', () => {
-    const runs: ScenarioHistoryRun[] = [
-      run({ job_id: 5, is_fresh: false }),
-      run({ job_id: 4, status: 'pending' }),
-      run({ job_id: 3, analysis_type: 'stress_test' }),
-    ]
-    expect(findSavedScenarioRun(runs, 'recession')?.job_id).toBe(5)
+  it('uses saved preset scenarios and reserves the stress endpoint for custom shocks', () => {
+    expect(buildScenarioAnalysis(7, 'proxy_scenario', 'recession', params)).toMatchObject({ analysisType: 'scenario_analysis', endpoint: '/portfolio/analysis/scenario-analysis', request: { scenario_code: 'recession' } })
+    expect(buildScenarioAnalysis(7, 'custom_scenario', 'recession', params)).toMatchObject({ analysisType: 'stress_test', endpoint: '/portfolio/analysis/stress-test', request: { scenario_code: null, market_shock: -.2, interest_rate_change_bp: 100 } })
   })
 })
 

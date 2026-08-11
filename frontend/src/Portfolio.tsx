@@ -5,7 +5,7 @@ import { api, post } from './api'
 import { Sheet } from './Sheet'
 import { SecuritySearchAutocomplete, securityPayload, type SecuritySearchResult } from './SecuritySearchAutocomplete'
 import { PortfolioRiskAnalysis } from './PortfolioAnalysis'
-import { ScenarioAnalysisView, StressTestView } from './PortfolioScenarios'
+import { StressTestView } from './PortfolioScenarios'
 import { MonteCarloView } from './PortfolioMonteCarlo'
 import { PortfolioOptimizationView } from './PortfolioOptimization'
 import { chartThemeTokens, getResolvedTheme, subscribeTheme, type ThemeMode } from './theme'
@@ -445,7 +445,7 @@ export const fmtHealthScore = (value:number|null) => value==null?'数据不足':
 const typeLabel:Record<string,string> = {buy:'买入',sell:'卖出',dividend:'股息',fee:'费用',commission:'手续费',withholding_tax:'预扣税',broker_fee:'券商费用',margin_interest:'融资利息',interest_income:'利息收入',fx_conversion:'外汇转换',deposit:'转入现金',withdrawal:'转出现金',split:'拆股',transfer_in:'转入',transfer_out:'转出'}
 const trendLabel:Record<string,string> = {uptrend:'上升趋势',downtrend:'下降趋势',range:'区间震荡',unknown:'趋势不明'}
 const volLabel:Record<string,string> = {expanding:'波动扩大',contracting:'波动收窄',normal:'波动正常',unknown:'数据不足'}
-type PortfolioTab = 'overview'|'positions'|'technical'|'health'|'stress'|'scenario'|'monte-carlo'|'optimization'|'history'
+type PortfolioTab = 'overview'|'positions'|'technical'|'health'|'stress'|'monte-carlo'|'optimization'|'history'
 
 function emptyManualForm(today:string) {
   return {symbol:'',price:'',quantity:'',trade_date:today,fees:'0',currency:'USD',account:'',note:''}
@@ -539,7 +539,7 @@ export function PortfolioModule() {
   const live = useMemo(()=>deriveLivePortfolio(s,realtime.quotes),[s,realtime.quotes])
   const displayPositions = live?.positions||[]
   const liveEvents = mergeRealtimeMarketEvents(realtime.events,eventHistory.data||[])
-  const subtabs:[PortfolioTab,string][] = [['overview','组合中心'],['health','风险体检'],['stress','压力测试'],['scenario','情景分析'],['monte-carlo','蒙特卡洛'],['optimization','组合优化'],['history','交易历史']]
+  const subtabs:[PortfolioTab,string][] = [['overview','组合中心'],['health','风险体检'],['stress','压力与情景'],['monte-carlo','蒙特卡洛'],['optimization','组合优化'],['history','交易历史']]
   const openTab = (key:PortfolioTab) => {
     if(key==='technical'&&!detailSymbol&&live?.positions[0]) setDetailSymbol(live.positions[0].symbol)
     setSubtab(key)
@@ -637,7 +637,6 @@ export function PortfolioModule() {
     {subtab==='health'&&s&&<PortfolioRiskAnalysis portfolioId={s.portfolio_id} currency={s.base_currency} healthContent={healthContent}/>}
 
     {subtab==='stress'&&s&&<StressTestView portfolioId={s.portfolio_id}/>}
-    {subtab==='scenario'&&s&&<ScenarioAnalysisView portfolioId={s.portfolio_id}/>}
     {subtab==='monte-carlo'&&s&&<MonteCarloView portfolioId={s.portfolio_id}/>}
     {subtab==='optimization'&&s&&<PortfolioOptimizationView portfolioId={s.portfolio_id} symbols={s.positions.map(row=>row.symbol)}/>}
 
