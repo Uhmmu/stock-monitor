@@ -44,6 +44,7 @@ const MOOD_LABELS: Record<string, string> = {
   strong: '强势', leadership: '领涨', heating_up: '升温', heating: '升温', constructive: '偏强',
   neutral: '中性', cooling: '降温', weakening: '转弱', risk_off: '风险规避', panic: '恐慌',
   overheated: '过热', early_reversal: '早期反转', reversal: '反转候选',
+  derived: '子节点聚合', unavailable: '数据不足',
 }
 
 const BUCKET_LABELS: Record<string, string> = {
@@ -239,12 +240,22 @@ function AIChainView({ data, loading, error, onSelect }: { data: unknown; loadin
   const propagation = asText(first(record.propagation_status, record.propagation, record.summary, record.narrative))
   const propagationText = propagation ? ({ broadening: '沿产业链扩散', mixed: '局部扩散', narrowing: '尚未形成扩散' }[propagation] || propagation) : null
   const propagationFrontier = asText(record.propagation_frontier)
+  const availableGroups = asNumber(record.available_groups)
+  const totalGroups = asNumber(record.total_groups)
   if (!groups.length) return <EmptyState text="暂无 AI 产业链快照。" />
   return <div className="industry-view-content">
     <section className="industry-chain-banner"><div><p>AI TRADE STRUCTURE</p><h3>AI 产业链状态</h3><p>以下为板块行为与节点扩散信号，不是新闻情绪，也不是资金流入/流出记录。</p></div><div className="industry-chain-facts"><span><b>{scoreText(concentrationScore)}</b><small>{asText(first(concentration.label_zh, concentration.label, concentration.state)) || '链条集中度'}</small></span><span><b>{scoreText(chainBreadth)}</b><small>链条广度</small></span></div></section>
-    {propagationText && <p className="industry-signal-note"><b>传播状态</b>{propagationText}{propagationFrontier ? ` · 当前前沿：${propagationFrontier}` : ''}</p>}
+    <p className="industry-signal-note"><b>数据覆盖</b>{availableGroups ?? 0}/{totalGroups ?? 0} 个二级链条有直接 ETF 快照或可由有数据子节点聚合；无代理证据的节点不展示。{propagationText ? ` ${propagationText}${propagationFrontier ? ` · 当前前沿：${propagationFrontier}` : ''}` : ''}</p>
     <div className="industry-chain-grid">{groups.map(group => <section className="industry-chain-group" key={group.key}><div className="industry-section-heading"><div><p>CHAIN NODE</p><h3>{group.label}</h3></div><small>{group.rows.length} 个节点</small></div><div className="industry-chain-nodes">{group.rows.map(row => <PulseCard key={row.id} row={row} onSelect={onSelect} compact/>)}</div></section>)}</div>
   </div>
+}
+
+function FocusNote({ row, onSelect }: { row: PulseRow; onSelect: (row: PulseRow) => void }) {
+  return <button type="button" className="industry-focus-note" onClick={() => onSelect(row)}>
+    <span><b>{row.name}</b>{row.rank != null && <small>#{row.rank}</small>}</span>
+    <strong>{scoreText(row.pulse)}<small> Pulse</small></strong>
+    <footer><span className={row.change5d == null ? '' : row.change5d >= 0 ? 'positive' : 'negative'}>{signedText(row.change5d)} · 5D</span><span>{moodText(row.mood)}</span></footer>
+  </button>
 }
 
 function FocusView({ data, loading, error, onSelect }: { data: unknown; loading: boolean; error: boolean; onSelect: (row: PulseRow) => void }) {
@@ -252,7 +263,7 @@ function FocusView({ data, loading, error, onSelect }: { data: unknown; loading:
   if (error) return <ErrorState text="重点板块信号暂时无法读取。" />
   const buckets = extractFocusBuckets(data)
   if (!buckets.length) return <EmptyState text="暂无重点板块信号。" />
-  return <div className="industry-view-content"><p className="industry-signal-note"><b>信号口径</b>这些分组由价格、趋势、相对强度、成交量和波动变化推导；不代表真实资金流向，也不是买入或卖出建议。</p><div className="industry-focus-grid">{buckets.map(bucket => <section className="industry-focus-bucket" key={bucket.key}><div className="industry-section-heading"><div><p>FOCUS SIGNAL</p><h3>{bucket.label}</h3></div><small>{bucket.rows.length} 个</small></div><div className="industry-focus-list">{bucket.rows.slice(0, 8).map(row => <PulseCard key={row.id} row={row} onSelect={onSelect} compact/> )}</div></section>)}</div></div>
+  return <div className="industry-view-content"><p className="industry-signal-note"><b>信号口径</b>这些分组由价格、趋势、相对强度、成交量和波动变化推导；不代表真实资金流向，也不是买入或卖出建议。</p><div className="industry-focus-grid">{buckets.map(bucket => <section className="industry-focus-bucket" key={bucket.key}><div className="industry-section-heading"><div><p>FOCUS SIGNAL</p><h3>{bucket.label}</h3></div><small>{bucket.rows.length} 个</small></div><div className="industry-focus-list">{bucket.rows.slice(0, 8).map(row => <FocusNote key={row.id} row={row} onSelect={onSelect}/>)}</div></section>)}</div></div>
 }
 
 function TaxonomyTree({ nodes, onSelect }: { nodes: TaxonomyNode[]; onSelect: (row: PulseRow) => void }) {

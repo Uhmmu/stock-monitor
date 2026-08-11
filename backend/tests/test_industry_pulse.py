@@ -186,6 +186,11 @@ def test_focus_and_ai_payloads_flatten_quality_and_change_fields(db):
     assert focus_row["change_5d"] == 6 and focus_row["relative_strength_score"] == 72 and focus_row["coverage_quality"] == .8
     ai_row = next(row for row in ai_chain_payload(db)["nodes"] if row["id"] == ai_leaf.id)
     assert ai_row["change_5d"] == 5 and ai_row["relative_strength_score"] == 68 and ai_row["confidence"] == .65
+    chain = ai_chain_payload(db)
+    assert chain["available_groups"] == 1
+    derived_group = next(group for category in chain["groups"] for group in category["rows"])
+    assert derived_group["pulse"] == 75 and derived_group["derived_from_children"] is True
+    assert derived_group["name_zh"]
 
 
 def test_focus_gates_do_not_emit_unqualified_buckets():

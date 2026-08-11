@@ -70,6 +70,7 @@ def ensure_seed_data(db: Session) -> dict[str, int]:
             node = IndustryPulseNode(taxonomy=taxonomy, node_key=node_id)
             db.add(node)
         node.name = str(row.get("name") or node_id)
+        node.name_zh = str(row.get("name_zh") or node.name)
         node.slug = node_id.rsplit(".", 1)[-1]
         node.level = _level(row.get("level"))
         node.enabled = bool(row.get("enabled", True))
@@ -491,7 +492,7 @@ def _latest_day(db: Session, taxonomy: str | None = None, level: str | None = No
 
 def _snapshot_payload(db: Session, snapshot: IndustryPulseSnapshot, node: IndustryPulseNode | None = None) -> dict[str, Any]:
     node = node or db.get(IndustryPulseNode, snapshot.node_id)
-    return {"node_id": snapshot.node_id, "node_key": node.node_key if node else None, "name": node.name if node else None, "taxonomy": node.taxonomy if node else None, "trading_date": snapshot.trading_date.isoformat(), "pulse": snapshot.pulse, "mood": snapshot.mood, "regime": snapshot.regime, "heat": snapshot.heat, "risk": snapshot.risk, "change": {"1d": snapshot.change_1d, "5d": snapshot.change_5d, "20d": snapshot.change_20d}, "change_1d": snapshot.change_1d, "change_5d": snapshot.change_5d, "change_20d": snapshot.change_20d, "rank": None, "confidence": snapshot.confidence, "coverage_quality": snapshot.coverage_quality, "data_quality": snapshot.data_quality, "direction": snapshot.direction, "trend_score": snapshot.trend_score, "relative_strength_score": snapshot.relative_strength_score, "volume_score": snapshot.volume_score, "momentum_score": snapshot.momentum_score, "breadth_score": snapshot.breadth_score, "consensus_score": snapshot.consensus_score, "components": {"trend": snapshot.trend_score, "relative_strength": snapshot.relative_strength_score, "volume": snapshot.volume_score, "momentum": snapshot.momentum_score, "breadth": snapshot.breadth_score, "consensus": snapshot.consensus_score}}
+    return {"node_id": snapshot.node_id, "node_key": node.node_key if node else None, "name": node.name if node else None, "name_zh": node.name_zh if node else None, "taxonomy": node.taxonomy if node else None, "trading_date": snapshot.trading_date.isoformat(), "pulse": snapshot.pulse, "mood": snapshot.mood, "regime": snapshot.regime, "heat": snapshot.heat, "risk": snapshot.risk, "change": {"1d": snapshot.change_1d, "5d": snapshot.change_5d, "20d": snapshot.change_20d}, "change_1d": snapshot.change_1d, "change_5d": snapshot.change_5d, "change_20d": snapshot.change_20d, "rank": None, "confidence": snapshot.confidence, "coverage_quality": snapshot.coverage_quality, "data_quality": snapshot.data_quality, "direction": snapshot.direction, "trend_score": snapshot.trend_score, "relative_strength_score": snapshot.relative_strength_score, "volume_score": snapshot.volume_score, "momentum_score": snapshot.momentum_score, "breadth_score": snapshot.breadth_score, "consensus_score": snapshot.consensus_score, "components": {"trend": snapshot.trend_score, "relative_strength": snapshot.relative_strength_score, "volume": snapshot.volume_score, "momentum": snapshot.momentum_score, "breadth": snapshot.breadth_score, "consensus": snapshot.consensus_score}}
 
 
 def overview_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
@@ -521,7 +522,7 @@ def focus_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
     for signal in signals:
         node = db.get(IndustryPulseNode, signal.node_id)
         snapshot = db.scalar(select(IndustryPulseSnapshot).where(IndustryPulseSnapshot.node_id == signal.node_id, IndustryPulseSnapshot.trading_date == day))
-        row = {"signal_type": signal.signal_type, "node_id": signal.node_id, "node_key": node.node_key if node else None, "name": node.name if node else None, "score": signal.score, "rank": signal.rank, "confidence": snapshot.confidence if snapshot else signal.confidence, "coverage_quality": snapshot.coverage_quality if snapshot else None, "pulse": snapshot.pulse if snapshot else None, "change_5d": snapshot.change_5d if snapshot else None, "breadth_score": snapshot.breadth_score if snapshot else None, "relative_strength_score": snapshot.relative_strength_score if snapshot else None, "direction": snapshot.direction if snapshot else None, "heat": snapshot.heat if snapshot else None, "risk": snapshot.risk if snapshot else None, "mood": snapshot.mood if snapshot else None, "payload": signal.payload}
+        row = {"signal_type": signal.signal_type, "node_id": signal.node_id, "node_key": node.node_key if node else None, "name": node.name if node else None, "name_zh": node.name_zh if node else None, "score": signal.score, "rank": signal.rank, "confidence": snapshot.confidence if snapshot else signal.confidence, "coverage_quality": snapshot.coverage_quality if snapshot else None, "pulse": snapshot.pulse if snapshot else None, "change_5d": snapshot.change_5d if snapshot else None, "breadth_score": snapshot.breadth_score if snapshot else None, "relative_strength_score": snapshot.relative_strength_score if snapshot else None, "direction": snapshot.direction if snapshot else None, "heat": snapshot.heat if snapshot else None, "risk": snapshot.risk if snapshot else None, "mood": snapshot.mood if snapshot else None, "payload": signal.payload}
         buckets.setdefault(signal.signal_type, []).append(row)
     return {"as_of": day.isoformat(), "range_days": range_days, "signals": [item for values in buckets.values() for item in values], "buckets": buckets}
 
@@ -531,7 +532,7 @@ def taxonomy_payload(db: Session) -> dict[str, Any]:
     node_ids = [row.id for row in rows]
     latest_dates = select(IndustryPulseSnapshot.node_id, func.max(IndustryPulseSnapshot.trading_date).label("trading_date")).where(IndustryPulseSnapshot.node_id.in_(node_ids)).group_by(IndustryPulseSnapshot.node_id).subquery()
     snapshots = {snapshot.node_id: snapshot for snapshot in db.scalars(select(IndustryPulseSnapshot).join(latest_dates, and_(IndustryPulseSnapshot.node_id == latest_dates.c.node_id, IndustryPulseSnapshot.trading_date == latest_dates.c.trading_date))).all()} if node_ids else {}
-    return {"nodes": [{"id": row.id, "node_key": row.node_key, "name": row.name, "taxonomy": row.taxonomy, "level": row.level, "parent_id": row.parent_id, "metadata": row.metadata_json or {}, **(_snapshot_payload(db, snapshots[row.id], row) if row.id in snapshots else {})} for row in rows]}
+    return {"nodes": [{"id": row.id, "node_key": row.node_key, "name": row.name, "name_zh": row.name_zh, "taxonomy": row.taxonomy, "level": row.level, "parent_id": row.parent_id, "metadata": row.metadata_json or {}, **(_snapshot_payload(db, snapshots[row.id], row) if row.id in snapshots else {})} for row in rows]}
 
 
 def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
@@ -542,22 +543,46 @@ def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
     snapshots = {row.node_id: row for row in db.scalars(select(IndustryPulseSnapshot).where(IndustryPulseSnapshot.trading_date == day)).all()} if day else {}
     children: dict[int | None, list[IndustryPulseNode]] = {}
     for row in nodes: children.setdefault(row.parent_id, []).append(row)
+    def aggregate(node: IndustryPulseNode, snapshot: IndustryPulseSnapshot | None, descendants: list[IndustryPulseSnapshot], total_nodes: int) -> dict[str, Any]:
+        evidence = [snapshot] if snapshot else descendants
+
+        def mean(field: str) -> float | None:
+            values = [float(value) for item in evidence if (value := getattr(item, field)) is not None]
+            return sum(values) / len(values) if values else None
+
+        return {
+            "id": node.id, "node_key": node.node_key, "name": node.name, "name_zh": node.name_zh,
+            "pulse": mean("pulse"), "change_5d": mean("change_5d"), "breadth": mean("breadth_score"),
+            "relative_strength_score": mean("relative_strength_score"), "confidence": mean("confidence"),
+            "coverage_quality": mean("coverage_quality"), "heat": mean("heat"), "risk": mean("risk"),
+            "mood": snapshot.mood if snapshot else "derived" if evidence else "unavailable",
+            "covered_nodes": len(descendants), "total_nodes": total_nodes,
+            "derived_from_children": snapshot is None and bool(descendants),
+        }
+
     groups: list[dict[str, Any]] = []
     for category in children.get(None, []):
         category_groups = []
-        category_rows = []
-        category_scores = []
+        category_rows: list[dict[str, Any]] = []
+        category_descendants: list[IndustryPulseSnapshot] = []
         for group in children.get(category.id, []):
-            group_nodes = []
+            group_nodes: list[dict[str, Any]] = []
+            group_snapshots: list[IndustryPulseSnapshot] = []
             for leaf in children.get(group.id, []):
                 snapshot = snapshots.get(leaf.id)
-                payload = {"id": leaf.id, "node_key": leaf.node_key, "name": leaf.name, "pulse": snapshot.pulse if snapshot else None, "change_5d": snapshot.change_5d if snapshot else None, "breadth": snapshot.breadth_score if snapshot else None, "relative_strength_score": snapshot.relative_strength_score if snapshot else None, "confidence": snapshot.confidence if snapshot else None, "coverage_quality": snapshot.coverage_quality if snapshot else None, "mood": snapshot.mood if snapshot else "unavailable", "heat": snapshot.heat if snapshot else None, "risk": snapshot.risk if snapshot else None}
+                payload = aggregate(leaf, snapshot, [], 1)
                 group_nodes.append(payload)
-                category_rows.append(payload)
-                if snapshot and snapshot.pulse is not None: category_scores.append(snapshot.pulse)
-            category_groups.append({"id": group.id, "node_key": group.node_key, "name": group.name, "rows": group_nodes, "nodes": group_nodes})
-        category_snapshot = snapshots.get(category.id)
-        groups.append({"id": category.id, "node_key": category.node_key, "name": category.name, "pulse": category_snapshot.pulse if category_snapshot else (sum(category_scores) / len(category_scores) if category_scores else None), "breadth": category_snapshot.breadth_score if category_snapshot else None, "groups": category_groups, "industry_groups": category_groups, "rows": category_rows, "nodes": category_rows})
+                if snapshot and snapshot.pulse is not None:
+                    group_snapshots.append(snapshot)
+            group_payload = aggregate(group, snapshots.get(group.id), group_snapshots, len(group_nodes))
+            group_payload["nodes"] = group_nodes
+            group_payload["rows"] = [row for row in group_nodes if row.get("pulse") is not None]
+            category_groups.append(group_payload)
+            if group_payload["pulse"] is not None:
+                category_rows.append(group_payload)
+            category_descendants.extend(group_snapshots)
+        category_payload = aggregate(category, snapshots.get(category.id), category_descendants, len(category_groups))
+        groups.append({**category_payload, "groups": category_groups, "industry_groups": category_groups, "rows": category_rows, "nodes": category_rows})
     relation_rows = db.scalars(select(IndustryPulseRelation).order_by(IndustryPulseRelation.id)).all()
     relations = [{"source_id": edge.source_node_id, "target_id": edge.target_node_id, "relation": edge.relation_type, "weight": edge.weight} for edge in relation_rows]
     scored = [node["pulse"] for group in groups for node in group["rows"] if node.get("pulse") is not None]
@@ -571,13 +596,16 @@ def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
         target_pulse = target_snapshot.pulse if target_snapshot else None
         target_change = target_snapshot.change_5d if target_snapshot else None
         status = "active" if source_pulse is not None and source_pulse >= 60 and target_pulse is not None and target_pulse >= 50 and target_change is not None and target_change > 0 else "lagging" if source_pulse is not None and source_pulse >= 60 else "dormant"
-        propagation_edges.append({"source_id": edge.source_node_id, "source": nodes_by_id.get(edge.source_node_id).name if nodes_by_id.get(edge.source_node_id) else None, "target_id": edge.target_node_id, "target": nodes_by_id.get(edge.target_node_id).name if nodes_by_id.get(edge.target_node_id) else None, "source_pulse": source_pulse, "target_pulse": target_pulse, "target_change_5d": target_change, "status": status})
+        propagation_edges.append({"source_id": edge.source_node_id, "source": nodes_by_id.get(edge.source_node_id).name if nodes_by_id.get(edge.source_node_id) else None, "source_zh": nodes_by_id.get(edge.source_node_id).name_zh if nodes_by_id.get(edge.source_node_id) else None, "target_id": edge.target_node_id, "target": nodes_by_id.get(edge.target_node_id).name if nodes_by_id.get(edge.target_node_id) else None, "target_zh": nodes_by_id.get(edge.target_node_id).name_zh if nodes_by_id.get(edge.target_node_id) else None, "source_pulse": source_pulse, "target_pulse": target_pulse, "target_change_5d": target_change, "status": status})
     active_edges = [edge for edge in propagation_edges if edge["status"] == "active"]
     propagation_status = "broadening" if len(active_edges) >= 3 else "mixed" if active_edges else "narrowing"
-    propagation_frontier = active_edges[-1]["target"] if active_edges else None
+    propagation_frontier = (active_edges[-1].get("target_zh") or active_edges[-1]["target"]) if active_edges else None
     strong_by_category = [sum(node.get("pulse") is not None and node["pulse"] >= 60 for node in group["rows"]) for group in groups]
     concentration = max(strong_by_category) / sum(strong_by_category) if sum(strong_by_category) else None
-    return {"as_of": day.isoformat() if day else None, "groups": groups, "nodes": [node for group in groups for node in group["rows"]], "relations": relations, "hierarchy": relations, "breadth": breadth, "concentration": concentration, "propagation_status": propagation_status, "propagation_frontier": propagation_frontier, "propagation_edges": propagation_edges}
+    available_groups = [node for group in groups for node in group["rows"]]
+    total_groups = sum(len(group["industry_groups"]) for group in groups)
+    leaf_nodes = [leaf for category in groups for group in category["industry_groups"] for leaf in group["nodes"]]
+    return {"as_of": day.isoformat() if day else None, "groups": groups, "nodes": leaf_nodes, "relations": relations, "hierarchy": relations, "breadth": breadth, "concentration": concentration, "propagation_status": propagation_status, "propagation_frontier": propagation_frontier, "propagation_edges": propagation_edges, "available_groups": len(available_groups), "total_groups": total_groups}
 
 
 def node_detail_payload(db: Session, node_id: int, range_days: int = 30) -> dict[str, Any] | None:
@@ -589,7 +617,7 @@ def node_detail_payload(db: Session, node_id: int, range_days: int = 30) -> dict
     mappings = db.scalars(select(IndustryPulseInstrument).where(IndustryPulseInstrument.node_id == node_id, IndustryPulseInstrument.enabled.is_(True), IndustryPulseInstrument.mapping_type == "etf_proxy")).all()
     latest = snapshots[-1] if snapshots else None
     composite = _snapshot_payload(db, latest) if latest else None
-    node_payload = {"id": node.id, "node_key": node.node_key, "name": node.name, "taxonomy": node.taxonomy, "level": node.level, "parent_id": node.parent_id, **(composite or {})}
+    node_payload = {"id": node.id, "node_key": node.node_key, "name": node.name, "name_zh": node.name_zh, "taxonomy": node.taxonomy, "level": node.level, "parent_id": node.parent_id, **(composite or {})}
     narrative = db.scalar(select(IndustryPulseNarrative).where(IndustryPulseNarrative.node_id == node_id).order_by(IndustryPulseNarrative.trading_date.desc()).limit(1))
     relative = (latest.metrics_json or {}).get("relative_strength_benchmarks", {}) if latest else {}
     node_payload["relative_strength"] = relative

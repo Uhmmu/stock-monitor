@@ -9,6 +9,8 @@ import math
 import re
 from typing import Any
 
+from app.services.industry_pulse.labels import chinese_name
+
 THEME_INCLUSION_THRESHOLD = 0.30
 REGISTRY_ROLES = frozenset({"primary", "secondary", "reference", "benchmark"})
 PULSE_ROLES = frozenset({"primary", "secondary"})
@@ -29,6 +31,7 @@ def _base_nodes() -> tuple[tuple[dict, ...], tuple[dict, ...], tuple[dict, ...]]
             "id": sector_id,
             "code": sector["code"],
             "name": sector["name"],
+            "name_zh": chinese_name(sector["name"]),
             "level": 1,
             "kind": "sector",
             "parent_id": None,
@@ -40,6 +43,7 @@ def _base_nodes() -> tuple[tuple[dict, ...], tuple[dict, ...], tuple[dict, ...]]
                 "id": group_id,
                 "code": group["code"],
                 "name": group["name"],
+                "name_zh": chinese_name(group["name"]),
                 "level": 2,
                 "kind": "industry_group",
                 "parent_id": sector_id,
@@ -50,6 +54,7 @@ def _base_nodes() -> tuple[tuple[dict, ...], tuple[dict, ...], tuple[dict, ...]]
                     "id": f"{group_id}.{_slug(leaf['name'])}",
                     "code": leaf["code"],
                     "name": leaf["name"],
+                    "name_zh": chinese_name(leaf["name"]),
                     "level": 3,
                     "kind": "industry",
                     "parent_id": group_id,
@@ -68,6 +73,7 @@ def _ai_nodes() -> tuple[tuple[dict, ...], tuple[dict, ...], tuple[dict, ...]]:
         category_row = {
             "id": category_id,
             "name": category["name"],
+            "name_zh": chinese_name(category["name"]),
             "level": 1,
             "kind": "category",
             "parent_id": None,
@@ -79,6 +85,7 @@ def _ai_nodes() -> tuple[tuple[dict, ...], tuple[dict, ...], tuple[dict, ...]]:
             group_row = {
                 "id": group_id,
                 "name": group["name"],
+                "name_zh": chinese_name(group["name"]),
                 "level": 2,
                 "kind": "group",
                 "parent_id": category_id,
@@ -89,6 +96,7 @@ def _ai_nodes() -> tuple[tuple[dict, ...], tuple[dict, ...], tuple[dict, ...]]:
                 nodes.append({
                     "id": node_id,
                     "name": node,
+                    "name_zh": chinese_name(node),
                     "level": 3,
                     "kind": "node",
                     "parent_id": group_id,

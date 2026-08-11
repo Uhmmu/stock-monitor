@@ -46,6 +46,15 @@ def test_ai_taxonomy_counts_ids_and_relation_refs():
         assert relation["relation"] in {"parent", "downstream", "upstream", "child", "related"}
 
 
+def test_every_taxonomy_node_has_a_chinese_display_name():
+    allowed_acronyms = {"AI", "GPU", "ASIC", "CPU", "HBM", "DRAM", "NAND", "EDA", "IP", "PC", "SaaS", "IT", "ERP", "CRM", "RNA", "CRO", "LNG", "HVAC", "REIT", "SMR", "IPP", "IaaS", "PaaS", "CI", "CD", "ADAS", "FinTech", "DevTools"}
+    for row in BASE_TAXONOMY + AI_TAXONOMY:
+        tokens = set(re.findall(r"[A-Za-z][A-Za-z-]*", row["name_zh"]))
+        assert row["name_zh"]
+        assert row["name_zh"] != row["name"] or tokens <= allowed_acronyms
+        assert tokens <= allowed_acronyms
+
+
 def test_etf_registry_is_deduplicated_and_mappings_are_bounded():
     assert len(ETF_REGISTRY) == 64
     assert set(ETF_REGISTRY) == {row["ticker"] for row in ETF_REGISTRY.values()}
@@ -98,3 +107,4 @@ def test_smr_uranium_nuclear_and_utilities_boundaries():
     assert all("uranium_mining" not in mapping["node_id"] for mapping in ETF_REGISTRY["NLR"]["mappings"])
     assert ETF_REGISTRY["XLU"]["role"] == "benchmark"
     assert all("advanced_nuclear" not in mapping["node_id"] for mapping in ETF_REGISTRY["XLU"]["mappings"])
+import re
