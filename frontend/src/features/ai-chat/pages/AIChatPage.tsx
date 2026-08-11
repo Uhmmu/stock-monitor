@@ -392,9 +392,9 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
     </ChatDialog>
     <ChatDialog open={decisionPreview!==null} title="确认投资决策" onClose={()=>!finalizeDecision.isPending&&setDecisionPreview(null)} className="ai-decision-compare-dialog">
       {decisionPreview&&<div className="ai-decision-compare">
-        <p className="ai-decision-summary"><b>AI 对话总结</b>{decisionPreview.conversation_summary}</p>
+        <p className="ai-decision-summary"><b>AI 全部上下文总结</b>{decisionPreview.conversation_summary}</p>
         <div className={decisionPreview.conflicts.length?'has-conflict':''}>
-          <DecisionPreviewCard label="本次对话产生的新决策（可修改）" item={decisionPreview.candidate} onChange={candidate=>setDecisionPreview({...decisionPreview,candidate})}/>
+          <DecisionPreviewCard label="AI 生成的待确认建议决策（可修改）" item={decisionPreview.candidate} onChange={candidate=>setDecisionPreview({...decisionPreview,candidate})}/>
           {decisionPreview.conflicts.map(item=><DecisionPreviewCard key={item.id} label={`已有决策 #${item.decision_number}`} item={item}/>) }
         </div>
         {decisionPreview.conflicts.length>0&&<p className="ai-decision-conflict-note">检测到同一证券已有决策。合并会保留原序号，并创建一个带完整关联关系的新决策；不会覆盖历史记录。</p>}
