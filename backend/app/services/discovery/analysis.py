@@ -8,6 +8,7 @@ from openai import OpenAI
 from pydantic import ValidationError
 
 from app.config import get_settings
+from app.model_fallbacks import run_with_fallback
 
 from .schemas import OpportunityBatch
 
@@ -208,17 +209,20 @@ def analyze_opportunities(*, search_results: list[dict], local_context: dict, ma
         },
     }
     client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
-        ],
-        response_format=_json_schema(),
-        max_completion_tokens=max_output_tokens,
-    )
-    text = response.choices[0].message.content or ""
-    parsed = parse_opportunity_output(text)
+        ]
+
+    def analyze(selected_client, selected_model):
+        response = selected_client.chat.completions.create(
+            model=selected_model, messages=messages, response_format=_json_schema(),
+            **({"max_tokens": max_output_tokens} if selected_model.startswith("claude-") else {"max_completion_tokens": max_output_tokens}),
+        )
+        text = response.choices[0].message.content or ""
+        return response, text, parse_opportunity_output(text)
+
+    (response, text, parsed), model = run_with_fallback(model, client, analyze)
     usage = response.usage
     return AnalysisResult(
         parsed=parsed,

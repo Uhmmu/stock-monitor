@@ -13,6 +13,7 @@ from app.ai_tools.executor import ToolExecutor
 from app.ai_tools.registry import ToolRegistry
 from app.ai_tools.schemas import ToolExecutionContext
 from app.config import get_settings
+from app.model_fallbacks import fallback_model
 from app.services.price_snapshots import (
     build_ai_price_snapshot_context,
     get_latest_persisted_price_snapshot,
@@ -120,7 +121,7 @@ class AIOrchestrator:
             raise AIError(AIErrorCode.configuration, "Configured model does not support tools.", status_code=503)
         return provider, model
 
-    async def _execute(
+    async def _execute_once(
         self, *, request: AIRespondRequest, user: Any, request_id: str,
         event_sink=None, use_provider_stream: bool = False,
         history: list[ProviderMessage] | None = None,
@@ -267,6 +268,32 @@ class AIOrchestrator:
             rich_content=rich_content,
         )
         return response, len(validation.invalid_keys), repaired
+
+    async def _execute(
+        self, *, request: AIRespondRequest, user: Any, request_id: str,
+        event_sink=None, use_provider_stream: bool = False,
+        history: list[ProviderMessage] | None = None,
+        conversation_id: str | None = None,
+    ) -> tuple[AIRespondResponse, int, bool]:
+        model = request.model or get_settings().ai_model
+        try:
+            return await self._execute_once(
+                request=request, user=user, request_id=request_id, event_sink=event_sink,
+                use_provider_stream=use_provider_stream, history=history, conversation_id=conversation_id,
+            )
+        except Exception:
+            fallback = fallback_model(model)
+            if not fallback:
+                raise
+            if event_sink:
+                await event_sink("response.reset", {})
+            result, invalid, repaired = await self._execute_once(
+                request=request.model_copy(update={"model": fallback}), user=user, request_id=request_id,
+                event_sink=event_sink, use_provider_stream=use_provider_stream, history=history,
+                conversation_id=conversation_id,
+            )
+            result.warnings.append(f"{model} 不可用，已自动切换到 {fallback}。")
+            return result, invalid, repaired
 
     async def respond(
         self, *, request: AIRespondRequest, user: Any, request_id: str,

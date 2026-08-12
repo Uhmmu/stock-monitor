@@ -72,6 +72,45 @@ def test_orchestrator_tool_call_citation_repair_and_stream_events():
     finally: restore(settings,old)
 
 
+def test_orchestrator_falls_back_from_luna_to_haiku():
+    class ClaudeMock(MockProvider):
+        provider_name = "claude_compatible"
+
+    primary = MockProvider([ProviderResponse(), ProviderResponse()])
+    fallback = ClaudeMock([ProviderResponse(content="Haiku 正常回答", finish_reason="stop")])
+    settings = get_settings()
+    fields = (
+        "ai_provider", "ai_model", "ai_allowed_models", "ai_enabled", "ai_api_base",
+        "ai_api_key", "translation_base_url", "translation_api_key",
+    )
+    old = tuple(getattr(settings, field) for field in fields)
+    settings.ai_provider = "mock"
+    settings.ai_model = "gpt-5.6-luna"
+    settings.ai_allowed_models = "gpt-5.6-luna,claude-haiku-4-5-20251001"
+    settings.ai_enabled = True
+    settings.ai_api_base = "https://gpt.test/v1"
+    settings.ai_api_key = "gpt-key"
+    settings.translation_base_url = "https://claude.test/v1"
+    settings.translation_api_key = "claude-key"
+    providers = ProviderRegistry()
+    providers.register(primary)
+    providers.register(fallback)
+    try:
+        orchestrator = AIOrchestrator(registry=tool_registry, executor=Executor(), provider_registry=providers)
+        result = asyncio.run(orchestrator.respond(
+            request=AIRespondRequest(message="hello", stream=False),
+            user=SimpleNamespace(id=1), request_id="fallback",
+        ))
+        assert "Haiku 正常回答" in result.answer
+        assert primary.requests and all(request.model == "gpt-5.6-luna" for request in primary.requests)
+        assert fallback.requests[0].model == "claude-haiku-4-5-20251001"
+        assert result.warnings[-1] == "gpt-5.6-luna 不可用，已自动切换到 claude-haiku-4-5-20251001。"
+    finally:
+        for field, value in zip(fields, old, strict=True):
+            setattr(settings, field, value)
+
+
+def test_orchestrator_stream_events():
     stream_provider=MockProvider([ProviderResponse(content="直接回答",finish_reason="stop")]); settings,old,providers=configure_mock(stream_provider)
     async def collect():
         orchestrator=AIOrchestrator(registry=tool_registry,executor=Executor(),provider_registry=providers)

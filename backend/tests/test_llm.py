@@ -50,11 +50,28 @@ def test_analysis_falls_back_to_haiku_on_primary_503(monkeypatch):
         return SimpleNamespace(chat=SimpleNamespace(completions=Completions())), model
 
     monkeypatch.setattr(llm, "_client_and_model", lambda tier: client("gpt-5.6-luna", ServiceUnavailable()))
-    monkeypatch.setattr(llm, "_translation_client_and_model", lambda: client("claude-haiku-4-5-20251001"))
+    monkeypatch.setattr("app.model_fallbacks.claude_client", lambda: client("unused")[0])
 
     text, model = llm.generate_analysis("Pulse", "evidence", fallback_to_translation=True)
 
     assert (text, model) == ("回退摘要", "claude-haiku-4-5-20251001")
+    assert calls == ["gpt-5.6-luna", "claude-haiku-4-5-20251001"]
+
+
+def test_analysis_falls_back_to_haiku_on_empty_primary(monkeypatch):
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs["model"])
+            content = "" if kwargs["model"] == "gpt-5.6-luna" else "有效正文"
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    monkeypatch.setattr(llm, "_client_and_model", lambda tier: (client, "gpt-5.6-luna"))
+    monkeypatch.setattr("app.model_fallbacks.claude_client", lambda: client)
+
+    assert llm.generate_analysis("Pulse", "evidence") == ("有效正文", "claude-haiku-4-5-20251001")
     assert calls == ["gpt-5.6-luna", "claude-haiku-4-5-20251001"]
 
 
@@ -144,6 +161,7 @@ def test_news_summary_rejects_english_summary(monkeypatch):
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
     monkeypatch.setattr(llm, "_client_and_model", lambda tier: (client, "gpt-5.6-luna"))
+    monkeypatch.setattr("app.model_fallbacks.claude_client", lambda: client)
 
     try:
         llm.summarize_news("Title", "Article body")

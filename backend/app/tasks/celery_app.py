@@ -13,6 +13,7 @@ import asyncio
 import json
 
 from app.config import get_settings
+from app.model_fallbacks import model_candidates, model_matches
 from app.database import SessionLocal
 from app.models import (
     CongressTrade,
@@ -218,7 +219,7 @@ def reconcile_news_enrichment():
                             NewsItem.ai_summary_version.is_(None),
                             NewsItem.ai_summary_version != NEWS_SUMMARY_VERSION,
                             NewsItem.ai_summary_model.is_(None),
-                            NewsItem.ai_summary_model != settings.model_medium,
+                            NewsItem.ai_summary_model.notin_(model_candidates(settings.model_medium)),
                         ),
                     ),
                 ),
@@ -383,7 +384,7 @@ def summarize_news_item(news_id: int, request_id: str, force: bool = False):
             not force
             and item.ai_summary_status in {"completed", "degraded"}
             and item.ai_summary_version == NEWS_SUMMARY_VERSION
-            and item.ai_summary_model == settings.model_medium
+            and model_matches(settings.model_medium, item.ai_summary_model)
             and item.ai_summary_next_retry_at is None
         ):
             return {"status": item.ai_summary_status, "news_id": news_id}
@@ -459,7 +460,7 @@ def summarize_news_item(news_id: int, request_id: str, force: bool = False):
                     current
                     and current.ai_summary_input_hash == input_hash
                     and current.ai_summary_version == NEWS_SUMMARY_VERSION
-                    and current.ai_summary_model == settings.model_medium
+                    and model_matches(settings.model_medium, current.ai_summary_model)
                     and current.ai_analysis
                 ):
                     cached_analysis = current

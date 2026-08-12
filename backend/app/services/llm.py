@@ -5,6 +5,7 @@ from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import get_settings
+from app.model_fallbacks import run_with_fallback
 
 
 MODEL_TIERS = {"simple": "model_simple", "medium": "model_medium", "important": "model_important"}
@@ -351,38 +352,32 @@ def generate_analysis(
             "content": f"报告标题：{title}\n报告类型：{report_type or 'general'}\n\n系统采集资料：\n{evidence}",
         },
     ]
-    try:
-        response = client.chat.completions.create(model=model, messages=messages)
-    except Exception as exc:
-        if not fallback_to_translation or getattr(exc, "status_code", None) != 503:
-            raise
-        client, model = _translation_client_and_model()
-        response = client.chat.completions.create(model=model, messages=messages)
-    return response.choices[0].message.content or "", model
+    def complete(selected_client, selected_model):
+        text = (selected_client.chat.completions.create(model=selected_model, messages=messages).choices[0].message.content or "").strip()
+        if not text:
+            raise ValueError("分析响应为空")
+        return text
+
+    del fallback_to_translation
+    return run_with_fallback(model, client, complete)
 
 
 def curate_daily_news(ticker: str, market_date: str, evidence: str) -> tuple[str, str]:
     client, model = _client_and_model("medium")
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    messages = [
             {"role": "system", "content": DAILY_ARCHIVE_SYSTEM_PROMPT},
             {"role": "user", "content": f"股票代码：{ticker}\n日期：{market_date}\n\n当天原始新闻：\n{evidence}"},
-        ],
-    )
-    return response.choices[0].message.content or "", model
+        ]
+    return run_with_fallback(model, client, lambda selected_client, selected_model: _required_text(selected_client.chat.completions.create(model=selected_model, messages=messages), "每日新闻定档"))
 
 
 def curate_weekly_news(ticker: str, week_label: str, evidence: str) -> tuple[str, str]:
     client, model = _client_and_model("medium")
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    messages = [
             {"role": "system", "content": WEEKLY_ARCHIVE_SYSTEM_PROMPT},
             {"role": "user", "content": f"股票代码：{ticker}\n周区间：{week_label}\n\n当周每日定档：\n{evidence}"},
-        ],
-    )
-    return response.choices[0].message.content or "", model
+        ]
+    return run_with_fallback(model, client, lambda selected_client, selected_model: _required_text(selected_client.chat.completions.create(model=selected_model, messages=messages), "每周新闻汇总"))
 
 
 def summarize_news(
@@ -405,31 +400,38 @@ def summarize_news(
             ),
         },
     ]
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0,
-        response_format={
+    def complete(selected_client, selected_model):
+        response = selected_client.chat.completions.create(
+            model=selected_model, messages=messages, temperature=0, response_format={
             "type": "json_schema",
             "json_schema": {
                 "name": "stock_monitor_news_analysis_v2",
                 "strict": True,
                 "schema": NEWS_ANALYSIS_JSON_SCHEMA,
             },
-        },
-    )
-    raw_content = getattr(response.choices[0].message, "content", None)
-    try:
-        payload = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
-        if not isinstance(payload, dict):
-            raise ValueError("新闻分析响应必须是 JSON 对象")
-        analysis = NewsAnalysis.model_validate(_normalize_news_analysis(payload, source_quality_value))
-    except (TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
-        raise ValueError("新闻结构化分析响应格式无效") from exc
-    if not _contains_chinese(analysis.summary_zh):
-        raise ValueError("新闻结构化分析未返回中文摘要")
-    usage = _response_usage(getattr(response, "usage", None))
+            },
+        )
+        raw_content = getattr(response.choices[0].message, "content", None)
+        try:
+            payload = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+            if not isinstance(payload, dict):
+                raise ValueError("新闻分析响应必须是 JSON 对象")
+            analysis = NewsAnalysis.model_validate(_normalize_news_analysis(payload, source_quality_value))
+        except (TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
+            raise ValueError("新闻结构化分析响应格式无效") from exc
+        if not _contains_chinese(analysis.summary_zh):
+            raise ValueError("新闻结构化分析未返回中文摘要")
+        return analysis, _response_usage(getattr(response, "usage", None))
+
+    (analysis, usage), model = run_with_fallback(model, client, complete)
     return analysis.model_dump(mode="json"), model, usage
+
+
+def _required_text(response: Any, label: str) -> str:
+    text = (response.choices[0].message.content or "").strip()
+    if not text:
+        raise ValueError(f"{label}响应为空")
+    return text
 
 
 def _response_usage(value: Any) -> dict[str, int]:
@@ -483,15 +485,8 @@ CROSS_MODEL_OPINION_PROMPT = """你是一名严谨的美股估值分析师。系
 def explain_cross_model(evidence: str) -> tuple[str, str]:
     """固定使用 medium tier（当前配置为 gpt-5.6-luna）解释模型，不参与计算。"""
     client, model = _client_and_model("medium")
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    messages = [
             {"role": "system", "content": CROSS_MODEL_OPINION_PROMPT},
             {"role": "user", "content": evidence},
-        ],
-        temperature=0.2,
-    )
-    text = (response.choices[0].message.content or "").strip()
-    if not text:
-        raise ValueError("多模型解释响应为空")
-    return text, model
+        ]
+    return run_with_fallback(model, client, lambda selected_client, selected_model: _required_text(selected_client.chat.completions.create(model=selected_model, messages=messages, temperature=0.2), "多模型解释"))

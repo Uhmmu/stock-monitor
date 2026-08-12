@@ -13,6 +13,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.model_fallbacks import model_candidates, run_with_fallback
 from app.models import (
     CompanyProfile,
     IndustryPulseClassificationCache,
@@ -237,14 +238,19 @@ def _classify_batch(rows: list[dict]) -> tuple[ClassificationBatch, str]:
         raise RuntimeError("OPENAI_API_KEY is unavailable")
     nodes = [{"id": node_id, "name": node_id.rsplit(".", 1)[-1].replace("_", " ")} for node_id in sorted({node for row in rows for node in row["candidate_nodes"]})]
     client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url, timeout=120, max_retries=1)
-    response = client.chat.completions.create(
-        model=settings.model_medium,
-        messages=[{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": json.dumps({"canonical_ai_nodes": nodes, "companies": rows}, ensure_ascii=False, default=str)}],
-        temperature=0,
-        response_format={"type": "json_schema", "json_schema": {"name": "ai_node_memberships_v1", "strict": True, "schema": ClassificationBatch.model_json_schema()}},
-    )
-    payload = json.loads(response.choices[0].message.content or "{}")
-    return _normalize_classification_payload(payload), settings.model_medium
+    def classify(selected_client, selected_model):
+        response = selected_client.chat.completions.create(
+            model=selected_model,
+            messages=[{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": json.dumps({"canonical_ai_nodes": nodes, "companies": rows}, ensure_ascii=False, default=str)}],
+            temperature=0,
+            response_format={"type": "json_schema", "json_schema": {"name": "ai_node_memberships_v1", "strict": True, "schema": ClassificationBatch.model_json_schema()}},
+        )
+        payload = json.loads(response.choices[0].message.content or "")
+        if not isinstance(payload, dict):
+            raise ValueError("classification response must be an object")
+        return _normalize_classification_payload(payload)
+
+    return run_with_fallback(settings.model_medium, client, classify)
 
 
 def _normalize_classification_payload(payload: dict) -> ClassificationBatch:
@@ -319,7 +325,8 @@ def bootstrap_ai_constituents(db: Session, *, force: bool = False, classifier=No
     hydration = hydrate_candidate_metadata(db) if hydrate else {"attempted": 0, "completed": 0, "failed": 0}
     metadata = _metadata_rows(db)
     cache = {row.symbol: row for row in db.scalars(select(IndustryPulseClassificationCache).where(IndustryPulseClassificationCache.symbol.in_(metadata))).all()}
-    due = [row for symbol, row in metadata.items() if force or symbol not in cache or cache[symbol].status == "failed" or cache[symbol].metadata_hash != _digest(row, settings.model_medium) or cache[symbol].taxonomy_version != TAXONOMY_VERSION or cache[symbol].model != settings.model_medium]
+    accepted_models = model_candidates(settings.model_medium)
+    due = [row for symbol, row in metadata.items() if force or symbol not in cache or cache[symbol].status == "failed" or cache[symbol].metadata_hash not in {_digest(row, model) for model in accepted_models} or cache[symbol].taxonomy_version != TAXONOMY_VERSION or cache[symbol].model not in accepted_models]
     classified = rejected = enabled = low = calls = 0
     batch_size = max(1, min(40, settings.industry_pulse_classification_batch_size))
     now = datetime.now(UTC)
