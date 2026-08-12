@@ -335,18 +335,29 @@ def _translation_client_and_model():
     )
 
 
-def generate_analysis(title: str, evidence: str, tier: str = "medium", report_type: str | None = None) -> tuple[str, str]:
+def generate_analysis(
+    title: str,
+    evidence: str,
+    tier: str = "medium",
+    report_type: str | None = None,
+    *,
+    fallback_to_translation: bool = False,
+) -> tuple[str, str]:
     client, model = _client_and_model(tier)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": get_system_prompt(report_type)},
-            {
-                "role": "user",
-                "content": f"报告标题：{title}\n报告类型：{report_type or 'general'}\n\n系统采集资料：\n{evidence}",
-            },
-        ],
-    )
+    messages = [
+        {"role": "system", "content": get_system_prompt(report_type)},
+        {
+            "role": "user",
+            "content": f"报告标题：{title}\n报告类型：{report_type or 'general'}\n\n系统采集资料：\n{evidence}",
+        },
+    ]
+    try:
+        response = client.chat.completions.create(model=model, messages=messages)
+    except Exception as exc:
+        if not fallback_to_translation or getattr(exc, "status_code", None) != 503:
+            raise
+        client, model = _translation_client_and_model()
+        response = client.chat.completions.create(model=model, messages=messages)
     return response.choices[0].message.content or "", model
 
 

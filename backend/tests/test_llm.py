@@ -33,6 +33,31 @@ def test_unknown_report_type_uses_safe_default():
     assert "输入未提供" in prompt
 
 
+def test_analysis_falls_back_to_haiku_on_primary_503(monkeypatch):
+    calls = []
+
+    class ServiceUnavailable(RuntimeError):
+        status_code = 503
+
+    def client(model, error=None):
+        class Completions:
+            def create(self, **kwargs):
+                calls.append(kwargs["model"])
+                if error:
+                    raise error
+                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="回退摘要"))])
+
+        return SimpleNamespace(chat=SimpleNamespace(completions=Completions())), model
+
+    monkeypatch.setattr(llm, "_client_and_model", lambda tier: client("gpt-5.6-luna", ServiceUnavailable()))
+    monkeypatch.setattr(llm, "_translation_client_and_model", lambda: client("claude-haiku-4-5-20251001"))
+
+    text, model = llm.generate_analysis("Pulse", "evidence", fallback_to_translation=True)
+
+    assert (text, model) == ("回退摘要", "claude-haiku-4-5-20251001")
+    assert calls == ["gpt-5.6-luna", "claude-haiku-4-5-20251001"]
+
+
 def _news_payload():
     return {
         "summary_zh": "公司公布了新的经营安排。",

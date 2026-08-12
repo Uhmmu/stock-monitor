@@ -34,7 +34,13 @@ def generate_node_narrative(db: Session, *, node_id: int, trading_date: date, no
         row.status = "skipped"
         return {"status": row.status, "model": None}
     try:
-        text, model = generate_analysis(f"Industry Pulse: {node.get('name')}", evidence, tier="medium", report_type="industry_pulse")
+        text, model = generate_analysis(
+            f"Industry Pulse: {node.get('name')}",
+            evidence,
+            tier="medium",
+            report_type="industry_pulse",
+            fallback_to_translation=True,
+        )
         row.summary, row.model, row.status, row.error = text, model, "completed", None
         return {"status": row.status, "model": model, "cached": False}
     except Exception as exc:
