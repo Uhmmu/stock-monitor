@@ -39,6 +39,7 @@
 .industry-pulse-value small.negative{color:var(--down)}
 .industry-sparkline{display:block;width:100%;height:48px;margin:13px 0 7px;overflow:visible}
 .industry-sparkline polyline{stroke:var(--accent);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.industry-chart-axis{stroke:rgba(86,105,128,.38);stroke-width:1;vector-effect:non-scaling-stroke}
 .industry-sparkline-empty{display:grid;height:48px;margin:13px 0 7px;place-items:center;border:1px dashed var(--line);border-radius:9px;color:var(--ink-4);font-size:9px}
 .industry-score-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px}
 .industry-score-grid.four{grid-template-columns:repeat(4,minmax(0,1fr))}

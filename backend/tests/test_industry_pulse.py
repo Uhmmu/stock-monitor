@@ -25,7 +25,7 @@ from app.services.industry_pulse.calculation import calculate_basket_signal, cal
 from app.services.industry_pulse.classification import classify_security
 from app.services.industry_pulse.constituents import ClassificationBatch, MembershipSuggestion, SymbolClassification, _normalize_classification_payload, bootstrap_ai_constituents
 from app.services.industry_pulse.provider import DailyBar, ProviderHistory, fetch_histories
-from app.services.industry_pulse.service import _constituent_health, _fetch_lookback_days, _history_backfill_complete, _merge_history, _pulse_stock_mappings, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, taxonomy_payload
+from app.services.industry_pulse.service import _constituent_health, _fetch_lookback_days, _history_backfill_complete, _merge_history, _pulse_stock_mappings, _snapshot_history_start, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, taxonomy_payload
 
 
 TABLES = [
@@ -99,6 +99,12 @@ def test_incremental_fetch_does_not_redownload_universe_for_few_failures():
     assert _fetch_lookback_days(cached, symbols) == 10
     assert _history_backfill_complete({1, 2}, {1, 2, 3})
     assert not _history_backfill_complete({1, 2}, {1})
+
+
+def test_incremental_snapshot_sync_keeps_twenty_prior_trading_points():
+    days = [date(2026, 7, 1) + timedelta(days=index) for index in range(30)]
+    assert _snapshot_history_start([days[-1]], days) == days[-21]
+    assert _snapshot_history_start(days[-25:], days) == days[-25]
 
 
 def test_current_fallback_rows_override_stale_cached_provider_on_same_date():

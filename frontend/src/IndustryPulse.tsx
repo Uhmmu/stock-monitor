@@ -208,7 +208,7 @@ function Sparkline({ values }: { values: number[] }) {
   if (values.length < 2) return <span className="industry-sparkline-empty">历史不足</span>
   const min = Math.min(...values); const max = Math.max(...values); const span = max - min || 1
   const points = values.map((value, index) => `${(index / Math.max(values.length - 1, 1)) * 100},${30 - ((value - min) / span) * 25}`).join(' ')
-  return <svg className="industry-sparkline" viewBox="0 0 100 32" role="img" aria-label="板块脉冲历史趋势"><polyline points={points} fill="none" vectorEffect="non-scaling-stroke"/></svg>
+  return <svg className="industry-sparkline" viewBox="0 0 100 32" role="img" aria-label="板块脉冲历史趋势"><line x1="0" x2="100" y1="31" y2="31" className="industry-chart-axis"/><polyline points={points} fill="none" vectorEffect="non-scaling-stroke"/></svg>
 }
 
 function PulseCard({ row, onSelect, compact = false }: { row: PulseRow; onSelect: (row: PulseRow) => void; compact?: boolean }) {
@@ -393,7 +393,8 @@ function HistoryChart({ points }: { points: { date: string; value: number }[] })
   if (points.length < 2) return <div className="industry-chart-empty">该范围内历史脉冲不足，系统不会用直线填补缺失日期。</div>
   const min = Math.min(...points.map(point => point.value)); const max = Math.max(...points.map(point => point.value)); const span = max - min || 1
   const coords = points.map((point, index) => `${(index / Math.max(points.length - 1, 1)) * 100},${140 - ((point.value - min) / span) * 120}`).join(' ')
-  return <div className="industry-history-chart"><svg viewBox="0 0 100 150" preserveAspectRatio="none" role="img" aria-label="行业脉冲历史趋势"><line x1="0" x2="100" y1="80" y2="80" className="industry-chart-zero"/><polyline points={coords} className="industry-chart-line"/></svg><div><span>{points[0].date}</span><span>{points[points.length - 1].date}</span></div></div>
+  const ticks = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])]
+  return <div className="industry-history-chart"><svg viewBox="0 0 100 150" preserveAspectRatio="none" role="img" aria-label="行业脉冲历史趋势"><line x1="0" x2="100" y1="80" y2="80" className="industry-chart-zero"/><line x1="0" x2="100" y1="145" y2="145" className="industry-chart-axis"/>{ticks.map(index => <line key={index} x1={(index / (points.length - 1)) * 100} x2={(index / (points.length - 1)) * 100} y1="142" y2="148" className="industry-chart-axis"/>)}<polyline points={coords} className="industry-chart-line"/></svg><div>{ticks.map(index => <span key={index}>{points[index].date}</span>)}</div></div>
 }
 
 function ProxyTable({ rows }: { rows: JsonRecord[] }) {

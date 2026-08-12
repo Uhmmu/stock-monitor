@@ -287,6 +287,10 @@ def _history_backfill_complete(manual_node_ids: set[int], versioned_node_ids: se
     return bool(manual_node_ids and manual_node_ids <= versioned_node_ids)
 
 
+def _snapshot_history_start(trading_days: list[date], all_trading_days: list[date]) -> date:
+    return min(trading_days[0], all_trading_days[max(0, len(all_trading_days) - 21)])
+
+
 def _calculate_node(
     mappings: list[IndustryPulseInstrument], metrics: dict[str, dict[str, Any]], histories: dict[str, list[dict[str, Any]]],
     benchmark_rows: dict[str, list[dict[str, Any]]], day: date,
@@ -496,7 +500,7 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
     snapshot_history: dict[int, list[IndustryPulseSnapshot]] = {node.id: [] for node, _ in mapped_nodes}
     existing_snapshot_by_key: dict[tuple[int, date], IndustryPulseSnapshot] = {}
     if nodes:
-        min_day = trading_days[0] if trading_days else day - timedelta(days=max(5, int(get_settings().industry_pulse_backfill_days) * 2))
+        min_day = _snapshot_history_start(trading_days, all_trading_days)
         existing_snapshots = db.scalars(
             select(IndustryPulseSnapshot).where(
                 IndustryPulseSnapshot.node_id.in_([node.id for node in nodes]),
