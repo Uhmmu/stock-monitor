@@ -31,6 +31,7 @@ from app.services.industry_pulse.classification import classify_security
 from app.services.industry_pulse.constituents import bootstrap_ai_constituents, seed_manual_curated_memberships
 from app.services.industry_pulse.definitions import AI_RELATIONS, AI_TAXONOMY, BASE_TAXONOMY, ETF_REGISTRY, ETF_SYMBOLS, pulse_mappings
 from app.services.industry_pulse.provider import DailyBar, ProviderHistory, fetch_histories
+from app.services.industry_pulse.seed_registry import seed_base_industry_registry
 
 logger = logging.getLogger(__name__)
 CALCULATION_VERSION = "industry_pulse_v3"
@@ -132,7 +133,8 @@ def ensure_seed_data(db: Session) -> dict[str, int]:
             existing.enabled = bool(registry.get("enabled", True)) and bool(mapping.get("enabled", True))
     db.flush()
     manual = seed_manual_curated_memberships(db)
-    return {"nodes": len(rows), "relations": len(AI_RELATIONS), "mappings": mapping_count, "etfs": len(ETF_REGISTRY), **{f"manual_{key}": value for key, value in manual.items()}}
+    base_seed = seed_base_industry_registry(db)
+    return {"nodes": len(rows), "relations": len(AI_RELATIONS), "mappings": mapping_count, "etfs": len(ETF_REGISTRY), **{f"manual_{key}": value for key, value in manual.items()}, **{f"base_seed_{key}": value for key, value in base_seed.items()}}
 
 
 def sync_security_classifications(db: Session) -> dict[str, int]:
@@ -256,7 +258,7 @@ def _stock_mapping_active(mapping: IndustryPulseInstrument, day: date) -> bool:
     settings = get_settings()
     return bool(
         mapping.enabled and mapping.enabled_for_pulse and mapping.instrument_type == "stock"
-        and mapping.mapping_type == "theme_exposure"
+        and (mapping.mapping_type == "theme_exposure" or mapping.classification_source == "MANUAL_CURATED_SEED" and mapping.mapping_type == "primary_industry")
         and mapping.exposure >= settings.industry_pulse_exposure_threshold
         and mapping.confidence >= settings.industry_pulse_constituent_confidence_threshold
         and (mapping.valid_from is None or mapping.valid_from <= day)

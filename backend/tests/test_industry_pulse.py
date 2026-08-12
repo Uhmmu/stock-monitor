@@ -16,7 +16,9 @@ from app.models import (
     IndustryPulseRelation,
     IndustryPulseSnapshot,
     IndustryPulseSyncRun,
+    IndustrySeedReplacementReview,
     Security,
+    SecuritySymbolAlias,
     StockProfile,
     PeerRelation,
     ValuationSnapshot,
@@ -31,6 +33,7 @@ from app.services.industry_pulse.service import _constituent_health, _fetch_look
 TABLES = [
     HistoricalPrice.__table__,
     Security.__table__,
+    SecuritySymbolAlias.__table__,
     StockProfile.__table__,
     CompanyProfile.__table__,
     PeerRelation.__table__,
@@ -38,6 +41,7 @@ TABLES = [
     IndustryPulseNode.__table__,
     IndustryPulseRelation.__table__,
     IndustryPulseInstrument.__table__,
+    IndustrySeedReplacementReview.__table__,
     IndustryPulseClassificationCache.__table__,
     IndustryPulseSnapshot.__table__,
     IndustryPulseFocusSignal.__table__,
@@ -174,15 +178,14 @@ def test_seed_is_idempotent_and_overview_is_base_sectors_only(db):
 
 def test_security_classification_persists_base_and_separate_theme_mappings(db):
     ensure_seed_data(db)
-    db.add(Security(display_symbol="MSFT", yahoo_symbol="MSFT"))
-    db.commit()
+    assert db.query(Security).filter_by(yahoo_symbol="MSFT").one()
     result = sync_security_classifications(db)
     db.commit()
     rows = db.query(IndustryPulseInstrument).filter_by(ticker="MSFT", instrument_type="stock").all()
-    assert result["classified"] == 1
+    assert result["classified"] >= 1
     assert any(row.mapping_type == "primary_industry" for row in rows)
     assert any(row.mapping_type == "theme_exposure" for row in rows)
-    assert all(row.role == "reference" for row in rows)
+    assert all(row.role == "reference" for row in rows if row.mapping_type == "theme_exposure")
 
 
 def test_pulse_deltas_require_exact_prior_trading_points(db):

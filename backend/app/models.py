@@ -2183,6 +2183,9 @@ class IndustryPulseInstrument(Base):
     provider_symbol: Mapped[str | None] = mapped_column(String(32))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     classification_source: Mapped[str] = mapped_column(String(24), default="PROVIDER", index=True)
+    seed_version: Mapped[int | None] = mapped_column(Integer, index=True)
+    slot: Mapped[int | None] = mapped_column(Integer)
+    basket_quality: Mapped[str | None] = mapped_column(String(16))
     source_etf: Mapped[str | None] = mapped_column(String(32))
     constituent_role: Mapped[str | None] = mapped_column(String(24))
     enabled_for_pulse: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -2193,6 +2196,27 @@ class IndustryPulseInstrument(Base):
     last_trading_date: Mapped[date | None] = mapped_column(Date)
     data_quality: Mapped[float | None] = mapped_column(Float)
     error_code: Mapped[str | None] = mapped_column(String(64))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class IndustrySeedReplacementReview(Base):
+    __tablename__ = "industry_seed_replacement_reviews"
+    __table_args__ = (UniqueConstraint("seed_version", "leaf_code", "old_symbol", name="uq_industry_seed_replacement_review"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    seed_version: Mapped[int] = mapped_column(Integer, index=True)
+    leaf_code: Mapped[str] = mapped_column(String(16), index=True)
+    leaf_name: Mapped[str] = mapped_column(String(256))
+    old_symbol: Mapped[str] = mapped_column(String(32), index=True)
+    reason: Mapped[str] = mapped_column(Text)
+    last_valid_date: Mapped[date | None] = mapped_column(Date)
+    remaining_constituents: Mapped[list] = mapped_column(JSON, default=list)
+    suggested_candidates: Mapped[list] = mapped_column(JSON, default=list)
+    suggestion_reason: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(32), default="PENDING_REVIEW", index=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
