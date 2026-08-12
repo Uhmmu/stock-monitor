@@ -17,6 +17,7 @@ from app.models import (
     IndustryPulseSnapshot,
     IndustryPulseSyncRun,
     IndustrySeedReplacementReview,
+    MarketDataSyncState,
     Security,
     SecuritySymbolAlias,
     StockProfile,
@@ -27,7 +28,7 @@ from app.services.industry_pulse.calculation import calculate_basket_signal, cal
 from app.services.industry_pulse.classification import classify_security
 from app.services.industry_pulse.constituents import ClassificationBatch, MembershipSuggestion, SymbolClassification, _normalize_classification_payload, bootstrap_ai_constituents
 from app.services.industry_pulse.provider import DailyBar, ProviderHistory, fetch_histories
-from app.services.industry_pulse.service import _constituent_health, _fetch_lookback_days, _history_backfill_complete, _merge_history, _pulse_stock_mappings, _snapshot_history_start, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, taxonomy_payload
+from app.services.industry_pulse.service import _constituent_health, _fetch_lookback_days, _history_backfill_complete, _merge_history, _pulse_stock_mappings, _rollup_base_hierarchy, _snapshot_history_start, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, system_status_payload, taxonomy_payload
 
 
 TABLES = [
@@ -42,6 +43,7 @@ TABLES = [
     IndustryPulseRelation.__table__,
     IndustryPulseInstrument.__table__,
     IndustrySeedReplacementReview.__table__,
+    MarketDataSyncState.__table__,
     IndustryPulseClassificationCache.__table__,
     IndustryPulseSnapshot.__table__,
     IndustryPulseFocusSignal.__table__,
@@ -84,7 +86,39 @@ def test_yfinance_incremental_refresh_uses_short_batch_period(monkeypatch):
     calls = []
     monkeypatch.setattr(provider.yf, "download", lambda **kwargs: calls.append(kwargs) or provider.pd.DataFrame())
     provider.fetch_yfinance_batch(["SPY"], days=45)
-    assert calls[0]["period"] == "3mo"
+    assert "period" not in calls[0]
+    assert (date.fromisoformat(calls[0]["end"]) - date.fromisoformat(calls[0]["start"])).days == 46
+
+
+def test_yfinance_batches_are_bounded_deduplicated_and_jittered(monkeypatch):
+    from app.services.industry_pulse import provider
+    calls, sleeps = [], []
+
+    def primary(symbols, days):
+        calls.append(tuple(symbols))
+        return {symbol: ProviderHistory(symbol, bars=_bars(30), provider="yfinance", status="success", volume_available=True) for symbol in symbols}
+
+    monkeypatch.setattr(provider.time, "sleep", sleeps.append)
+    result = fetch_histories([f"S{i}" for i in range(130)] + ["S0"], days=30, yfinance_fetcher=primary)
+    assert [len(batch) for batch in calls] == [50, 50, 30]
+    assert len(result) == 130 and len(sleeps) == 2
+
+
+def test_yfinance_network_failure_has_bounded_backoff(monkeypatch):
+    from app.services.industry_pulse import provider
+    calls, sleeps = [], []
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        if len(calls) < 3:
+            raise TimeoutError("temporary")
+        return provider.pd.DataFrame()
+
+    monkeypatch.setattr(provider.yf, "download", download)
+    monkeypatch.setattr(provider.time, "sleep", sleeps.append)
+    provider.fetch_yfinance_batch(["SPY"], days=30)
+    assert len(calls) == 3 and len(sleeps) == 2
+    assert calls[0]["threads"] is False
 
 
 def test_incremental_bars_merge_with_full_persisted_history(db):
@@ -174,6 +208,7 @@ def test_seed_is_idempotent_and_overview_is_base_sectors_only(db):
     taxonomy_nodes = taxonomy_payload(db)["nodes"]
     assert all(node["taxonomy"] == "base" for node in taxonomy_nodes)
     assert next(node for node in taxonomy_nodes if node["id"] == sector.id)["pulse"] == 70
+    assert system_status_payload(db)["replacement_pending"] == 21
 
 
 def test_security_classification_persists_base_and_separate_theme_mappings(db):
@@ -198,6 +233,24 @@ def test_pulse_deltas_require_exact_prior_trading_points(db):
     row = _upsert_snapshot(db, node.id, date(2026, 8, 10), {"pulse": 70, "coverage_quality": .8, "confidence": .7, "components": {}}, metrics={}, benchmark={}, previous=prior[-1], prior_rows=prior)
     assert row.change_5d == 20
     assert row.change_20d is None
+
+
+def test_base_hierarchy_rolls_leaves_into_group_then_sector(db):
+    sector = IndustryPulseNode(taxonomy="base", node_key="base.s", name="Sector", level="sector")
+    db.add(sector); db.flush()
+    group = IndustryPulseNode(taxonomy="base", node_key="base.s.g", name="Group", level="group", parent_id=sector.id)
+    db.add(group); db.flush()
+    leaves = [IndustryPulseNode(taxonomy="base", node_key=f"base.s.g.l{i}", name=f"Leaf {i}", level="leaf", parent_id=group.id) for i in range(2)]
+    db.add_all(leaves); db.flush()
+    day = date(2026, 8, 10)
+    snapshots = {}
+    for index, leaf in enumerate(leaves):
+        row = IndustryPulseSnapshot(node_id=leaf.id, trading_date=day, pulse=60 + index * 20, breadth_score=50 + index * 20, coverage_quality=1, confidence=.8, calculation_version="test")
+        db.add(row); db.flush(); snapshots[(leaf.id, day)] = row
+    rows = _rollup_base_hierarchy(db, [sector, group, *leaves], day, snapshots, {})
+    assert len(rows) == 2
+    assert snapshots[(group.id, day)].pulse == snapshots[(sector.id, day)].pulse == 70
+    assert snapshots[(sector.id, day)].metrics_json["proxy_mode"] == "CHILD_AGGREGATE"
 
 
 def test_focus_and_ai_payloads_flatten_quality_and_change_fields(db):

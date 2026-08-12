@@ -22,16 +22,22 @@ from app.models import (
     IndustryPulseRelation,
     IndustryPulseSnapshot,
     IndustryPulseSyncRun,
+    IndustrySeedReplacementReview,
+    MarketDataSyncState,
     CompanyProfile,
     Security,
     StockProfile,
 )
-from app.services.industry_pulse.calculation import calculate_basket_signal, calculate_composite, calculate_etf_metrics, calculate_focus, calculate_hybrid_composite, detect_regime
+from app.services.industry_pulse.calculation import calculate_basket_signal, calculate_composite, calculate_etf_metrics, calculate_focus, calculate_hybrid_composite, classify_mood, detect_regime
 from app.services.industry_pulse.classification import classify_security
 from app.services.industry_pulse.constituents import bootstrap_ai_constituents, seed_manual_curated_memberships
 from app.services.industry_pulse.definitions import AI_RELATIONS, AI_TAXONOMY, BASE_TAXONOMY, ETF_REGISTRY, ETF_SYMBOLS, pulse_mappings
-from app.services.industry_pulse.provider import DailyBar, ProviderHistory, fetch_histories
+from app.services.industry_pulse.provider import DailyBar, ProviderHistory
 from app.services.industry_pulse.seed_registry import seed_base_industry_registry
+from app.services.industry_pulse.synthetic import persist_leaf_indexes
+from app.services.market_data_coordinator import sync_global_market_data
+from app.services.market_calendar import expected_latest_market_session
+from app.services.market_data_repository import upsert_history
 
 logger = logging.getLogger(__name__)
 CALCULATION_VERSION = "industry_pulse_v3"
@@ -208,21 +214,7 @@ def sync_security_classifications(db: Session) -> dict[str, int]:
 
 
 def _upsert_history(db: Session, ticker: str, history: ProviderHistory, existing_cache: dict[tuple[str, str, date], HistoricalPrice] | None = None) -> int:
-    inserted = 0
-    if not history.bars or not history.provider:
-        return inserted
-    existing_by_date = {day: row for (symbol, source, day), row in (existing_cache or {}).items() if symbol == ticker and source == history.provider} if existing_cache is not None else {row.date: row for row in db.scalars(select(HistoricalPrice).where(HistoricalPrice.symbol == ticker, HistoricalPrice.source == history.provider)).all()}
-    for bar in history.bars:
-        row = existing_by_date.get(bar.date)
-        if row is None:
-            row = HistoricalPrice(symbol=ticker, date=bar.date, source=history.provider)
-            db.add(row)
-            if existing_cache is not None:
-                existing_cache[(ticker, history.provider, bar.date)] = row
-            inserted += 1
-            existing_by_date[bar.date] = row
-        row.open, row.high, row.low, row.close, row.volume = bar.open, bar.high, bar.low, bar.close, bar.volume
-    return inserted
+    return upsert_history(db, ticker, history, existing_cache)
 
 
 def _history_rows(db: Session, ticker: str, source: str | None = None) -> list[dict[str, Any]]:
@@ -240,7 +232,7 @@ def _stored_history_payload(rows: list[HistoricalPrice]) -> list[dict[str, Any]]
         current = chosen.get(row.date)
         if current is None or priority.get(row.source, 99) < priority.get(current.source, 99):
             chosen[row.date] = row
-    return [{"date": row.date, "open": float(row.open), "high": float(row.high), "low": float(row.low), "close": float(row.close), "volume": row.volume} for row in (chosen[day] for day in sorted(chosen))]
+    return [{"date": row.date, "open": float(row.open), "high": float(row.high), "low": float(row.low), "close": float(row.close), "adjusted_close": float(row.adjusted_close) if row.adjusted_close is not None else None, "volume": row.volume} for row in (chosen[day] for day in sorted(chosen))]
 
 
 def _merge_history(stored: list[dict[str, Any]], fresh: list[DailyBar]) -> list[dict[str, Any]]:
@@ -302,7 +294,7 @@ def _calculate_node(
     basket_signal = calculate_basket_signal(
         {mapping.ticker: histories.get(mapping.ticker, []) for mapping in stocks},
         [_mapping_payload(mapping) for mapping in stocks], benchmark_rows=benchmark_rows.get("SPY"), qqq_rows=benchmark_rows.get("QQQ"), as_of=day,
-        minimum_constituents=settings.industry_pulse_min_constituents,
+        minimum_constituents=4 if any(mapping.classification_source == "MANUAL_CURATED_SEED" for mapping in stocks) else settings.industry_pulse_min_constituents,
         minimum_coverage=settings.industry_pulse_min_effective_coverage,
         single_stock_max_weight=settings.industry_pulse_single_stock_max_weight,
         top_three_max_weight=settings.industry_pulse_top_three_max_weight,
@@ -378,6 +370,40 @@ def _upsert_snapshot(
     return row
 
 
+def _rollup_base_hierarchy(
+    db: Session,
+    nodes: list[IndustryPulseNode],
+    day: date,
+    snapshots: dict[tuple[int, date], IndustryPulseSnapshot],
+    history: dict[int, list[IndustryPulseSnapshot]],
+) -> list[dict[str, Any]]:
+    """Aggregate 229 leaves into 50 groups and then 11 sectors."""
+    output: list[dict[str, Any]] = []
+    for level in ("group", "sector"):
+        for node in (row for row in nodes if row.taxonomy == "base" and row.level == level):
+            children = [row for row in nodes if row.parent_id == node.id]
+            child_snapshots = [snapshots.get((child.id, day)) for child in children]
+            valid = [row for row in child_snapshots if row and row.pulse is not None]
+            if not valid:
+                continue
+            def average(field: str) -> float | None:
+                values = [(float(value), float(row.coverage_quality or 0)) for row in valid if (value := getattr(row, field)) is not None]
+                total = sum(weight for _value, weight in values)
+                return sum(value * weight for value, weight in values) / total if total else None
+            coverage = sum(float(row.coverage_quality or 0) for row in valid) / max(1, len(children))
+            composite = {
+                "pulse": average("pulse"), "heat": average("heat"), "risk": average("risk"),
+                "coverage_quality": coverage, "confidence": average("confidence"), "proxy_mode": "CHILD_AGGREGATE",
+                "components": {name: average(f"{name}_score") for name in ("trend", "relative_strength", "volume", "momentum", "breadth", "consensus")},
+            }
+            composite["mood"] = classify_mood(composite["pulse"], composite["heat"], composite["risk"], composite["components"]["breadth"], composite["components"]["consensus"])
+            prior = [item for item in history.get(node.id, []) if item.trading_date < day]
+            snapshot = _upsert_snapshot(db, node.id, day, composite, metrics={"proxy_mode": "CHILD_AGGREGATE", "child_nodes": [child.node_key for child in children], "available_children": len(valid)}, benchmark={}, previous=prior[-1] if prior else None, prior_rows=prior, snapshot_cache=snapshots)
+            snapshots[(node.id, day)] = snapshot
+            output.append({"node_id": node.id, "node_key": node.node_key, "pulse": snapshot.pulse, "change_5d": snapshot.change_5d, "relative_strength": snapshot.relative_strength_score, "volume_score": snapshot.volume_score, "volume_z": None, "heat": snapshot.heat, "risk": snapshot.risk, "direction": snapshot.direction, "mood": snapshot.mood, "coverage_quality": snapshot.coverage_quality, "confidence": snapshot.confidence, "metrics_json": snapshot.metrics_json})
+    return output
+
+
 def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "scheduled") -> dict[str, Any]:
     """Fetch, calculate and commit numeric snapshots before optional AI work."""
     started = perf_counter()
@@ -401,17 +427,28 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
         mappings_by_ticker.setdefault(mapping.ticker, []).append(mapping)
     pulse_symbols = set(ETF_SYMBOLS)
     pulse_symbols.update(mapping.ticker for mapping in all_mappings if mapping.enabled and mapping.enabled_for_pulse and mapping.instrument_type == "stock")
+    market_sync = sync_global_market_data(db, symbols=pulse_symbols)
     stored_prices = db.scalars(select(HistoricalPrice).where(HistoricalPrice.symbol.in_(list(pulse_symbols)))).all()
-    stored_price_cache = {(row.symbol, row.source, row.date): row for row in stored_prices}
-    cached_dates: dict[str, set[date]] = {}
+    states = {row.symbol: row for row in db.scalars(select(MarketDataSyncState).where(MarketDataSyncState.symbol.in_(pulse_symbols))).all()}
+    stored_by_ticker: dict[str, list[HistoricalPrice]] = {}
     for row in stored_prices:
-        cached_dates.setdefault(row.symbol, set()).add(row.date)
-    fetch_days = _fetch_lookback_days(cached_dates, pulse_symbols)
-    histories = fetch_histories(sorted(pulse_symbols), days=fetch_days)
+        stored_by_ticker.setdefault(row.symbol, []).append(row)
+    stored_history_by_ticker = {ticker: _stored_history_payload(stored_by_ticker.get(ticker, [])) for ticker in pulse_symbols}
+    histories: dict[str, ProviderHistory] = {}
+    for ticker in pulse_symbols:
+        state = states.get(ticker)
+        rows = stored_history_by_ticker.get(ticker, [])
+        histories[ticker] = ProviderHistory(
+            ticker=ticker,
+            bars=[DailyBar(date=row["date"], open=row["open"], high=row["high"], low=row["low"], close=row["close"], volume=row["volume"], adjusted_close=row.get("adjusted_close")) for row in rows],
+            provider=state.provider if state and rows else None,
+            status="success" if state and state.freshness_status == "FRESH" else "degraded" if rows else "unavailable",
+            error_code=state.error_code if state else None,
+            volume_available=any(row.get("volume") is not None for row in rows),
+            total_rows=len(rows),
+        )
     run.etf_total = len(ETF_SYMBOLS)
     for ticker, history in histories.items():
-        if history.provider:
-            _upsert_history(db, ticker, history, stored_price_cache)
         for mapping in mappings_by_ticker.get(ticker, []):
             metadata = dict(mapping.metadata_json or {})
             failures = 0 if history.bars else int(metadata.get("consecutive_data_failures") or 0) + 1
@@ -427,17 +464,14 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
             mapping.last_trading_date = history.bars[-1].date if history.bars else None
             mapping.data_quality = history.data_quality
             mapping.error_code = history.error_code
-        if history.status == "success": run.yfinance_success += 1
-        elif history.status == "fallback": run.finnhub_fallback += 1
-        elif not history.bars: run.failed += 1
+    run.yfinance_success = int(market_sync["valid"]) - int(market_sync["finnhub_recovered"])
+    run.finnhub_fallback = int(market_sync["finnhub_recovered"])
+    run.failed = int(market_sync["failed"])
     db.flush()
-    stored_by_ticker: dict[str, list[HistoricalPrice]] = {}
-    for row in stored_price_cache.values():
-        stored_by_ticker.setdefault(row.symbol, []).append(row)
-    stored_history_by_ticker = {ticker: _stored_history_payload(stored_by_ticker.get(ticker, [])) for ticker in pulse_symbols}
     history_rows_by_ticker: dict[str, list[dict[str, Any]]] = {}
     for ticker, history in histories.items():
         history_rows_by_ticker[ticker] = _merge_history(stored_history_by_ticker.get(ticker, []), history.bars)
+    synthetic_indexes = persist_leaf_indexes(db, history_rows_by_ticker, as_of=requested_day)
     benchmark_rows = {ticker: history_rows_by_ticker.get(ticker, []) for ticker in ("SPY", "QQQ")}
     benchmark_days = [row["date"] for row in benchmark_rows.get("SPY", []) if row.get("date") and row["date"] <= requested_day]
     if not benchmark_days:
@@ -534,6 +568,10 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
             existing_snapshot_by_key[(node.id, calc_day)] = snapshot
             if snapshot not in snapshot_history.setdefault(node.id, []):
                 snapshot_history[node.id].append(snapshot)
+        for rolled in _rollup_base_hierarchy(db, nodes, calc_day, existing_snapshot_by_key, snapshot_history):
+            rolled_snapshot = existing_snapshot_by_key[(rolled["node_id"], calc_day)]
+            if rolled_snapshot not in snapshot_history.setdefault(rolled["node_id"], []):
+                snapshot_history[rolled["node_id"]].append(rolled_snapshot)
     db.flush()
     current_rows: list[dict[str, Any]] = []
     previous_by_node: dict[int, dict[str, Any]] = {}
@@ -568,6 +606,9 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
         if snapshot not in snapshot_history.setdefault(node.id, []):
             snapshot_history[node.id].append(snapshot)
         current_rows.append({"node_id": node.id, "node_key": node.node_key, "pulse": snapshot.pulse, "change_5d": snapshot.change_5d, "relative_strength": snapshot.relative_strength_score, "volume_score": snapshot.volume_score, "volume_z": metrics.get("volume_z"), "heat": snapshot.heat, "risk": snapshot.risk, "direction": snapshot.direction, "mood": snapshot.mood, "coverage_quality": snapshot.coverage_quality, "confidence": snapshot.confidence, "metrics_json": metrics})
+    rolled_up = _rollup_base_hierarchy(db, nodes, day, existing_snapshot_by_key, snapshot_history)
+    rolled_ids = {row["node_id"] for row in rolled_up}
+    current_rows = [row for row in current_rows if row["node_id"] not in rolled_ids] + rolled_up
     db.flush()
     focus_signals = calculate_focus(current_rows, previous_by_node)
     db.execute(delete(IndustryPulseFocusSignal).where(IndustryPulseFocusSignal.trading_date == day))
@@ -590,7 +631,7 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
     for mapping in all_mappings:
         if mapping.classification_source == "MANUAL_CURATED_SEED":
             health_counts[mapping.health_status] = health_counts.get(mapping.health_status, 0) + 1
-    return {"status": run.status, "run_id": run.id, "trading_date": day.isoformat(), "etf_total": run.etf_total, "constituent_total": len(pulse_symbols - set(ETF_SYMBOLS)), "manual_seed_memberships": len(manual_rows), "unique_ticker_count": len(manual_symbols), "valid_ticker_count": len(valid_symbols), "invalid_ticker_count": len(invalid_symbols), "temporary_data_failures": len(temporary_symbols), "yfinance_success": run.yfinance_success, "finnhub_fallback": run.finnhub_fallback, "failed": run.failed, "health_counts": health_counts, "sector_calculated": run.sector_calculated, "sector_unavailable": run.sector_unavailable, "focus_signal_count": run.focus_signal_count, "duration_ms": run.duration_ms, "bootstrap": bootstrap}
+    return {"status": run.status, "run_id": run.id, "trading_date": day.isoformat(), "etf_total": run.etf_total, "constituent_total": len(pulse_symbols - set(ETF_SYMBOLS)), "manual_seed_memberships": len(manual_rows), "unique_ticker_count": len(manual_symbols), "valid_ticker_count": len(valid_symbols), "invalid_ticker_count": len(invalid_symbols), "temporary_data_failures": len(temporary_symbols), "yfinance_success": run.yfinance_success, "finnhub_fallback": run.finnhub_fallback, "failed": run.failed, "health_counts": health_counts, "sector_calculated": run.sector_calculated, "sector_unavailable": run.sector_unavailable, "focus_signal_count": run.focus_signal_count, "synthetic_indexes": synthetic_indexes, "duration_ms": run.duration_ms, "bootstrap": bootstrap}
 
 
 def _score_weights() -> dict[str, float]:
@@ -623,7 +664,9 @@ def _snapshot_payload(db: Session, snapshot: IndustryPulseSnapshot, node: Indust
     node = node or db.get(IndustryPulseNode, snapshot.node_id)
     metrics = snapshot.metrics_json or {}
     basket = metrics.get("basket") or {}
-    return {"node_id": snapshot.node_id, "node_key": node.node_key if node else None, "name": node.name if node else None, "name_zh": node.name_zh if node else None, "taxonomy": node.taxonomy if node else None, "trading_date": snapshot.trading_date.isoformat(), "pulse": snapshot.pulse, "mood": snapshot.mood, "regime": snapshot.regime, "heat": snapshot.heat, "risk": snapshot.risk, "change": {"1d": snapshot.change_1d, "5d": snapshot.change_5d, "20d": snapshot.change_20d}, "change_1d": snapshot.change_1d, "change_5d": snapshot.change_5d, "change_20d": snapshot.change_20d, "rank": None, "confidence": snapshot.confidence, "coverage_quality": snapshot.coverage_quality, "data_quality": snapshot.data_quality, "direction": snapshot.direction, "trend_score": snapshot.trend_score, "relative_strength_score": snapshot.relative_strength_score, "volume_score": snapshot.volume_score, "momentum_score": snapshot.momentum_score, "breadth_score": snapshot.breadth_score, "consensus_score": snapshot.consensus_score, "proxy_mode": metrics.get("proxy_mode") or "DIRECT_ETF", "constituent_count": basket.get("valid_constituents", 0), "breadth": basket.get("breadth") or {}, "calculation_status": "READY" if snapshot.pulse is not None else "INSUFFICIENT_COVERAGE", "components": {"trend": snapshot.trend_score, "relative_strength": snapshot.relative_strength_score, "volume": snapshot.volume_score, "momentum": snapshot.momentum_score, "breadth": snapshot.breadth_score, "consensus": snapshot.consensus_score}}
+    expected = expected_latest_market_session()
+    freshness = "FRESH" if expected and snapshot.trading_date >= expected else "STALE"
+    return {"node_id": snapshot.node_id, "node_key": node.node_key if node else None, "name": node.name if node else None, "name_zh": node.name_zh if node else None, "taxonomy": node.taxonomy if node else None, "trading_date": snapshot.trading_date.isoformat(), "pulse": snapshot.pulse, "mood": snapshot.mood, "regime": snapshot.regime, "heat": snapshot.heat, "risk": snapshot.risk, "change": {"1d": snapshot.change_1d, "5d": snapshot.change_5d, "20d": snapshot.change_20d}, "change_1d": snapshot.change_1d, "change_5d": snapshot.change_5d, "change_20d": snapshot.change_20d, "rank": None, "confidence": snapshot.confidence, "coverage_quality": snapshot.coverage_quality, "data_quality": snapshot.data_quality, "freshness": freshness, "direction": snapshot.direction, "trend_score": snapshot.trend_score, "relative_strength_score": snapshot.relative_strength_score, "volume_score": snapshot.volume_score, "momentum_score": snapshot.momentum_score, "breadth_score": snapshot.breadth_score, "consensus_score": snapshot.consensus_score, "proxy_mode": metrics.get("proxy_mode") or "DIRECT_ETF", "constituent_count": basket.get("valid_constituents", 0), "breadth": basket.get("breadth") or {}, "calculation_status": "READY" if snapshot.pulse is not None else "INSUFFICIENT_COVERAGE", "components": {"trend": snapshot.trend_score, "relative_strength": snapshot.relative_strength_score, "volume": snapshot.volume_score, "momentum": snapshot.momentum_score, "breadth": snapshot.breadth_score, "consensus": snapshot.consensus_score}}
 
 
 def overview_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
@@ -674,6 +717,23 @@ def taxonomy_payload(db: Session) -> dict[str, Any]:
     latest_dates = select(IndustryPulseSnapshot.node_id, func.max(IndustryPulseSnapshot.trading_date).label("trading_date")).where(IndustryPulseSnapshot.node_id.in_(node_ids)).group_by(IndustryPulseSnapshot.node_id).subquery()
     snapshots = {snapshot.node_id: snapshot for snapshot in db.scalars(select(IndustryPulseSnapshot).join(latest_dates, and_(IndustryPulseSnapshot.node_id == latest_dates.c.node_id, IndustryPulseSnapshot.trading_date == latest_dates.c.trading_date))).all()} if node_ids else {}
     return {"nodes": [{"id": row.id, "node_key": row.node_key, "name": row.name, "name_zh": row.name_zh, "taxonomy": row.taxonomy, "level": row.level, "parent_id": row.parent_id, "metadata": row.metadata_json or {}, **(_snapshot_payload(db, snapshots[row.id], row) if row.id in snapshots else {})} for row in rows]}
+
+
+def system_status_payload(db: Session) -> dict[str, Any]:
+    states = db.scalars(select(MarketDataSyncState)).all()
+    freshness: dict[str, int] = {}
+    priorities: dict[str, int] = {}
+    for row in states:
+        freshness[row.freshness_status] = freshness.get(row.freshness_status, 0) + 1
+        priorities[row.priority] = priorities.get(row.priority, 0) + 1
+    latest = db.scalar(select(IndustryPulseSyncRun).order_by(IndustryPulseSyncRun.started_at.desc()).limit(1))
+    pending = db.scalar(select(func.count()).select_from(IndustrySeedReplacementReview).where(IndustrySeedReplacementReview.status == "PENDING_REVIEW")) or 0
+    return {"market_data": {"total": len(states), "freshness": freshness, "priorities": priorities}, "replacement_pending": pending, "latest_run": {"status": latest.status, "started_at": latest.started_at, "finished_at": latest.finished_at, "failed": latest.failed} if latest else None}
+
+
+def replacement_reviews_payload(db: Session) -> dict[str, Any]:
+    rows = db.scalars(select(IndustrySeedReplacementReview).order_by(IndustrySeedReplacementReview.leaf_code, IndustrySeedReplacementReview.old_symbol)).all()
+    return {"items": [{"leaf_code": row.leaf_code, "leaf_name": row.leaf_name, "old_symbol": row.old_symbol, "reason": row.reason, "last_valid_date": row.last_valid_date, "remaining_constituents": row.remaining_constituents, "suggested_candidates": row.suggested_candidates, "suggestion_reason": row.suggestion_reason, "confidence": row.confidence, "status": row.status} for row in rows], "count": len(rows)}
 
 
 def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
@@ -835,7 +895,7 @@ def node_detail_payload(db: Session, node_id: int, range_days: int = 30) -> dict
     latest_day = db.scalar(select(func.max(IndustryPulseSnapshot.trading_date)).where(IndustryPulseSnapshot.node_id == node_id))
     since = (latest_day or date.today()) - timedelta(days=range_days)
     snapshots = db.scalars(select(IndustryPulseSnapshot).where(IndustryPulseSnapshot.node_id == node_id, IndustryPulseSnapshot.trading_date >= since).order_by(IndustryPulseSnapshot.trading_date.asc())).all()
-    mappings = db.scalars(select(IndustryPulseInstrument).where(IndustryPulseInstrument.node_id == node_id, IndustryPulseInstrument.enabled.is_(True))).all()
+    mappings = db.scalars(select(IndustryPulseInstrument).where(IndustryPulseInstrument.node_id == node_id)).all()
     latest = snapshots[-1] if snapshots else None
     composite = _snapshot_payload(db, latest) if latest else None
     node_payload = {"id": node.id, "node_key": node.node_key, "name": node.name, "name_zh": node.name_zh, "taxonomy": node.taxonomy, "level": node.level, "parent_id": node.parent_id, **(composite or {})}
@@ -847,13 +907,17 @@ def node_detail_payload(db: Session, node_id: int, range_days: int = 30) -> dict
     basket = metrics.get("basket") or {}
     basket_members = {row.get("ticker"): row for row in basket.get("members", [])}
     breadth_members = {row.get("ticker"): row for row in (basket.get("breadth") or {}).get("constituents", [])}
+    market_states = {row.symbol: row for row in db.scalars(select(MarketDataSyncState).where(MarketDataSyncState.symbol.in_([mapping.ticker for mapping in mappings]))).all()}
     constituents = []
     for row in mappings:
-        if row.instrument_type != "stock" or row.mapping_type != "theme_exposure":
+        if row.instrument_type != "stock" or row.mapping_type not in {"theme_exposure", "primary_industry"}:
             continue
-        constituents.append({"ticker": row.ticker, "role": row.constituent_role, "sub_role": (row.metadata_json or {}).get("sub_role"), "purity": row.purity, "exposure": row.exposure, "confidence": row.confidence, "weight": (basket_members.get(row.ticker) or {}).get("weight"), "classification_source": row.classification_source, "audit_status": (row.metadata_json or {}).get("audit_status"), "validation_status": (row.metadata_json or {}).get("seed_validation_status"), "health_status": row.health_status, "short_reason": (row.metadata_json or {}).get("short_reason"), "enabled_for_pulse": row.enabled_for_pulse, "valid_from": row.valid_from.isoformat() if row.valid_from else None, "valid_to": row.valid_to.isoformat() if row.valid_to else None, **(breadth_members.get(row.ticker) or {})})
-    etfs = [{"ticker": row.ticker, "role": row.role, "mapping_type": row.mapping_type, "purity": row.purity, "exposure": row.exposure, "confidence": row.confidence, "health_status": row.health_status, "data_quality": row.data_quality} for row in mappings if row.mapping_type == "etf_proxy"]
+        state = market_states.get(row.ticker)
+        stats = breadth_members.get(row.ticker) or {}
+        weight = (basket_members.get(row.ticker) or {}).get("weight", .2 if row.classification_source == "MANUAL_CURATED_SEED" else None)
+        constituents.append({"ticker": row.ticker, "slot": row.slot, "role": row.constituent_role, "sub_role": (row.metadata_json or {}).get("sub_role"), "purity": row.purity, "exposure": row.exposure, "confidence": row.confidence, "weight": weight, "classification_source": row.classification_source, "audit_status": (row.metadata_json or {}).get("audit_status"), "validation_status": (row.metadata_json or {}).get("seed_validation_status"), "health_status": "PENDING_REPLACEMENT" if not row.enabled else row.health_status, "freshness": state.freshness_status if state else "MISSING", "latest_date": state.latest_market_date.isoformat() if state and state.latest_market_date else None, "short_reason": (row.metadata_json or {}).get("short_reason"), "enabled_for_pulse": row.enabled_for_pulse, "valid_from": row.valid_from.isoformat() if row.valid_from else None, "valid_to": row.valid_to.isoformat() if row.valid_to else None, **stats, "contribution_5d": float(stats.get("return_5d") or 0) * float(weight or 0)})
+    etfs = [{"ticker": row.ticker, "role": row.role, "mapping_type": row.mapping_type, "purity": row.purity, "exposure": row.exposure, "confidence": row.confidence, "health_status": row.health_status, "data_quality": row.data_quality} for row in mappings if row.mapping_type == "etf_proxy" and row.enabled]
     return {"node": node_payload, "proxy_mode": metrics.get("proxy_mode") or "DIRECT_ETF", "etfs": etfs, "constituents": constituents, "breadth": basket.get("breadth") or {}, "metrics": metrics, "composite": composite, "history": [_snapshot_payload(db, row) for row in snapshots], "mood": latest.mood if latest else "unavailable", "benchmark": latest.benchmark_json if latest else {}, "relative_strength": relative, "ai_summary": narrative.summary if narrative else None, "ai_summary_meta": {"model": narrative.model, "status": narrative.status} if narrative else None}
 
 
-__all__ = ["ai_chain_payload", "ensure_seed_data", "focus_payload", "node_detail_payload", "overview_payload", "sync_pulse", "taxonomy_payload"]
+__all__ = ["ai_chain_payload", "ensure_seed_data", "focus_payload", "node_detail_payload", "overview_payload", "replacement_reviews_payload", "sync_pulse", "system_status_payload", "taxonomy_payload"]

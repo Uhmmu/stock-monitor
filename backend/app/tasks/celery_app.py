@@ -156,6 +156,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.celery_app.ensure_portfolio_analysis_fresh",
         "schedule": 3600,
     },
+    "sync-global-market-data": {
+        "task": "app.tasks.celery_app.sync_global_market_data",
+        "schedule": 3600,
+    },
     "sync-industry-pulse-due": {
         "task": "app.tasks.celery_app.ensure_industry_pulse_fresh",
         "schedule": 1800,
@@ -2350,6 +2354,20 @@ def sync_industry_pulse():
                 lock.release()
             except Exception:
                 logger.debug("Industry Pulse Redis lock release failed", exc_info=True)
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_global_market_data")
+def sync_global_market_data_task(full_backfill: bool = False):
+    """Shared P0/P1/P2 daily-price update; each batch commits its checkpoint."""
+    from app.services.industry_pulse.service import ensure_seed_data
+    from app.services.market_data_coordinator import sync_global_market_data
+
+    with SessionLocal() as db:
+        ensure_seed_data(db)
+        db.commit()
+        if db.get_bind().dialect.name == "postgresql" and not db.scalar(select(func.pg_try_advisory_xact_lock(81730122))):
+            return {"status": "running"}
+        return {"status": "completed", **sync_global_market_data(db, full_backfill=full_backfill)}
 
 
 @celery_app.task(name="app.tasks.celery_app.ensure_industry_pulse_fresh")

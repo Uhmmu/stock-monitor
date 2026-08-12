@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.integrations.ibkr.db_models import IbkrAccountDailyPerformance
-from app.models import Portfolio
+from app.models import HistoricalPrice, Portfolio
 from app.services.portfolio.investment_ledger import latest_authoritative_run
 
 
@@ -37,6 +37,14 @@ def _close_points(symbol: str, start_date: date) -> tuple[tuple[date, float] | N
             continue
         if close > 0 and close == close:
             points.append((day, close))
+    return (points[0], points[-1]) if points else (None, None)
+
+
+def _stored_close_points(db: Session, symbol: str, start_date: date) -> tuple[tuple[date, float] | None, tuple[date, float] | None]:
+    rows = db.execute(select(HistoricalPrice.date, HistoricalPrice.close).where(
+        HistoricalPrice.symbol == symbol, HistoricalPrice.source == "yahoo", HistoricalPrice.date >= start_date,
+    ).order_by(HistoricalPrice.date)).all()
+    points = [(row.date, float(row.close)) for row in rows if row.close and float(row.close) > 0]
     return (points[0], points[-1]) if points else (None, None)
 
 
@@ -77,7 +85,9 @@ def build_benchmark_comparison(portfolio: Portfolio, db: Session | None = None) 
     rows = []
     for symbol, name in BENCHMARKS:
         try:
-            start, latest = _close_points(symbol, start_date)
+            start, latest = _stored_close_points(db, symbol, start_date) if isinstance(db, Session) else (None, None)
+            if start is None or latest is None:
+                start, latest = _close_points(symbol, start_date)
         except Exception:
             start = latest = None
         if start is None or latest is None:

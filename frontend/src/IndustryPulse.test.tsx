@@ -17,10 +17,10 @@ describe('行业板块检测', () => {
   it('规范化行业节点并保留三类独立分数', () => {
     const row = normalizePulseRow({
       id: 'semis', name_zh: '半导体', pulse_score: 88, delta_5d: 4.5,
-      strength_score: 90, heat_score: 82, risk_score: 61,
+      strength_score: 90, heat_score: 82, risk_score: 61, change_20d: 9.2, freshness: 'FRESH',
       children: [{ id: 'chips', name: '芯片', pulse: 77 }],
     })
-    expect(row).toMatchObject({ id: 'semis', name: '半导体', pulse: 88, change5d: 4.5, strength: 90, heat: 82, risk: 61 })
+    expect(row).toMatchObject({ id: 'semis', name: '半导体', pulse: 88, change5d: 4.5, change20d: 9.2, strength: 90, heat: 82, risk: 61, freshness: 'FRESH' })
     expect(row.children[0]).toMatchObject({ id: 'chips', name: '芯片', pulse: 77 })
   })
 

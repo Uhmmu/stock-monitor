@@ -31,7 +31,7 @@ def _rows(rows: Iterable[Any], as_of: date | None = None) -> list[dict[str, Any]
                 day = date.fromisoformat(day[:10])
             except ValueError:
                 continue
-        close = _num(values.get("close"))
+        close = _num(values.get("adjusted_close")) or _num(values.get("close"))
         if not isinstance(day, date) or close is None or close <= 0:
             continue
         if as_of is not None and day > as_of:

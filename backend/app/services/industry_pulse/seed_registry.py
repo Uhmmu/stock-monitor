@@ -20,6 +20,22 @@ def load_seed_registry() -> dict:
     return json.loads((DATA_DIR / "leaf_industry_seed_registry.v1.json").read_text())
 
 
+def seed_audit_report() -> dict:
+    registry = load_seed_registry()
+    rows = []
+    for leaf in registry["leaves"]:
+        if leaf.get("basket_quality") not in {"LOW", "MEDIUM"}:
+            continue
+        pending = [member["ticker"] for member in leaf["memberships"] if not member.get("enabled", True)]
+        rows.append({
+            "leaf_code": leaf["leaf_code"], "leaf_node_id": leaf["taxonomy_node_id"],
+            "basket_quality": leaf["basket_quality"], "notes": leaf.get("notes"),
+            "validation_note": leaf.get("validation_note"), "members": [member["ticker"] for member in leaf["memberships"]],
+            "pending_replacement": pending, "suggested_candidates": [], "status": "REVIEW_REQUIRED" if pending else "AUDIT_ONLY",
+        })
+    return {"seed_version": SEED_VERSION, "count": len(rows), "items": rows, "automatic_membership_changes": False}
+
+
 def _day(value: str | None) -> date | None:
     return date.fromisoformat(value) if value else None
 
@@ -55,12 +71,17 @@ def seed_base_industry_registry(db: Session) -> dict[str, int]:
     created_securities = 0
     universe_by_symbol = {row["ticker"].upper(): row for row in registry["unique_universe"]}
     for symbol, source in universe_by_symbol.items():
+        validation = source.get("market_data_validation") or {}
         security = securities.get(symbol)
         if security is None:
             security = Security(
                 display_symbol=symbol,
                 local_symbol=symbol,
                 yahoo_symbol=symbol,
+                exchange_code=validation.get("exchange"),
+                exchange_name=validation.get("exchange"),
+                currency=validation.get("currency"),
+                market="FOREIGN" if source.get("market_data_status") == "FOREIGN_MARKET" else "US",
                 yahoo_status="available" if source["market_data_status"] in {"VALID", "FOREIGN_MARKET"} else "unavailable",
                 finnhub_status="unknown",
                 mapping_method="manual_seed_registry",
@@ -68,6 +89,11 @@ def seed_base_industry_registry(db: Session) -> dict[str, int]:
             db.add(security)
             securities[symbol] = security
             created_securities += 1
+        else:
+            security.exchange_code = security.exchange_code or validation.get("exchange")
+            security.exchange_name = security.exchange_name or validation.get("exchange")
+            security.currency = security.currency or validation.get("currency")
+            security.market = security.market or ("FOREIGN" if source.get("market_data_status") == "FOREIGN_MARKET" else "US")
     db.flush()
 
     existing_aliases = {(row.provider, row.symbol): row for row in db.scalars(select(SecuritySymbolAlias)).all()}

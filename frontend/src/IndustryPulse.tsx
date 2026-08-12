@@ -18,9 +18,11 @@ export type PulseRow = {
   heat: number | null
   risk: number | null
   change5d: number | null
+  change20d: number | null
   mood: string | null
   confidence: number | string | null
   coverage: number | string | null
+  freshness: string | null
   breadth: number | null
   relativeStrength: number | null
   proxyMode: string | null
@@ -138,9 +140,11 @@ export function normalizePulseRow(value: unknown, index = 0): PulseRow {
     heat: score(scoreValue(raw, ['heat', 'heat_score', 'temperature'])),
     risk: score(scoreValue(raw, ['risk', 'risk_score'])),
     change5d: rowChange(raw),
+    change20d: asNumber(first(raw.change_20d, asRecord(raw.change)['20d'])),
     mood: asText(first(raw.mood, raw.regime, raw.status, raw.direction)),
     confidence: scalarValue(first(raw.confidence, raw.confidence_score, raw.data_confidence), ['confidence', 'score', 'value', 'level']) as number | string | null ?? null,
     coverage: scalarValue(first(raw.coverage, raw.coverage_quality, raw.data_quality, raw.coverage_percent), ['quality', 'coverage', 'value', 'percent', 'level']) as number | string | null ?? null,
+    freshness: asText(first(raw.freshness, raw.freshness_status)),
     breadth: score(scoreValue(raw, ['breadth', 'breadth_score', 'breadth_percent'])),
     relativeStrength: score(scoreValue(raw, ['relative_strength', 'relative_strength_score', 'rs_score', 'rs'])),
     proxyMode: asText(first(raw.proxy_mode, raw.proxyMode)),
@@ -217,7 +221,7 @@ function PulseCard({ row, onSelect, compact = false }: { row: PulseRow; onSelect
     <div className="industry-pulse-value"><strong>{scoreText(row.pulse)}</strong><span>Pulse</span><small className={row.change5d == null ? '' : row.change5d >= 0 ? 'positive' : 'negative'}>{signedText(row.change5d)} · 5D</small></div>
     {!compact && <Sparkline values={row.sparkline}/>}
     <div className="industry-proxy-chips">{row.proxyEtfs.length ? row.proxyEtfs.map(ticker => <span key={ticker}>{ticker}</span>) : <span>{proxyLabel(row.proxyMode)}</span>}</div>
-    <footer><span>{moodText(row.mood)}</span><span>{coverageText(row.coverage)} · {confidenceText(row.confidence)}</span></footer>
+    <footer><span>{moodText(row.mood)}{row.freshness ? ` · ${row.freshness}` : ''}</span><span>{coverageText(row.coverage)} · {confidenceText(row.confidence)}</span></footer>
   </button>
 }
 
@@ -404,9 +408,12 @@ function ProxyTable({ rows }: { rows: JsonRecord[] }) {
 
 function ConstituentTable({ rows }: { rows: JsonRecord[] }) {
   if (!rows.length) return <div className="industry-chart-empty">当前节点没有达到分类与覆盖门槛的股票篮子。</div>
-  return <div className="industry-constituent-table"><div className="industry-constituent-head"><span>股票</span><span>产业链角色</span><span>权重</span><span>数据状态</span></div>{rows.map((row, index) => {
+  return <div className="industry-constituent-table"><div className="industry-constituent-head"><span>股票 / 日期</span><span>5D / 20D / RS</span><span>权重 / 贡献</span><span>趋势 / 量能 / 状态</span></div>{rows.map((row, index) => {
     const weight = asNumber(row.weight)
-    return <div className="industry-constituent-row" key={`${String(first(row.ticker, index))}-${index}`}><b>{String(first(row.ticker, '—'))}</b><span>{String(first(row.role, '—'))}<small>{String(first(row.sub_role, row.classification_source, '—'))}</small></span><span>{weight == null ? '—' : `${(weight * 100).toFixed(1)}%`}</span><span>{String(first(row.health_status, row.validation_status, '数据不足'))}</span></div>
+    const r5 = asNumber(row.return_5d); const r20 = asNumber(row.return_20d); const rs = asNumber(row.rs_20d); const contribution = asNumber(row.contribution_5d)
+    const ma = row.above_ma20 === true && row.above_ma50 === true ? 'MA20/50 上方' : row.above_ma20 === true ? 'MA20 上方' : '均线下方/不足'
+    const volume = asNumber(row.relative_volume)
+    return <div className="industry-constituent-row" key={`${String(first(row.ticker, index))}-${index}`}><b>{String(first(row.ticker, '—'))}<small>{String(first(row.latest_date, '日期不足'))}</small></b><span>{signedText(r5)} / {signedText(r20)}<small>RS {rs == null ? '不足' : rs.toFixed(1)}</small></span><span>{weight == null ? '—' : `${(weight * 100).toFixed(1)}%`}<small>贡献 {signedText(contribution)}</small></span><span>{ma}<small>量能 {volume == null ? '不足' : `${volume.toFixed(2)}×`} · {String(first(row.health_status, row.freshness, '数据不足'))}</small></span></div>
   })}</div>
 }
 
@@ -422,7 +429,7 @@ function NodeDetail({ selected, range, onRange, onClose }: { selected: PulseRow 
   return <Sheet open={selected !== null} onClose={onClose} title={selected?.name || '行业板块详情'} size="wide">
     {!selected ? null : detail.isLoading ? <LoadingState text="正在读取板块详情…"/> : detail.isError ? <ErrorState text="板块详情暂时无法读取。"/> : data && <article className="industry-node-detail">
       <div className="industry-node-heading"><div><p>NODE DETAIL · CACHED SNAPSHOT</p><h2>{data.node.name}</h2><p>{data.node.code || '行业节点'} · 只读数据；页面不会触发 AI 或外部行情请求。</p>{themeBasket(data.node) && <span className="industry-theme-label">Theme Basket · 主题篮子</span>}</div><div className="industry-node-facts"><span><b>{configuredConstituents == null || validConstituents == null ? '数据不足' : `${validConstituents} / ${configuredConstituents}`}</b><small>篮子覆盖</small></span><span><b>{confidenceText(basketConfidence)}</b><small>篮子置信度</small></span></div></div>
-      <div className="industry-detail-facts"><div><span>趋势强度</span><b>{scoreText(data.node.pulse)}</b></div><div><span>5 日变化</span><b>{signedText(data.node.change5d)}</b></div><div><span>当前方向</span><b>{moodText(data.node.mood)}</b></div><div><span>映射方式</span><b>{proxyLabel(data.proxyMode)}</b><small>{basketQuality == null ? '覆盖不足' : `${coverageText(basketQuality as number | string | null)} · ${basketHistory == null ? '历史不足' : `${basketHistory} 日历史`}`}</small></div></div>
+      <div className="industry-detail-facts"><div><span>趋势强度</span><b>{scoreText(data.node.pulse)}</b></div><div><span>5D / 20D</span><b>{signedText(data.node.change5d)} / {signedText(data.node.change20d)}</b></div><div><span>广度 / RS</span><b>{scoreText(data.node.breadth)} / {scoreText(data.node.relativeStrength)}</b></div><div><span>Heat / Risk</span><b>{scoreText(data.node.heat)} / {scoreText(data.node.risk)}</b><small>{moodText(data.node.mood)} · {data.node.freshness || '新鲜度不足'}</small></div><div><span>映射方式</span><b>{proxyLabel(data.proxyMode)}</b><small>{basketQuality == null ? '覆盖不足' : `${coverageText(basketQuality as number | string | null)} · ${basketHistory == null ? '历史不足' : `${basketHistory} 日历史`}`}</small></div></div>
       <div className="industry-detail-toolbar"><div role="tablist" aria-label="历史范围">{(['30', '90', '365'] as PulseRange[]).map(value => <button type="button" role="tab" aria-selected={range === value} className={range === value ? 'active' : ''} onClick={() => onRange(value)} key={value}>{value}D</button>)}</div><small>按已保存的 Pulse 快照计算</small></div>
       <section className="industry-detail-section"><div className="industry-section-heading"><div><p>PULSE HISTORY</p><h3>历史状态与趋势</h3></div><small>{data.history.length} 个有效点</small></div><HistoryChart points={data.history}/></section>
       <section className="industry-detail-section"><div className="industry-section-heading"><div><p>EXTERNAL CONFIRMATION</p><h3>外部 ETF 确认</h3></div><small>不替代代表性股票篮子</small></div><ProxyTable rows={data.etfs}/></section>
@@ -452,15 +459,21 @@ export function IndustryPulse({ enabled = true }: { enabled?: boolean }) {
   const aiChain = useQuery({ queryKey: ['industry-pulse', 'ai-chain'], queryFn: () => api<unknown>('/industry-pulse/ai-chain'), staleTime: 5 * 60_000, enabled: enabled && view === 'ai-chain' })
   const focus = useQuery({ queryKey: ['industry-pulse', 'focus'], queryFn: () => api<unknown>('/industry-pulse/focus'), staleTime: 5 * 60_000, enabled: enabled && view === 'focus' })
   const taxonomy = useQuery({ queryKey: ['industry-pulse', 'taxonomy'], queryFn: () => api<unknown>('/industry-pulse/taxonomy'), staleTime: 10 * 60_000, enabled: enabled && view === 'taxonomy' })
+  const status = useQuery({ queryKey: ['industry-pulse', 'status'], queryFn: () => api<unknown>('/industry-pulse/status'), staleTime: 5 * 60_000, enabled })
   const generatedAt = useMemo(() => {
     const value = asText(first(asRecord(overview.data).generated_at, asRecord(overview.data).as_of, asRecord(overview.data).updated_at))
     if (!value) return null
     const parsed = new Date(value)
     return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString('zh-CN') : '时间不足'
   }, [overview.data])
+  const marketStatus = asRecord(asRecord(status.data).market_data)
+  const freshness = asRecord(marketStatus.freshness)
+  const freshCount = asNumber(freshness.FRESH) ?? 0
+  const marketTotal = asNumber(marketStatus.total) ?? 0
+  const replacementPending = asNumber(asRecord(status.data).replacement_pending) ?? 0
   const showDetail = (row: PulseRow) => { setRange('90'); setSelected(row) }
   return <div className="industry-pulse-page">
-    <div className="industry-page-heading"><div><p className="eyebrow">INDUSTRY / SECTOR PULSE</p><h2>行业板块检测</h2><p>用已保存的代表性股票篮子、外部 ETF 确认和确定性指标，观察板块强弱、变化速度与 AI 产业链扩散。</p></div><span className="industry-readonly-badge">只读快照{generatedAt ? ` · ${generatedAt}` : ''}</span></div>
+    <div className="industry-page-heading"><div><p className="eyebrow">INDUSTRY / SECTOR PULSE</p><h2>行业板块检测</h2><p>用已保存的代表性股票篮子、外部 ETF 确认和确定性指标，观察板块强弱、变化速度与 AI 产业链扩散。</p></div><span className="industry-readonly-badge">只读快照{generatedAt ? ` · ${generatedAt}` : ''}{marketTotal ? ` · 行情 ${freshCount}/${marketTotal} fresh` : ''}{replacementPending ? ` · ${replacementPending} 待人工替换` : ''}</span></div>
     <div className="industry-view-tabs" role="tablist" aria-label="行业板块视图">{VIEW_TABS.map(([key, label]) => <button type="button" role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} onClick={() => setView(key)} key={key}>{label}</button>)}</div>
     {view === 'overview' && <OverviewView data={overview.data} loading={overview.isLoading} error={overview.isError} onSelect={showDetail}/>}
     {view === 'ai-chain' && <AIChainView data={aiChain.data} loading={aiChain.isLoading} error={aiChain.isError} onSelect={showDetail}/>}

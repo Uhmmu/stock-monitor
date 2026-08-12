@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import IndustryPulseInstrument, IndustryPulseNode, IndustrySeedReplacementReview, Security, SecuritySymbolAlias
 from app.services.industry_pulse.definitions import BASE_LEAVES
-from app.services.industry_pulse.seed_registry import seed_base_industry_registry
+from app.services.industry_pulse.seed_registry import seed_audit_report, seed_base_industry_registry
 
 
 DATA = Path(__file__).parents[1] / "app/services/industry_pulse/data"
@@ -32,6 +32,10 @@ def test_canonical_seed_registry_and_lifecycle_invariants():
     assert all({"previous_symbol", "current_symbol", "symbol_change_date", "change_reason"} <= row.keys() for row in registry["symbol_lifecycle"])
     assert len(replacements["items"]) == replacements["count"] == 21
     assert all(len(row["current_other_4_constituents"]) == 4 for row in replacements["items"])
+    audit = seed_audit_report()
+    assert audit["count"] == 50
+    assert {row["basket_quality"] for row in audit["items"]} == {"LOW", "MEDIUM"}
+    assert audit["automatic_membership_changes"] is False
 
 
 def test_seed_registry_persistence_is_idempotent_and_preserves_disabled_history():

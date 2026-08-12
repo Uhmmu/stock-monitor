@@ -8,7 +8,7 @@ import logging
 import math
 import os
 from collections import defaultdict
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from statistics import mean
 from typing import Any, Iterable
@@ -835,6 +835,10 @@ def _upsert_history(db: Session, rows: list[dict]) -> tuple[int, int]:
 def sync_fallback_history(db: Session, symbol: str, *, today: date | None = None) -> dict:
     """yfinance 回退：仅当 FMP 无法提供该标的历史时使用。拉取日线 EOD 并 upsert 到 source=yahoo。"""
     value = symbol.upper()
+    local = list(db.scalars(select(HistoricalPrice).where(HistoricalPrice.symbol == value, HistoricalPrice.source == "yahoo").order_by(HistoricalPrice.date)).all())
+    if len(local) >= 400 and local[-1].date >= (today or datetime.now(UTC).date()) - timedelta(days=4):
+        analysis = generate_for_symbol(db, value)
+        return {"received": 0, "changed": 0, "analysis": analysis, "reused_shared_history": True}
     rows = fetch_daily_history(value, today=today)
     total, changed = _upsert_history(db, rows)
     db.commit()

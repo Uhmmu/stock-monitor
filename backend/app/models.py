@@ -450,11 +450,36 @@ class HistoricalPrice(Base):
     high: Mapped[float] = mapped_column(Numeric(20, 6))
     low: Mapped[float] = mapped_column(Numeric(20, 6))
     close: Mapped[float] = mapped_column(Numeric(20, 6))
+    adjusted_close: Mapped[float | None] = mapped_column(Numeric(20, 6))
     volume: Mapped[int | None] = mapped_column(BigInteger)
     vwap: Mapped[float | None] = mapped_column(Numeric(20, 6))
     change: Mapped[float | None] = mapped_column(Numeric(20, 6))
     change_percent: Mapped[float | None] = mapped_column(Numeric(16, 6))
     source: Mapped[str] = mapped_column(String(16), default="fmp")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class MarketDataSyncState(Base):
+    """Freshness/checkpoint state for the shared daily-price repository."""
+    __tablename__ = "market_data_sync_states"
+    __table_args__ = (
+        CheckConstraint("priority IN ('P0', 'P1', 'P2')", name="ck_market_data_sync_states_priority"),
+        CheckConstraint("failure_count >= 0", name="ck_market_data_sync_states_failure_count"),
+    )
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id", ondelete="SET NULL"), index=True)
+    priority: Mapped[str] = mapped_column(String(2), default="P2", index=True)
+    latest_market_date: Mapped[date | None] = mapped_column(Date, index=True)
+    last_fetch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider: Mapped[str | None] = mapped_column(String(16))
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    freshness_status: Mapped[str] = mapped_column(String(32), default="MISSING", index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -2218,6 +2243,29 @@ class IndustrySeedReplacementReview(Base):
     confidence: Mapped[float | None] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(32), default="PENDING_REVIEW", index=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class IndustrySyntheticIndex(Base):
+    """Transparent equal-weight daily index for one canonical base leaf."""
+    __tablename__ = "industry_synthetic_indexes"
+    __table_args__ = (
+        UniqueConstraint("node_id", "trading_date", name="uq_industry_synthetic_indexes_node_date"),
+        Index("ix_industry_synthetic_indexes_node_date", "node_id", "trading_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    node_id: Mapped[int] = mapped_column(ForeignKey("industry_pulse_nodes.id", ondelete="CASCADE"), index=True)
+    trading_date: Mapped[date] = mapped_column(Date, index=True)
+    index_value: Mapped[float | None] = mapped_column(Float)
+    daily_return: Mapped[float | None] = mapped_column(Float)
+    valid_constituents: Mapped[int] = mapped_column(Integer)
+    expected_constituents: Mapped[int] = mapped_column(Integer, default=5)
+    coverage_quality: Mapped[float] = mapped_column(Float)
+    calculation_status: Mapped[str] = mapped_column(String(32), index=True)
+    metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    methodology_version: Mapped[str] = mapped_column(String(32), default="equal_weight_v1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

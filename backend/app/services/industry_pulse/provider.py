@@ -12,7 +12,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 import logging
 import math
+import random
+import time
 from typing import Any, Callable
+from urllib.error import HTTPError
 
 import pandas as pd
 import yfinance as yf
@@ -30,6 +33,7 @@ class DailyBar:
     low: float
     close: float
     volume: int | None
+    adjusted_close: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -38,6 +42,7 @@ class DailyBar:
             "high": self.high,
             "low": self.low,
             "close": self.close,
+            "adjusted_close": self.adjusted_close,
             "volume": self.volume,
         }
 
@@ -103,6 +108,7 @@ def _normalise_rows(rows: Any) -> list[DailyBar]:
         high = _finite(lowered.get("high"))
         low = _finite(lowered.get("low"))
         close = _finite(lowered.get("close"))
+        adjusted_close = _finite(lowered.get("adj_close") or lowered.get("adjusted_close") or lowered.get("adjclose"))
         if day is None or None in (open_, high, low, close) or min(open_, high, low, close) <= 0:
             continue
         if high < low or open_ < low or open_ > high or close < low or close > high:
@@ -112,7 +118,7 @@ def _normalise_rows(rows: Any) -> list[DailyBar]:
             volume = int(float(volume_value)) if volume_value is not None and math.isfinite(float(volume_value)) else None
         except (TypeError, ValueError, OverflowError):
             volume = None
-        result.append(DailyBar(day, open_, high, low, close, volume))
+        result.append(DailyBar(day, open_, high, low, close, volume, adjusted_close))
     result.sort(key=lambda item: item.date)
     deduped: dict[date, DailyBar] = {item.date: item for item in result}
     return [deduped[day] for day in sorted(deduped)]
@@ -143,19 +149,31 @@ def fetch_yfinance_batch(tickers: list[str] | tuple[str, ...], days: int = 500) 
     try:
         kwargs = {
             "tickers": list(symbols),
-            "period": "3mo" if days <= 60 else "2y",
             "interval": "1d",
             "group_by": "ticker",
             "auto_adjust": False,
             "progress": False,
-            "threads": True,
+            "threads": False,
             "timeout": get_settings().industry_pulse_provider_timeout_seconds,
         }
-        try:
-            frame = yf.download(**kwargs)
-        except TypeError:
-            kwargs.pop("threads", None)
-            frame = yf.download(**kwargs)
+        if days <= 60:
+            kwargs.update(start=(datetime.now(UTC).date() - timedelta(days=days)).isoformat(), end=(datetime.now(UTC).date() + timedelta(days=1)).isoformat())
+        else:
+            kwargs["period"] = "2y"
+        frame = None
+        for attempt in range(3):
+            try:
+                try:
+                    frame = yf.download(**kwargs)
+                except TypeError:
+                    kwargs.pop("threads", None)
+                    frame = yf.download(**kwargs)
+                break
+            except Exception as exc:
+                if attempt == 2:
+                    raise
+                logger.info("Industry Pulse yfinance batch retry=%s error=%s", attempt + 1, type(exc).__name__)
+                time.sleep(min(8.0, 2 ** attempt + random.uniform(.25, .75)))
         for ticker in symbols:
             raw = _frame_for_ticker(frame, ticker)
             total_rows = int(len(raw.index)) if isinstance(raw, pd.DataFrame) else 0
@@ -194,6 +212,8 @@ def fetch_finnhub_history(ticker: str, days: int = 500) -> ProviderHistory:
                 total_rows=len(bars),
             )
         return ProviderHistory(ticker=ticker, status="unavailable", error_code="empty_response")
+    except HTTPError as exc:
+        return ProviderHistory(ticker=ticker, status="unavailable", error_code="PROVIDER_PERMISSION_DENIED" if exc.code == 403 else f"HTTP_{exc.code}")
     except Exception as exc:
         return ProviderHistory(ticker=ticker, status="unavailable", error_code=type(exc).__name__)
 
@@ -204,24 +224,28 @@ def fetch_histories(
     days: int | None = None,
     yfinance_fetcher: Callable[[list[str] | tuple[str, ...], int], dict[str, ProviderHistory]] | None = None,
     finnhub_fetcher: Callable[[str, int], ProviderHistory] | None = None,
+    finnhub_blocked: set[str] | None = None,
 ) -> dict[str, ProviderHistory]:
     """Fetch all symbols with per-symbol fallback and no fake partial rows."""
     settings = get_settings()
-    lookback = max(30, int(days or settings.industry_pulse_history_days))
+    lookback = max(10, int(days or settings.industry_pulse_history_days))
     symbols = tuple(dict.fromkeys(str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()))
     fetch_primary = yfinance_fetcher or fetch_yfinance_batch
-    batch_size = max(1, int(settings.industry_pulse_yfinance_batch_size))
+    batch_size = min(60, max(40, int(settings.industry_pulse_yfinance_batch_size)))
     primary: dict[str, ProviderHistory] = {}
     for offset in range(0, len(symbols), batch_size):
         primary.update(fetch_primary(symbols[offset : offset + batch_size], lookback))
+        if offset + batch_size < len(symbols):
+            time.sleep(random.uniform(.4, 1.2))
     fallback = finnhub_fetcher or fetch_finnhub_history
     fallback_symbols: list[str] = []
     for ticker in symbols:
         current = primary.get(ticker) or ProviderHistory(ticker=ticker)
-        needs_fallback = not current.bars or len(current.bars) < min(252, lookback) or not current.volume_available
-        if needs_fallback:
+        required = min(252, max(5, int(lookback * .6)))
+        needs_fallback = not current.bars or len(current.bars) < required or not current.volume_available
+        if needs_fallback and ticker not in (finnhub_blocked or set()):
             fallback_symbols.append(ticker)
-    with ThreadPoolExecutor(max_workers=min(4, len(fallback_symbols) or 1)) as pool:
+    with ThreadPoolExecutor(max_workers=min(2, len(fallback_symbols) or 1)) as pool:
         alternates = dict(zip(fallback_symbols, pool.map(lambda ticker: fallback(ticker, lookback), fallback_symbols)))
     for ticker, alternate in alternates.items():
         current = primary.get(ticker) or ProviderHistory(ticker=ticker)
@@ -229,7 +253,7 @@ def fetch_histories(
             primary[ticker] = alternate
         elif current.bars:
             current.status = "degraded"
-            current.error_code = "history_insufficient" if len(current.bars) < min(252, lookback) else "volume_missing"
+            current.error_code = "history_insufficient" if len(current.bars) < required else "volume_missing"
     return {ticker: primary.get(ticker, ProviderHistory(ticker=ticker)) for ticker in symbols}
 
 

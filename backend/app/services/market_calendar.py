@@ -22,6 +22,13 @@ def market_status(moment: datetime | None = None) -> dict:
     return {"is_open": is_open, "session": session, "checked_at": now.isoformat()}
 
 
+def expected_latest_market_session(moment: datetime | None = None):
+    """Most recent NYSE session whose regular close has completed."""
+    now = pd.Timestamp((moment or datetime.now(UTC)).astimezone(UTC))
+    position = _calendar.schedule["close"].searchsorted(now, side="right") - 1
+    return _calendar.schedule.index[position].date() if position >= 0 else None
+
+
 def market_data_collection_status(moment: datetime | None = None) -> dict:
     """US quote collection window including Yahoo pre/post-market sessions."""
     now = (moment or datetime.now(UTC)).astimezone(UTC)

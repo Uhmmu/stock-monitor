@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import IndustryPulseNode, User
-from app.services.industry_pulse.service import ai_chain_payload, focus_payload, node_detail_payload, overview_payload, taxonomy_payload
+from app.services.industry_pulse.seed_registry import seed_audit_report
+from app.services.industry_pulse.service import ai_chain_payload, focus_payload, node_detail_payload, overview_payload, replacement_reviews_payload, system_status_payload, taxonomy_payload
 
 router = APIRouter(prefix="/api/industry-pulse", dependencies=[Depends(get_current_user)])
 
@@ -36,6 +37,21 @@ def industry_pulse_ai_chain(range: Literal["30", "90", "365"] = Query("30"), db:
 @router.get("/taxonomy")
 def industry_pulse_taxonomy(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     return taxonomy_payload(db)
+
+
+@router.get("/status")
+def industry_pulse_status(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return system_status_payload(db)
+
+
+@router.get("/replacement-reviews")
+def industry_pulse_replacement_reviews(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return replacement_reviews_payload(db)
+
+
+@router.get("/seed-audit")
+def industry_pulse_seed_audit(user: User = Depends(get_current_user)):
+    return seed_audit_report()
 
 
 @router.get("/nodes/{node_id}")
