@@ -453,7 +453,7 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
             metadata = dict(mapping.metadata_json or {})
             failures = 0 if history.bars else int(metadata.get("consecutive_data_failures") or 0) + 1
             metadata["consecutive_data_failures"] = failures
-            no_history = not cached_dates.get(ticker)
+            no_history = not history.bars
             mapping.health_status = _constituent_health(history, failures, no_history=no_history, manual_seed=mapping.classification_source == "MANUAL_CURATED_SEED")
             if mapping.classification_source == "MANUAL_CURATED_SEED":
                 metadata["seed_validation_status"] = "VALID" if history.bars else mapping.health_status
