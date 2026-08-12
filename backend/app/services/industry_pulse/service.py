@@ -428,12 +428,28 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
     pulse_symbols = set(ETF_SYMBOLS)
     pulse_symbols.update(mapping.ticker for mapping in all_mappings if mapping.enabled and mapping.enabled_for_pulse and mapping.instrument_type == "stock")
     market_sync = sync_global_market_data(db, symbols=pulse_symbols)
-    stored_prices = db.scalars(select(HistoricalPrice).where(HistoricalPrice.symbol.in_(list(pulse_symbols)))).all()
     states = {row.symbol: row for row in db.scalars(select(MarketDataSyncState).where(MarketDataSyncState.symbol.in_(pulse_symbols))).all()}
-    stored_by_ticker: dict[str, list[HistoricalPrice]] = {}
-    for row in stored_prices:
-        stored_by_ticker.setdefault(row.symbol, []).append(row)
-    stored_history_by_ticker = {ticker: _stored_history_payload(stored_by_ticker.get(ticker, [])) for ticker in pulse_symbols}
+    priority = {"yfinance": 0, "yahoo": 0, "finnhub": 1, "fmp": 2}
+    stored: dict[str, dict[date, tuple[int, dict[str, Any]]]] = {}
+    price_rows = db.execute(select(
+        HistoricalPrice.symbol, HistoricalPrice.date, HistoricalPrice.open,
+        HistoricalPrice.high, HistoricalPrice.low, HistoricalPrice.close,
+        HistoricalPrice.adjusted_close, HistoricalPrice.volume, HistoricalPrice.source,
+    ).where(HistoricalPrice.symbol.in_(list(pulse_symbols)))).yield_per(5000)
+    for row in price_rows:
+        rank = priority.get(row.source, 99)
+        chosen = stored.setdefault(row.symbol, {})
+        if row.date not in chosen or rank < chosen[row.date][0]:
+            chosen[row.date] = (rank, {
+                "date": row.date, "open": float(row.open), "high": float(row.high),
+                "low": float(row.low), "close": float(row.close),
+                "adjusted_close": float(row.adjusted_close) if row.adjusted_close is not None else None,
+                "volume": row.volume,
+            })
+    stored_history_by_ticker = {
+        ticker: [item[1] for _day, item in sorted(stored.pop(ticker, {}).items())]
+        for ticker in pulse_symbols
+    }
     histories: dict[str, ProviderHistory] = {}
     for ticker in pulse_symbols:
         state = states.get(ticker)

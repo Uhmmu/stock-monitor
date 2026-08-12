@@ -90,7 +90,6 @@ def persist_leaf_indexes(db: Session, histories: dict[str, list[dict]], *, as_of
             if row is None:
                 row = IndustrySyntheticIndex(node_id=leaf.id, trading_date=point["date"])
                 db.add(row)
-                existing[key] = row
             row.index_value = point["index_value"]
             row.daily_return = point["daily_return"]
             row.valid_constituents = point["valid_constituents"]
@@ -107,5 +106,5 @@ def persist_leaf_indexes(db: Session, histories: dict[str, list[dict]], *, as_of
         ready += int(status == "READY")
         degraded += int(status == "DEGRADED")
         insufficient += int(status == "INSUFFICIENT_COVERAGE")
-    db.flush()
+        db.flush()
     return {"leaf_count": len(leaves), "written": written, "ready": ready, "degraded": degraded, "insufficient": insufficient}
