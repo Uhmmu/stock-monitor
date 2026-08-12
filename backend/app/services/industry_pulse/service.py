@@ -629,6 +629,15 @@ def overview_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
     rows = db.scalars(select(IndustryPulseSnapshot).join(IndustryPulseNode, IndustryPulseNode.id == IndustryPulseSnapshot.node_id).where(IndustryPulseSnapshot.trading_date == day, IndustryPulseNode.taxonomy == "base", IndustryPulseNode.level == "sector")).all()
     payload = [_snapshot_payload(db, row) for row in rows]
     sector_ids = [row.node_id for row in rows]
+    proxies: dict[int, list[str]] = {}
+    if sector_ids:
+        for mapping in db.scalars(select(IndustryPulseInstrument).where(
+            IndustryPulseInstrument.node_id.in_(sector_ids),
+            IndustryPulseInstrument.enabled.is_(True),
+            IndustryPulseInstrument.mapping_type == "etf_proxy",
+        )).all():
+            if mapping.ticker not in proxies.setdefault(mapping.node_id, []):
+                proxies[mapping.node_id].append(mapping.ticker)
     history_by_node: dict[int, list[dict[str, Any]]] = {}
     if sector_ids:
         history_rows = db.scalars(select(IndustryPulseSnapshot).where(IndustryPulseSnapshot.node_id.in_(sector_ids), IndustryPulseSnapshot.trading_date >= day - timedelta(days=range_days)).order_by(IndustryPulseSnapshot.trading_date)).all()
@@ -636,6 +645,7 @@ def overview_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
             history_by_node.setdefault(row.node_id, []).append({"trading_date": row.trading_date.isoformat(), "pulse": row.pulse})
     for item in payload:
         item["history"] = history_by_node.get(item["node_id"], [])
+        item["proxy_etfs"] = proxies.get(item["node_id"], [])
     payload.sort(key=lambda item: (item["pulse"] is None, -(item["pulse"] or 0)))
     for rank, item in enumerate(payload, 1): item["rank"] = rank
     return {"as_of": day.isoformat(), "range_days": range_days, "sectors": payload, "rows": payload, "status": "ready"}
@@ -674,6 +684,14 @@ def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
             history_by_node.setdefault(row.node_id, []).append(row)
     children: dict[int | None, list[IndustryPulseNode]] = {}
     for row in nodes: children.setdefault(row.parent_id, []).append(row)
+    proxies: dict[int, list[str]] = {}
+    for mapping in db.scalars(select(IndustryPulseInstrument).where(
+        IndustryPulseInstrument.node_id.in_([node.id for node in nodes]),
+        IndustryPulseInstrument.enabled.is_(True),
+        IndustryPulseInstrument.mapping_type == "etf_proxy",
+    )).all():
+        if mapping.ticker not in proxies.setdefault(mapping.node_id, []):
+            proxies[mapping.node_id].append(mapping.ticker)
     def aggregate(node: IndustryPulseNode, snapshot: IndustryPulseSnapshot | None, descendants: list[IndustryPulseSnapshot], total_nodes: int) -> dict[str, Any]:
         evidence = [snapshot] if snapshot else descendants
 
@@ -692,6 +710,7 @@ def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
             "covered_nodes": len(descendants), "total_nodes": total_nodes,
             "derived_from_children": snapshot is None and bool(descendants),
             "proxy_mode": direct_metrics.get("proxy_mode") if snapshot else "DERIVED" if descendants else None,
+            "proxy_etfs": proxies.get(node.id, []),
             "constituent_count": basket.get("valid_constituents", 0),
             "synthetic_available": int(basket.get("valid_constituents", 0) or 0) >= get_settings().industry_pulse_min_constituents,
             "synthetic_confidence": basket.get("coverage_confidence", "UNAVAILABLE"),
@@ -715,6 +734,7 @@ def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
                 if snapshot and snapshot.pulse is not None:
                     group_snapshots.append(snapshot)
             group_payload = aggregate(group, snapshots.get(group.id), group_snapshots, len(group_nodes))
+            group_payload["proxy_etfs"] = list(dict.fromkeys(group_payload["proxy_etfs"] + [ticker for leaf in group_nodes for ticker in leaf["proxy_etfs"]]))
             group_payload["nodes"] = group_nodes
             group_payload["rows"] = [row for row in group_nodes if row.get("pulse") is not None]
             category_groups.append(group_payload)

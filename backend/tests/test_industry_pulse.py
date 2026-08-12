@@ -160,6 +160,7 @@ def test_seed_is_idempotent_and_overview_is_base_sectors_only(db):
     payload = overview_payload(db)
     assert len(payload["sectors"]) == 1
     assert payload["sectors"][0]["pulse"] == 70
+    assert payload["sectors"][0]["proxy_etfs"]
     taxonomy_nodes = taxonomy_payload(db)["nodes"]
     assert all(node["taxonomy"] == "base" for node in taxonomy_nodes)
     assert next(node for node in taxonomy_nodes if node["id"] == sector.id)["pulse"] == 70
@@ -208,6 +209,10 @@ def test_focus_and_ai_payloads_flatten_quality_and_change_fields(db):
     derived_group = next(group for category in chain["groups"] for group in category["rows"])
     assert derived_group["pulse"] == 75 and derived_group["derived_from_children"] is True
     assert derived_group["name_zh"]
+    accelerator = next(group for category in chain["groups"] for group in category["rows"] if group["node_key"] == "ai.compute.accelerators")
+    assert set(accelerator["proxy_etfs"]) == {"SMH", "SOXX"}
+    grid = next(group for category in chain["groups"] for group in category["rows"] if group["node_key"] == "ai.power.grid")
+    assert grid["proxy_etfs"] == ["GRID"]
 
 
 def test_focus_gates_do_not_emit_unqualified_buckets():

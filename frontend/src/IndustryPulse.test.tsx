@@ -5,6 +5,7 @@ import {
   ErrorState,
   LoadingState,
   buildTaxonomyTree,
+  chainFlow,
   confidenceText,
   coverageText,
   extractFocusBuckets,
@@ -43,6 +44,16 @@ describe('行业板块检测', () => {
     ] })
     expect(roots).toHaveLength(1)
     expect(roots[0].children[0].children[0].name).toBe('SaaS')
+  })
+
+  it('按上游到下游重排 AI 产业链', () => {
+    const phases = chainFlow({ groups: [
+      { node_key: 'ai.applications', nodes: [{ id: 'app', name: '应用', pulse: 70 }] },
+      { node_key: 'ai.power', nodes: [{ id: 'power', name: '电力', pulse: 60 }] },
+      { node_key: 'ai.infrastructure', nodes: [{ id: 'infra', name: '基建', pulse: 50 }] },
+    ] })
+    expect(phases.map(phase => phase.key)).toEqual(['upstream', 'infrastructure', 'downstream'])
+    expect(phases[0].rows[0].name).toBe('电力')
   })
 
   it('异步状态公开忙碌、错误和空数据语义', () => {
