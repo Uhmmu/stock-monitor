@@ -2356,6 +2356,10 @@ def ensure_industry_pulse_fresh(force: bool = False):
     """Cheap DB due check so beat restarts do not duplicate a daily run."""
     if not settings.industry_pulse_enabled:
         return {"status": "disabled"}
+    market = market_status()
+    market_hour = datetime.now(ZoneInfo(settings.market_timezone)).hour
+    if not force and (market.get("session") is None or market.get("is_open") or market_hour < 17):
+        return {"status": "waiting_for_market_close"}
     with SessionLocal() as db:
         active = db.scalar(select(IndustryPulseSyncRun).where(IndustryPulseSyncRun.status == "running", IndustryPulseSyncRun.started_at >= datetime.now(UTC) - timedelta(seconds=settings.industry_pulse_sync_lock_seconds)).order_by(IndustryPulseSyncRun.started_at.desc()).limit(1))
         if active and not force:

@@ -25,7 +25,7 @@ from app.services.industry_pulse.calculation import calculate_basket_signal, cal
 from app.services.industry_pulse.classification import classify_security
 from app.services.industry_pulse.constituents import ClassificationBatch, MembershipSuggestion, SymbolClassification, _normalize_classification_payload, bootstrap_ai_constituents
 from app.services.industry_pulse.provider import DailyBar, ProviderHistory, fetch_histories
-from app.services.industry_pulse.service import _merge_history, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, taxonomy_payload
+from app.services.industry_pulse.service import _constituent_health, _fetch_lookback_days, _history_backfill_complete, _merge_history, _pulse_stock_mappings, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, taxonomy_payload
 
 
 TABLES = [
@@ -91,6 +91,14 @@ def test_incremental_bars_merge_with_full_persisted_history(db):
     merged = _stored_history_payload(list(cache.values()))
     assert len(merged) == 300
     assert calculate_etf_metrics(merged, benchmark_rows=merged)["return_252d"] is not None
+
+
+def test_incremental_fetch_does_not_redownload_universe_for_few_failures():
+    symbols = {f"S{index}" for index in range(100)}
+    cached = {symbol: {date(2025, 1, 1) + timedelta(days=day) for day in range(252)} for symbol in list(symbols)[:98]}
+    assert _fetch_lookback_days(cached, symbols) == 10
+    assert _history_backfill_complete({1, 2}, {1, 2, 3})
+    assert not _history_backfill_complete({1, 2}, {1})
 
 
 def test_current_fallback_rows_override_stale_cached_provider_on_same_date():
@@ -241,13 +249,41 @@ def test_basket_weighting_caps_single_stock_and_top_three():
     assert not five["top_three_cap_applied"]
 
 
+def test_role_weights_ignore_continuous_luna_scores():
+    rows = [
+        {"ticker": "CORE", "exposure": .1, "confidence": .1, "constituent_role": "CORE"},
+        {"ticker": "SECONDARY", "exposure": 1, "confidence": 1, "constituent_role": "SECONDARY"},
+        {"ticker": "ENABLER", "exposure": 1, "confidence": 1, "constituent_role": "ENABLER"},
+    ] + [{"ticker": f"E{index}", "constituent_role": "ENABLER"} for index in range(9)]
+    weights = calculate_basket_weights(rows)["weights"]
+    assert weights["CORE"] / weights["SECONDARY"] == pytest.approx(1 / .75)
+    assert weights["SECONDARY"] / weights["ENABLER"] == pytest.approx(.75 / .5)
+
+
+def test_constituent_failures_are_temporary_before_stale_or_invalid():
+    failed = ProviderHistory("BAD", status="unavailable", error_code="empty_response")
+    assert _constituent_health(failed, 1, no_history=True, manual_seed=True) == "TEMPORARY_DATA_FAILURE"
+    assert _constituent_health(failed, 3, no_history=False, manual_seed=True) == "STALE"
+    assert _constituent_health(failed, 5, no_history=True, manual_seed=True) == "SEED_INVALID"
+
+
+def test_manual_seed_is_canonical_when_ai_memberships_also_exist():
+    day = date(2026, 8, 10)
+    def member(ticker, source):
+        return IndustryPulseInstrument(node_id=1, ticker=ticker, instrument_type="stock", mapping_type="theme_exposure", role="reference", exposure=1, confidence=1, enabled=True, enabled_for_pulse=True, classification_source=source)
+    assert [row.ticker for row in _pulse_stock_mappings([member("SEED", "MANUAL_CURATED_SEED"), member("AI", "AI_CLASSIFIED")], day)] == ["SEED"]
+
+
 def test_synthetic_basket_and_breadth_are_causal_and_keep_denominators():
     histories = {f"S{index}": _bars(300, slope=1 + index * .1) for index in range(6)}
     mappings = [{"ticker": symbol, "exposure": .9, "confidence": .9, "constituent_role": "CORE"} for symbol in histories]
     result = calculate_basket_signal(histories, mappings, benchmark_rows=histories["S0"], as_of=histories["S0"][-2]["date"])
     assert result["status"] == "ready" and result["pulse"] is not None
     assert result["basket"]["synthetic_index_base"] == 100
-    assert result["basket"]["historical_membership_mode"] == "CURRENT_CONSTITUENT_RECONSTRUCTION"
+    assert result["basket"]["historical_membership_mode"] == "MONTHLY_ROLE_WEIGHT_RECONSTRUCTION"
+    assert result["basket"]["rebalance_frequency"] == "MONTHLY"
+    assert result["basket"]["coverage_confidence"] == "MEDIUM"
+    assert result["basket"]["top_contributors_5d"]
     breadth = result["basket"]["breadth"]
     assert breadth["above_ma20_count"] == 6 and breadth["above_ma20_eligible"] == 6
     assert breadth["positive_20d_count"] == 6 and breadth["positive_20d_eligible"] == 6
@@ -260,6 +296,16 @@ def test_basket_missing_member_and_minimum_threshold_return_null_not_zero():
     result = calculate_basket_signal(histories, mappings, benchmark_rows=histories["S0"], as_of=histories["S0"][-1]["date"])
     assert result["status"] == "INSUFFICIENT_COVERAGE"
     assert result["pulse"] is None
+
+
+def test_late_partial_union_day_does_not_hide_latest_complete_basket():
+    histories = {f"S{index}": _bars(100) for index in range(5)}
+    histories["LATE"] = _bars(101)
+    mappings = [{"ticker": symbol, "constituent_role": "CORE"} for symbol in histories]
+    result = calculate_basket_signal(histories, mappings, benchmark_rows=histories["S0"])
+    assert result["status"] == "ready"
+    assert result["basket"]["valid_constituents"] == 6
+    assert result["basket"]["as_of"] == histories["S0"][-1]["date"]
 
 
 def test_hybrid_fallback_and_disagreement_degrade_confidence():
@@ -275,8 +321,6 @@ def test_hybrid_fallback_and_disagreement_degrade_confidence():
 def test_luna_bootstrap_is_idempotent_and_manual_membership_wins(db):
     ensure_seed_data(db)
     node = db.query(IndustryPulseNode).filter_by(node_key="ai.compute.accelerators").one()
-    db.add(IndustryPulseInstrument(node_id=node.id, ticker="NVDA", instrument_type="stock", mapping_type="theme_exposure", role="reference", exposure=1, confidence=1, enabled=True, enabled_for_pulse=True, classification_source="MANUAL", constituent_role="CORE"))
-    db.add(IndustryPulseInstrument(node_id=node.id, ticker="AMD", instrument_type="stock", mapping_type="theme_exposure", role="reference", exposure=.5, confidence=.6, enabled=True, enabled_for_pulse=True, classification_source="PROVIDER", constituent_role="SECONDARY"))
     db.commit()
     def fake(rows):
         return ClassificationBatch(results=[SymbolClassification(symbol=row["symbol"], memberships=[MembershipSuggestion(node=row["candidate_nodes"][0], role="CORE", exposure_weight=.8, confidence=.8, short_reason="fixture evidence")]) for row in rows]), "gpt-5.6-luna"
@@ -284,9 +328,9 @@ def test_luna_bootstrap_is_idempotent_and_manual_membership_wins(db):
     second = bootstrap_ai_constituents(db, classifier=fake, hydrate=False)
     assert first["classified"] > 100 and second["due"] == 0
     rows = db.query(IndustryPulseInstrument).filter_by(node_id=node.id, ticker="NVDA").all()
-    assert len(rows) == 1 and rows[0].classification_source == "MANUAL"
+    assert len(rows) == 1 and rows[0].classification_source == "MANUAL_CURATED_SEED"
     amd = db.query(IndustryPulseInstrument).filter_by(node_id=node.id, ticker="AMD").one()
-    assert amd.classification_source == "AI_CLASSIFIED"
+    assert amd.classification_source == "MANUAL_CURATED_SEED"
 
 
 def test_luna_flat_membership_response_is_normalized():

@@ -327,19 +327,17 @@ def calculate_composite(
     }
 
 
-_ROLE_FACTORS = {"CORE": 1.0, "SECONDARY": .65, "ENABLER": .5}
+_ROLE_FACTORS = {"CORE": 1.0, "SECONDARY": .75, "ENABLER": .5}
 
 
 def calculate_basket_weights(
-    mappings: Iterable[dict[str, Any]], *, single_stock_max_weight: float = .18, top_three_max_weight: float = .45
+    mappings: Iterable[dict[str, Any]], *, single_stock_max_weight: float = .15, top_three_max_weight: float = .45
 ) -> dict[str, Any]:
     """Exposure-adjusted weights with feasible concentration caps."""
     rows = []
     for mapping in mappings:
-        exposure = _num(mapping.get("exposure_weight", mapping.get("exposure")))
-        confidence = _num(mapping.get("confidence"))
         role = str(mapping.get("constituent_role") or "SECONDARY").upper()
-        raw = (exposure or 0) * (confidence or 0) * _ROLE_FACTORS.get(role, .5)
+        raw = _ROLE_FACTORS.get(role, .5)
         if raw > 0 and mapping.get("ticker"):
             rows.append({**mapping, "ticker": str(mapping["ticker"]).upper(), "raw_weight": raw})
     if not rows:
@@ -393,10 +391,13 @@ def calculate_basket_weights(
 
 def _synthetic_rows(histories: dict[str, Iterable[Any]], weights: dict[str, float], *, minimum_constituents: int, minimum_coverage: float, as_of: date | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     returns_by_symbol: dict[str, dict[date, float]] = {}
+    observations: dict[date, int] = {}
     for symbol, values in histories.items():
         if symbol not in weights:
             continue
         rows = _rows(values, as_of)
+        for row in rows:
+            observations[row["date"]] = observations.get(row["date"], 0) + 1
         returns_by_symbol[symbol] = {
             current["date"]: current["close"] / previous["close"] - 1.0
             for previous, current in zip(rows, rows[1:])
@@ -404,17 +405,20 @@ def _synthetic_rows(histories: dict[str, Iterable[Any]], weights: dict[str, floa
         }
     days = sorted({day for rows in returns_by_symbol.values() for day in rows})
     index_value = 100.0
-    output: list[dict[str, Any]] = []
+    base_day = next((day for day in sorted(observations) if observations[day] >= minimum_constituents), None)
+    output: list[dict[str, Any]] = [{"date": base_day, "open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": None}] if base_day else []
     latest = {"valid_constituents": 0, "effective_weight_coverage": 0.0}
     for day in days:
+        if base_day is None or day <= base_day:
+            continue
         returns: list[tuple[float, float]] = []
         for symbol, symbol_weight in weights.items():
             if (daily_return := returns_by_symbol.get(symbol, {}).get(day)) is not None:
                 returns.append((daily_return, symbol_weight))
         coverage = sum(weight for _, weight in returns)
-        latest = {"valid_constituents": len(returns), "effective_weight_coverage": coverage}
         if len(returns) < minimum_constituents or coverage < minimum_coverage:
             continue
+        latest = {"valid_constituents": len(returns), "effective_weight_coverage": coverage, "as_of": day}
         daily_return = sum(value * weight for value, weight in returns) / coverage
         index_value *= 1 + daily_return
         output.append({"date": day, "open": index_value, "high": index_value, "low": index_value, "close": index_value, "volume": None})
@@ -489,14 +493,16 @@ def calculate_constituent_breadth(
 
 def calculate_basket_signal(
     histories: dict[str, Iterable[Any]], mappings: Iterable[dict[str, Any]], *, benchmark_rows: Iterable[Any] | None = None,
+    qqq_rows: Iterable[Any] | None = None,
     as_of: date | None = None, minimum_constituents: int = 5, minimum_coverage: float = .60,
-    single_stock_max_weight: float = .18, top_three_max_weight: float = .45, weights: dict[str, float] | None = None,
+    single_stock_max_weight: float = .15, top_three_max_weight: float = .45, weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     basket_weights = calculate_basket_weights(mappings, single_stock_max_weight=single_stock_max_weight, top_three_max_weight=top_three_max_weight)
     synthetic, availability = _synthetic_rows(histories, basket_weights["weights"], minimum_constituents=minimum_constituents, minimum_coverage=minimum_coverage, as_of=as_of)
     if availability["valid_constituents"] < minimum_constituents or availability["effective_weight_coverage"] < minimum_coverage or not synthetic:
-        return {"pulse": None, "status": "INSUFFICIENT_COVERAGE", "proxy_mode": "EQUITY_BASKET", "coverage_quality": availability["effective_weight_coverage"], "confidence": 0.0, "basket": {**basket_weights, **availability, "historical_membership_mode": "CURRENT_CONSTITUENT_RECONSTRUCTION"}}
+        return {"pulse": None, "status": "INSUFFICIENT_COVERAGE", "proxy_mode": "EQUITY_BASKET", "coverage_quality": availability["effective_weight_coverage"], "confidence": 0.0, "basket": {**basket_weights, **availability, "coverage_confidence": "UNAVAILABLE", "historical_membership_mode": "MONTHLY_ROLE_WEIGHT_RECONSTRUCTION", "rebalance_frequency": "MONTHLY"}}
     metric = calculate_etf_metrics(synthetic, benchmark_rows=benchmark_rows, benchmark_name="SPY", as_of=as_of)
+    qqq_metric = calculate_etf_metrics(synthetic, benchmark_rows=qqq_rows, benchmark_name="QQQ", as_of=as_of) if qqq_rows is not None else {}
     breadth = calculate_constituent_breadth(histories, basket_weights["weights"], benchmark_rows=benchmark_rows, as_of=as_of)
     components = dict(metric.get("scores") or {})
     components["breadth"] = breadth.get("breadth_score")
@@ -505,14 +511,29 @@ def calculate_basket_signal(
         components["volume"] = _score(breadth["constituent_volume_z"], -2, 3)
     score_weights = weights or {"trend": .25, "relative_strength": .25, "volume": .15, "momentum": .10, "breadth": .15, "consensus": .10}
     pulse = _weighted([(value, score_weights.get(name, 0)) for name, value in components.items() if value is not None])
-    classification_confidence = _weighted([(float(row.get("confidence") or 0), basket_weights["weights"].get(str(row.get("ticker", "")).upper(), 0)) for row in mappings]) or 0
     count_quality = min(1.0, availability["valid_constituents"] / 8)
     data_quality = float(metric.get("data_quality") or 0)
-    confidence = min(1.0, availability["effective_weight_coverage"] * classification_confidence * (.5 + .5 * count_quality) * (.7 + .3 * data_quality))
+    confidence = min(1.0, availability["effective_weight_coverage"] * (.5 + .5 * count_quality) * (.7 + .3 * data_quality))
+    coverage_confidence = "HIGH" if availability["valid_constituents"] >= 8 and availability["effective_weight_coverage"] >= .8 and len(synthetic) >= 120 else "MEDIUM"
     heat = _weighted([(_score(metric.get("rsi14"), 50, 80), .4), (_score(metric.get("return_20d"), -10, 20), .35), (_score(breadth.get("constituent_volume_z"), -1, 3), .25)])
     risk = _weighted([(_score(metric.get("realized_vol20"), 10, 45), .6), (_score(breadth.get("return_dispersion"), 0, 12), .4)])
     narrow = bool((metric.get("return_20d") or 0) > 0 and (breadth.get("positive_20d_count") or 0) / max(1, breadth.get("positive_20d_eligible") or 0) < .4)
-    basket = {**basket_weights, **availability, "synthetic_index_base": 100, "synthetic_points": len(synthetic), "historical_membership_mode": "CURRENT_CONSTITUENT_RECONSTRUCTION", "breadth": breadth, "narrow_leadership": narrow}
+    contributions = sorted(
+        ({"ticker": row["ticker"], "contribution_5d": (row.get("return_5d") or 0) * (row.get("weight") or 0)} for row in breadth.get("constituents", [])),
+        key=lambda row: row["contribution_5d"], reverse=True,
+    )
+    rebalance_dates = [row["date"] for index, row in enumerate(synthetic) if index == 0 or (row["date"].year, row["date"].month) != (synthetic[index - 1]["date"].year, synthetic[index - 1]["date"].month)]
+    basket = {
+        **basket_weights, **availability, "synthetic_index_base": 100, "synthetic_points": len(synthetic),
+        "historical_membership_mode": "MONTHLY_ROLE_WEIGHT_RECONSTRUCTION", "rebalance_frequency": "MONTHLY",
+        "rebalance_dates": rebalance_dates,
+        "breadth": breadth, "narrow_leadership": narrow, "coverage_confidence": coverage_confidence, "metric": metric,
+        "relative_strength_benchmarks": {
+            "SPY": {key: value for key, value in metric.items() if key.startswith("rs_")},
+            "QQQ": {key: value for key, value in qqq_metric.items() if key.startswith("rs_")},
+        },
+        "top_contributors_5d": contributions[:5], "bottom_contributors_5d": list(reversed(contributions[-5:])),
+    }
     return {"pulse": pulse, "status": "ready", "proxy_mode": "EQUITY_BASKET", "components": components, "coverage_quality": availability["effective_weight_coverage"], "confidence": confidence, "heat": heat, "risk": risk, "mood": classify_mood(pulse, heat, risk, components.get("breadth"), components.get("consensus")), "members": list(basket_weights["weights"]), "metric": metric, "basket": basket}
 
 
@@ -600,10 +621,11 @@ def calculate_focus(snapshots: Iterable[dict[str, Any]], previous: dict[int, dic
         "rotation": [row for row in rows if previous and (previous.get(row.get("node_id"), {}).get("pulse") or 0) < 50 <= (row.get("pulse") or 0) and (row.get("relative_strength") or 0) > 50 and (row.get("change_5d") or 0) > 0],
         "breadth_expansion": [row for row in rows if (row.get("metrics_json", {}).get("basket", {}).get("breadth", {}).get("breadth_score") or 0) >= 60 and (row.get("change_5d") or 0) > 0 and (row.get("relative_strength") or 0) >= 55],
         "narrow_leadership": [row for row in rows if row.get("metrics_json", {}).get("basket", {}).get("narrow_leadership")],
+        "early_broadening": [row for row in rows if row.get("metrics_json", {}).get("proxy_divergence") == "EARLY_BROADENING"],
         "internal_confirmation": [row for row in rows if row.get("metrics_json", {}).get("proxy_mode") == "HYBRID" and (row.get("metrics_json", {}).get("etf_signal", {}).get("pulse") or 0) >= 60 and (row.get("metrics_json", {}).get("basket_signal", {}).get("pulse") or 0) >= 60 and (row.get("metrics_json", {}).get("basket", {}).get("breadth", {}).get("breadth_score") or 0) >= 60],
     }
     for signal_type, candidates in candidates_by_type.items():
-        key = {"leaders": "pulse", "fastest_heating": "change_5d", "rs_breakout": "relative_strength", "volume_shock": "volume_z", "overheated": "heat", "cooling": "change_5d", "risk_off": "risk", "reversal": "relative_strength", "rotation": "relative_strength", "breadth_expansion": "change_5d", "narrow_leadership": "pulse", "internal_confirmation": "pulse"}[signal_type]
+        key = {"leaders": "pulse", "fastest_heating": "change_5d", "rs_breakout": "relative_strength", "volume_shock": "volume_z", "overheated": "heat", "cooling": "change_5d", "risk_off": "risk", "reversal": "relative_strength", "rotation": "relative_strength", "breadth_expansion": "change_5d", "narrow_leadership": "pulse", "early_broadening": "pulse", "internal_confirmation": "pulse"}[signal_type]
         reverse = signal_type not in {"cooling"}
         candidates.sort(key=lambda row: float(row.get(key) or 0), reverse=reverse)
         for rank, row in enumerate(candidates[:5], 1):

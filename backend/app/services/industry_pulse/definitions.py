@@ -1633,6 +1633,169 @@ _AI_SEED = [
   }
 ]
 
+
+# The curated basket is deliberately separate from ``AI_NODE_SEED_CANDIDATES``:
+# these rows are configured memberships, not discovery evidence.  Keep one
+# mapping per node so a symbol can carry different role/purity/weight metadata
+# in each theme node.
+MANUAL_CURATED_SEED_SOURCE = "MANUAL_CURATED_SEED"
+MANUAL_SEED_VERSION = "manual-curated-v1"
+MANUAL_SEED_TARGET_CONSTITUENTS = 10
+MANUAL_SEED_PREFERRED_RANGE = (8, 12)
+MANUAL_SEED_MIN_CONSTITUENTS = 5
+MANUAL_SEED_ROLE_FACTORS = {"CORE": 1.0, "SECONDARY": 0.75, "ENABLER": 0.5}
+MANUAL_SEED_DEFAULT_ROLES = ("CORE", "CORE", "CORE", "SECONDARY", "SECONDARY", "SECONDARY", "SECONDARY", "SECONDARY", "ENABLER", "ENABLER")
+
+MANUAL_CURATED_SEED_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "ai.compute.accelerators": ("NVDA", "AMD", "AVGO", "MRVL", "ARM", "QCOM", "INTC", "NXPI", "ALAB", "CRDO"),
+    "ai.compute.semiconductor_production": ("TSM", "ASML", "AMAT", "LRCX", "KLAC", "TER", "ENTG", "MKSI", "ACLS", "CAMT"),
+    "ai.compute.memory": ("MU", "SNDK", "WDC", "STX", "SIMO", "RMBS", "NTAP", "PSTG", "MRVL", "MCHP"),
+    "ai.compute.semiconductor_design_infrastructure": ("SNPS", "CDNS", "ARM", "RMBS", "CEVA", "PDFS", "KEYS", "TER", "LSCC", "MCHP"),
+    "ai.infrastructure.servers": ("DELL", "SMCI", "HPE", "IBM", "VRT", "NTAP", "PSTG", "CSCO", "WDC", "STX"),
+    "ai.infrastructure.networking": ("ANET", "CSCO", "AVGO", "MRVL", "ALAB", "CRDO", "CIEN", "LITE", "COHR", "FN"),
+    "ai.infrastructure.optical": ("COHR", "LITE", "CIEN", "AAOI", "FN", "GLW", "CALX", "ADTN", "VIAV", "IPGP"),
+    "ai.infrastructure.data_centers": ("EQIX", "DLR", "IRM", "APLD", "NBIS", "CRWV", "IREN", "WULF", "GDS", "VNET"),
+    "ai.infrastructure.cooling": ("VRT", "TT", "CARR", "JCI", "MOD", "AAON", "FIX", "LII", "SPXC", "NVT"),
+    "ai.infrastructure.cloud": ("MSFT", "AMZN", "GOOGL", "ORCL", "IBM", "CRWV", "NBIS", "NET", "DOCN", "AKAM"),
+    "ai.power.power_generation": ("CEG", "VST", "NRG", "TLN", "AES", "NEE", "SO", "EXC", "D", "PEG"),
+    "ai.power.nuclear_fuel_cycle": ("CCJ", "LEU", "UEC", "UUUU", "NXE", "DNN", "URG", "EU", "BWXT", "LTBR"),
+    "ai.power.grid": ("ETN", "GEV", "HUBB", "PWR", "NVT", "MYRG", "POWL", "EMR", "AME", "GNRC"),
+    "ai.power.energy_storage": ("FLNC", "EOSE", "TSLA", "ALB", "AES", "ENVX", "QS", "AMPX", "SLDP", "MVST"),
+    "ai.software_and_data.ai_platforms": ("MSFT", "GOOGL", "AMZN", "META", "ORCL", "IBM", "PLTR", "CRM", "NOW", "SNOW"),
+    "ai.software_and_data.enterprise_ai": ("MSFT", "CRM", "NOW", "ORCL", "SAP", "IBM", "PLTR", "ADBE", "INTU", "WDAY"),
+    "ai.software_and_data.data": ("SNOW", "DDOG", "MDB", "ESTC", "CFLT", "ORCL", "PLTR", "TDC", "DT", "GTLB"),
+    "ai.software_and_data.cybersecurity": ("PANW", "CRWD", "FTNT", "ZS", "OKTA", "S", "CHKP", "TENB", "QLYS", "GEN"),
+    "ai.software_and_data.developer_ecosystem": ("MSFT", "GTLB", "NET", "DDOG", "CFLT", "ESTC", "MDB", "DOCN", "TWLO", "AKAM"),
+    "ai.applications.robotics": ("ISRG", "ROK", "TER", "SYM", "PATH", "CGNX", "ZBRA", "HON", "EMR", "NVDA"),
+    "ai.applications.autonomous_systems": ("TSLA", "MBLY", "AUR", "QCOM", "NVDA", "AVAV", "KTOS", "OUST", "AEVA", "JOBY"),
+    "ai.applications.healthcare_ai": ("TEM", "RXRX", "SDGR", "GH", "GEHC", "ISRG", "NTRA", "CERT", "SOPH", "BFLY"),
+    "ai.applications.financial_ai": ("SPGI", "ICE", "IBKR", "HOOD", "SOFI", "XYZ", "PYPL", "UPST", "LMND", "COIN"),
+    "ai.applications.defense_ai": ("PLTR", "AVAV", "KTOS", "LHX", "NOC", "RTX", "LDOS", "BAH", "RCAT", "CACI"),
+    "ai.applications.consumer_ai": ("AAPL", "GOOGL", "META", "AMZN", "MSFT", "ADBE", "DUOL", "SNAP", "PINS", "SPOT"),
+}
+
+# Explicit exceptions keep broad, cross-node companies from becoming CORE in
+# every theme while preserving the ordering signal in the canonical lists.
+_MANUAL_ROLE_OVERRIDES: dict[str, dict[str, str]] = {
+    "ai.compute.accelerators": {"ALAB": "ENABLER", "CRDO": "ENABLER"},
+    "ai.compute.semiconductor_production": {"TSM": "CORE", "ASML": "CORE", "AMAT": "CORE", "LRCX": "CORE", "KLAC": "CORE", "TER": "SECONDARY"},
+    "ai.compute.memory": {"MU": "CORE", "SNDK": "CORE", "WDC": "CORE", "STX": "CORE", "MRVL": "ENABLER", "MCHP": "ENABLER"},
+    "ai.compute.semiconductor_design_infrastructure": {"SNPS": "CORE", "CDNS": "CORE", "ARM": "CORE", "RMBS": "CORE", "TER": "ENABLER", "MCHP": "ENABLER"},
+    "ai.infrastructure.servers": {"DELL": "CORE", "SMCI": "CORE", "HPE": "CORE", "IBM": "SECONDARY", "VRT": "SECONDARY", "CSCO": "ENABLER"},
+    "ai.infrastructure.networking": {"AVGO": "SECONDARY", "MRVL": "SECONDARY", "ALAB": "ENABLER", "CRDO": "ENABLER", "COHR": "ENABLER", "FN": "ENABLER"},
+    "ai.infrastructure.data_centers": {"APLD": "CORE", "NBIS": "SECONDARY", "CRWV": "SECONDARY", "IREN": "SECONDARY", "WULF": "SECONDARY", "GDS": "SECONDARY", "VNET": "SECONDARY"},
+    "ai.infrastructure.cooling": {"VRT": "CORE", "TT": "CORE", "CARR": "CORE", "NVT": "SECONDARY"},
+    "ai.infrastructure.cloud": {"MSFT": "CORE", "AMZN": "CORE", "GOOGL": "CORE", "ORCL": "SECONDARY", "IBM": "SECONDARY", "CRWV": "SECONDARY", "NBIS": "SECONDARY", "NET": "SECONDARY"},
+    "ai.power.power_generation": {"CEG": "CORE", "VST": "CORE", "NRG": "CORE", "TLN": "CORE", "AES": "SECONDARY", "NEE": "SECONDARY", "SO": "SECONDARY", "EXC": "SECONDARY", "D": "SECONDARY", "PEG": "SECONDARY"},
+    "ai.power.nuclear_fuel_cycle": {"CCJ": "CORE", "LEU": "CORE", "UEC": "CORE", "UUUU": "CORE", "NXE": "CORE", "DNN": "CORE", "URG": "CORE", "EU": "CORE", "BWXT": "SECONDARY", "LTBR": "ENABLER"},
+    "ai.power.grid": {"ETN": "CORE", "GEV": "CORE", "HUBB": "CORE", "PWR": "CORE", "NVT": "CORE", "MYRG": "SECONDARY", "POWL": "SECONDARY", "EMR": "SECONDARY", "AME": "ENABLER", "GNRC": "ENABLER"},
+    "ai.power.energy_storage": {"FLNC": "CORE", "EOSE": "CORE", "TSLA": "SECONDARY", "ALB": "SECONDARY", "AES": "SECONDARY", "ENVX": "CORE", "QS": "CORE", "AMPX": "ENABLER", "SLDP": "ENABLER", "MVST": "ENABLER"},
+    "ai.software_and_data.ai_platforms": {"MSFT": "CORE", "GOOGL": "CORE", "AMZN": "CORE", "META": "CORE", "ORCL": "SECONDARY", "IBM": "SECONDARY", "PLTR": "SECONDARY", "CRM": "SECONDARY", "NOW": "SECONDARY", "SNOW": "SECONDARY"},
+    "ai.software_and_data.enterprise_ai": {"MSFT": "CORE", "CRM": "CORE", "NOW": "CORE", "ORCL": "CORE", "SAP": "CORE", "IBM": "SECONDARY", "PLTR": "SECONDARY", "ADBE": "SECONDARY", "INTU": "SECONDARY", "WDAY": "SECONDARY"},
+    "ai.software_and_data.data": {"SNOW": "CORE", "DDOG": "CORE", "MDB": "CORE", "ESTC": "CORE", "CFLT": "CORE", "ORCL": "SECONDARY", "PLTR": "SECONDARY", "TDC": "SECONDARY", "DT": "SECONDARY", "GTLB": "ENABLER"},
+    "ai.software_and_data.cybersecurity": {"PANW": "CORE", "CRWD": "CORE", "FTNT": "CORE", "ZS": "CORE", "OKTA": "SECONDARY", "S": "SECONDARY", "CHKP": "SECONDARY", "TENB": "SECONDARY", "QLYS": "ENABLER", "GEN": "ENABLER"},
+    "ai.software_and_data.developer_ecosystem": {"MSFT": "SECONDARY", "GTLB": "CORE", "NET": "CORE", "DDOG": "CORE", "CFLT": "CORE", "ESTC": "CORE", "MDB": "SECONDARY", "DOCN": "SECONDARY", "TWLO": "SECONDARY", "AKAM": "ENABLER"},
+    "ai.applications.robotics": {"ISRG": "CORE", "ROK": "CORE", "TER": "CORE", "SYM": "CORE", "PATH": "CORE", "CGNX": "SECONDARY", "ZBRA": "SECONDARY", "HON": "SECONDARY", "EMR": "SECONDARY", "NVDA": "ENABLER"},
+    "ai.applications.autonomous_systems": {"TSLA": "CORE", "MBLY": "CORE", "AUR": "CORE", "QCOM": "SECONDARY", "NVDA": "ENABLER", "AVAV": "CORE", "KTOS": "SECONDARY", "OUST": "ENABLER", "AEVA": "ENABLER", "JOBY": "SECONDARY"},
+    "ai.applications.healthcare_ai": {"TEM": "CORE", "RXRX": "CORE", "SDGR": "CORE", "GH": "CORE", "GEHC": "SECONDARY", "ISRG": "SECONDARY", "NTRA": "SECONDARY", "CERT": "SECONDARY", "SOPH": "ENABLER", "BFLY": "ENABLER"},
+    "ai.applications.financial_ai": {"SPGI": "CORE", "ICE": "CORE", "IBKR": "CORE", "HOOD": "CORE", "SOFI": "SECONDARY", "XYZ": "SECONDARY", "PYPL": "SECONDARY", "UPST": "ENABLER", "LMND": "ENABLER", "COIN": "SECONDARY"},
+    "ai.applications.defense_ai": {"PLTR": "CORE", "AVAV": "CORE", "KTOS": "CORE", "LHX": "CORE", "NOC": "CORE", "RTX": "CORE", "LDOS": "SECONDARY", "BAH": "SECONDARY", "RCAT": "ENABLER", "CACI": "SECONDARY"},
+    "ai.applications.consumer_ai": {"AAPL": "CORE", "GOOGL": "SECONDARY", "META": "CORE", "AMZN": "SECONDARY", "MSFT": "SECONDARY", "ADBE": "SECONDARY", "DUOL": "CORE", "SNAP": "ENABLER", "PINS": "ENABLER", "SPOT": "SECONDARY"},
+}
+
+_MANUAL_PURITY_OVERRIDES: dict[tuple[str, str], float] = {
+    ("ai.compute.accelerators", "NVDA"): .98,
+    ("ai.compute.accelerators", "AMD"): .95,
+    ("ai.compute.accelerators", "ALAB"): .45,
+    ("ai.compute.accelerators", "CRDO"): .45,
+    ("ai.applications.robotics", "NVDA"): .35,
+    ("ai.applications.autonomous_systems", "NVDA"): .4,
+    ("ai.infrastructure.cloud", "MSFT"): .95,
+    ("ai.infrastructure.cloud", "CRWV"): .65,
+    ("ai.infrastructure.cloud", "NBIS"): .65,
+    ("ai.software_and_data.developer_ecosystem", "MSFT"): .55,
+    ("ai.applications.consumer_ai", "MSFT"): .45,
+    ("ai.applications.consumer_ai", "GOOGL"): .7,
+    ("ai.applications.consumer_ai", "AMZN"): .55,
+    ("ai.power.energy_storage", "TSLA"): .55,
+    ("ai.power.energy_storage", "AES"): .55,
+    ("ai.infrastructure.servers", "VRT"): .55,
+    ("ai.infrastructure.cooling", "VRT"): .9,
+}
+
+_MANUAL_SUB_ROLES: dict[str, dict[str, str]] = {
+    "ai.compute.memory": {"MU": "memory", "SNDK": "flash_storage", "WDC": "storage", "STX": "storage", "SIMO": "controller", "RMBS": "memory_interface", "NTAP": "enterprise_storage", "PSTG": "enterprise_storage", "MRVL": "storage_connectivity", "MCHP": "controller"},
+    "ai.infrastructure.data_centers": {**{ticker: "data_center_reit" for ticker in ("EQIX", "DLR", "IRM")}, **{ticker: "ai_hpc_infrastructure" for ticker in ("APLD", "NBIS", "CRWV", "IREN", "WULF")}, **{ticker: "international_data_center" for ticker in ("GDS", "VNET")}},
+    "ai.power.nuclear_fuel_cycle": {**{ticker: "uranium_mining_development" for ticker in ("CCJ", "UEC", "UUUU", "NXE", "DNN", "URG", "EU")}, "LEU": "enrichment", "BWXT": "nuclear_components", "LTBR": "nuclear_fuel_technology"},
+    "ai.power.energy_storage": {**{ticker: "grid_storage" for ticker in ("FLNC", "EOSE", "AES")}, "ALB": "battery_materials", **{ticker: "battery_cells_technology" for ticker in ("TSLA", "ENVX", "QS", "AMPX", "SLDP", "MVST")}},
+}
+
+
+def _capped_manual_weights(rows: list[dict[str, Any]]) -> list[float]:
+    raw = [MANUAL_SEED_ROLE_FACTORS[row["role"]] * row["purity"] for row in rows]
+    total = sum(raw) or 1.0
+    weights = [value / total for value in raw]
+    cap = min(.20, max(.15, 1 / len(rows)))
+    for _ in range(len(rows) + 2):
+        over = [index for index, value in enumerate(weights) if value > cap + 1e-12]
+        if not over:
+            break
+        excess = sum(weights[index] - cap for index in over)
+        for index in over:
+            weights[index] = cap
+        recipients = [index for index, value in enumerate(weights) if index not in over and value < cap - 1e-12]
+        capacity = sum(cap - weights[index] for index in recipients)
+        if not recipients or capacity <= 0:
+            break
+        for index in recipients:
+            weights[index] += excess * (cap - weights[index]) / capacity
+    normalizer = sum(weights) or 1.0
+    return [weight / normalizer for weight in weights]
+
+
+def _build_manual_seed() -> dict[str, tuple[dict[str, Any], ...]]:
+    seed: dict[str, tuple[dict[str, Any], ...]] = {}
+    for node_id, symbols in MANUAL_CURATED_SEED_SYMBOLS.items():
+        rows: list[dict[str, Any]] = []
+        overrides = _MANUAL_ROLE_OVERRIDES.get(node_id, {})
+        for index, ticker in enumerate(symbols):
+            role = overrides.get(ticker, MANUAL_SEED_DEFAULT_ROLES[index])
+            purity = _MANUAL_PURITY_OVERRIDES.get((node_id, ticker), {"CORE": .9, "SECONDARY": .7, "ENABLER": .5}[role])
+            rows.append({
+                "ticker": ticker,
+                "role": role,
+                "purity": purity,
+                "exposure_weight": MANUAL_SEED_ROLE_FACTORS[role],
+                "confidence": 1.0,
+                "liquidity": 1.0,
+                "notes": f"{role.title()} representative in the {node_id} synthetic basket.",
+                "sub_role": _MANUAL_SUB_ROLES.get(node_id, {}).get(ticker),
+            })
+        for row, weight in zip(rows, _capped_manual_weights(rows)):
+            row["weight"] = weight
+            row["role_factor"] = MANUAL_SEED_ROLE_FACTORS[row["role"]]
+        seed[node_id] = tuple(rows)
+    return seed
+
+
+MANUAL_CURATED_SEED = _build_manual_seed()
+MANUAL_CURATED_SEEDS = MANUAL_CURATED_SEED
+MANUAL_SEED_UNIVERSE = {node: tuple(row["ticker"] for row in rows) for node, rows in MANUAL_CURATED_SEED.items()}
+MANUAL_CURATED_SEED_UNIVERSE = MANUAL_SEED_UNIVERSE
+MANUAL_SEED_MEMBERSHIPS = tuple({"node_id": node, **row} for node, rows in MANUAL_CURATED_SEED.items() for row in rows)
+MANUAL_CURATED_SEED_MEMBERSHIPS = MANUAL_SEED_MEMBERSHIPS
+
+CLASSIFICATION_SOURCE_PRIORITY = {
+    MANUAL_CURATED_SEED_SOURCE: 100,
+    "MANUAL": 90,
+    "AI_CLASSIFIED": 80,
+    "PROVIDER": 60,
+    "ETF_HOLDING": 50,
+    "INHERITED": 40,
+}
+SOURCE_PRIORITY = CLASSIFICATION_SOURCE_PRIORITY
+
+
 BASE_SECTORS, BASE_GROUPS, BASE_LEAVES = _base_nodes()
 BASE_TAXONOMY = BASE_SECTORS + BASE_GROUPS + BASE_LEAVES
 BASE_TAXONOMY_BY_ID = {row["id"]: row for row in BASE_TAXONOMY}
@@ -1955,11 +2118,26 @@ __all__ = [
     "BASE_TAXONOMY_BY_ID",
     "BASE_TAXONOMY_BY_CODE",
     "CLASSIFICATION_SEEDS",
+    "CLASSIFICATION_SOURCE_PRIORITY",
     "ETF_MAPPINGS",
     "ETF_REGISTRY",
     "ETF_SYMBOLS",
+    "MANUAL_CURATED_SEED",
+    "MANUAL_CURATED_SEED_MEMBERSHIPS",
+    "MANUAL_CURATED_SEED_SOURCE",
+    "MANUAL_CURATED_SEEDS",
+    "MANUAL_CURATED_SEED_SYMBOLS",
+    "MANUAL_CURATED_SEED_UNIVERSE",
+    "MANUAL_SEED_MEMBERSHIPS",
+    "MANUAL_SEED_MIN_CONSTITUENTS",
+    "MANUAL_SEED_PREFERRED_RANGE",
+    "MANUAL_SEED_ROLE_FACTORS",
+    "MANUAL_SEED_TARGET_CONSTITUENTS",
+    "MANUAL_SEED_UNIVERSE",
+    "MANUAL_SEED_VERSION",
     "PULSE_ROLES",
     "REGISTRY_ROLES",
+    "SOURCE_PRIORITY",
     "THEME_INCLUSION_THRESHOLD",
     "is_exposure_included",
     "pulse_mappings",

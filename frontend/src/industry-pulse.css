@@ -29,6 +29,7 @@
 .industry-pulse-card-head>span{display:grid;min-width:0;gap:3px}
 .industry-pulse-card-head b{overflow:hidden;font-size:14px;text-overflow:ellipsis;white-space:nowrap}
 .industry-pulse-card-head small{color:var(--ink-4);font-size:9px}
+.industry-pulse-card-head small.industry-theme-badge{color:var(--accent-ink);font-weight:700;letter-spacing:.04em}
 .industry-pulse-card-head em{flex:0 0 auto;padding:3px 6px;border-radius:7px;background:rgba(100,116,139,.08);color:var(--ink-4);font-size:9px;font-style:normal;white-space:nowrap}
 .industry-pulse-value{display:flex;align-items:baseline;gap:6px;margin-top:16px}
 .industry-pulse-value strong{font-size:30px;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
@@ -104,6 +105,7 @@
 .industry-node-heading p:first-child{margin:0 0 7px;color:var(--accent-ink);font-size:9px;font-weight:700;letter-spacing:.15em}
 .industry-node-heading h2{margin:0 0 8px;font-size:30px;line-height:1.15;letter-spacing:-.035em}
 .industry-node-heading p:last-child{max-width:700px;margin:0;color:var(--ink-3);font-size:13px;line-height:1.7}
+.industry-theme-label{display:inline-flex;margin-top:9px;padding:4px 7px;border:1px solid rgba(0,113,227,.16);border-radius:7px;background:rgba(0,113,227,.06);color:var(--accent-ink);font-size:9px;font-weight:700;letter-spacing:.04em}
 .industry-node-facts{display:flex;flex:0 0 auto;gap:8px}
 .industry-node-facts span{display:grid;gap:3px;min-width:76px;padding:9px 10px;border-radius:11px;background:rgba(100,116,139,.055)}
 .industry-node-facts b{font-size:14px;font-variant-numeric:tabular-nums}
@@ -133,6 +135,10 @@
 .industry-relative-grid span{color:var(--ink-4);font-size:10px;font-weight:700}
 .industry-relative-grid b{font-size:18px;font-variant-numeric:tabular-nums}
 .industry-relative-grid small{color:var(--ink-4);font-size:9px;line-height:1.5}
+.industry-relative-highlight{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:10px}
+.industry-relative-highlight span{display:grid;gap:4px;padding:13px 14px;border:1px solid rgba(0,113,227,.16);border-radius:12px;background:rgba(0,113,227,.045)}
+.industry-relative-highlight b{font-size:20px;font-variant-numeric:tabular-nums}
+.industry-relative-highlight small{color:var(--ink-4);font-size:9px}
 .industry-proxy-table{overflow:hidden;border:1px solid var(--line);border-radius:13px}
 .industry-proxy-head,.industry-proxy-row{display:grid;grid-template-columns:minmax(80px,.7fr) minmax(110px,1.2fr) minmax(90px,.8fr) minmax(90px,1fr);gap:12px;align-items:center;padding:10px 13px}
 .industry-proxy-head{background:rgba(100,116,139,.065);color:var(--ink-4);font-size:9px;font-weight:700;letter-spacing:.05em}
@@ -140,6 +146,21 @@
 .industry-proxy-row b{font-size:11px}
 .industry-proxy-row span{color:var(--ink-3);overflow-wrap:anywhere}
 .industry-breadth-grid{grid-template-columns:repeat(6,minmax(0,1fr));margin-top:12px}
+.industry-detail-facts small{color:var(--ink-4);font-size:9px}
+.industry-divergence-note{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:11px;padding:12px 14px;border:1px solid rgba(70,124,187,.14);border-radius:13px;background:rgba(70,124,187,.06)}
+.industry-divergence-note span{display:grid;gap:3px}
+.industry-divergence-note b{font-size:12px}
+.industry-divergence-note small{color:var(--ink-4);font-size:9px}
+.industry-divergence-note strong{flex:0 0 auto;font-size:15px;font-variant-numeric:tabular-nums}
+.industry-contribution-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.industry-contribution-column{min-width:0;padding:13px 14px;border:1px solid var(--line-2);border-radius:13px;background:rgba(100,116,139,.035)}
+.industry-contribution-column h4{margin:0 0 9px;color:var(--ink-3);font-size:11px}
+.industry-contribution-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--line-2)}
+.industry-contribution-row:first-of-type{border-top:0}
+.industry-contribution-row span{display:grid;gap:2px;min-width:0}
+.industry-contribution-row b{font-size:11px}
+.industry-contribution-row small{color:var(--ink-4);font-size:9px}
+.industry-contribution-row strong{flex:0 0 auto;font-size:12px;font-variant-numeric:tabular-nums}
 .industry-constituent-table{overflow:hidden;border:1px solid var(--line);border-radius:13px}
 .industry-constituent-head,.industry-constituent-row{display:grid;grid-template-columns:minmax(60px,.7fr) minmax(100px,1.1fr) minmax(60px,.65fr) minmax(90px,1fr) minmax(90px,1fr) minmax(65px,.7fr);gap:10px;align-items:center;padding:10px 13px}
 .industry-constituent-head{background:rgba(100,116,139,.065);color:var(--ink-4);font-size:9px;font-weight:700}
@@ -193,7 +214,7 @@
   .industry-detail-toolbar>div{width:100%}
   .industry-detail-toolbar button{flex:1}
   .industry-history-chart svg{height:190px}
-  .industry-relative-grid{grid-template-columns:1fr}
+  .industry-relative-highlight,.industry-relative-grid,.industry-contribution-grid{grid-template-columns:1fr}
   .industry-proxy-table{overflow-x:auto}
   .industry-proxy-head,.industry-proxy-row{min-width:460px}
   .industry-score-grid.four{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -207,15 +228,15 @@
   .industry-state-spinner{animation:none}
 }
 @media(prefers-reduced-transparency:reduce){
-  .industry-readonly-badge,.industry-view-tabs,.industry-summary-card,.industry-pulse-card,.industry-chain-banner,.industry-chain-facts span,.industry-chain-group,.industry-focus-bucket,.industry-state,.industry-node-facts span,.industry-detail-facts,.industry-detail-toolbar,.industry-history-chart,.industry-relative-grid>div,.industry-detail-note{background:var(--solid);box-shadow:none}
+  .industry-readonly-badge,.industry-view-tabs,.industry-summary-card,.industry-pulse-card,.industry-chain-banner,.industry-chain-facts span,.industry-chain-group,.industry-focus-bucket,.industry-state,.industry-node-facts span,.industry-detail-facts,.industry-detail-toolbar,.industry-history-chart,.industry-relative-grid>div,.industry-relative-highlight span,.industry-contribution-column,.industry-detail-note{background:var(--solid);box-shadow:none}
 }
 @media(prefers-contrast:more){
-  .industry-readonly-badge,.industry-view-tabs,.industry-summary-card,.industry-pulse-card,.industry-chain-banner,.industry-chain-facts span,.industry-chain-group,.industry-focus-bucket,.industry-state,.industry-detail-facts,.industry-detail-toolbar,.industry-history-chart,.industry-relative-grid>div,.industry-proxy-table,.industry-detail-note{border-color:var(--ink-3)}
+  .industry-readonly-badge,.industry-view-tabs,.industry-summary-card,.industry-pulse-card,.industry-chain-banner,.industry-chain-facts span,.industry-chain-group,.industry-focus-bucket,.industry-state,.industry-detail-facts,.industry-detail-toolbar,.industry-history-chart,.industry-relative-grid>div,.industry-relative-highlight span,.industry-contribution-column,.industry-proxy-table,.industry-detail-note{border-color:var(--ink-3)}
   .industry-tree-label:hover,.industry-tree-toggle:hover{outline:1px solid currentColor}
 }
 
 [data-theme="dark"] .industry-chain-banner{border-color:rgba(10,132,255,.24);background:linear-gradient(135deg,rgba(10,132,255,.13),rgba(28,28,30,.82))}
 [data-theme="dark"] .industry-chain-facts span{border-color:rgba(255,255,255,.10);background:rgba(255,255,255,.055)}
-[data-theme="dark"] .industry-signal-note,[data-theme="dark"] .industry-score-cell,[data-theme="dark"] .industry-detail-facts,[data-theme="dark"] .industry-detail-toolbar,[data-theme="dark"] .industry-history-chart,[data-theme="dark"] .industry-relative-grid>div{background:rgba(255,255,255,.055)}
+[data-theme="dark"] .industry-signal-note,[data-theme="dark"] .industry-score-cell,[data-theme="dark"] .industry-detail-facts,[data-theme="dark"] .industry-detail-toolbar,[data-theme="dark"] .industry-history-chart,[data-theme="dark"] .industry-relative-grid>div,[data-theme="dark"] .industry-relative-highlight span,[data-theme="dark"] .industry-contribution-column{background:rgba(255,255,255,.055)}
 [data-theme="dark"] .industry-detail-note{border-color:rgba(10,132,255,.24);background:rgba(10,132,255,.11)}
 [data-theme="dark"] .industry-state-error{border-color:rgba(255,69,58,.32);background:rgba(255,69,58,.12)}

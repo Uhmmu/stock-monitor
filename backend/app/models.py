@@ -2152,7 +2152,7 @@ class IndustryPulseInstrument(Base):
         CheckConstraint("exposure >= 0 AND exposure <= 1", name="ck_industry_pulse_instruments_exposure"),
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_industry_pulse_instruments_confidence"),
         CheckConstraint("liquidity >= 0 AND liquidity <= 1", name="ck_industry_pulse_instruments_liquidity"),
-        CheckConstraint("classification_source IN ('MANUAL', 'ETF_HOLDING', 'AI_CLASSIFIED', 'PROVIDER', 'INHERITED')", name="ck_industry_pulse_instruments_classification_source"),
+        CheckConstraint("classification_source IN ('MANUAL_CURATED_SEED', 'MANUAL', 'ETF_HOLDING', 'AI_CLASSIFIED', 'PROVIDER', 'INHERITED')", name="ck_industry_pulse_instruments_classification_source"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -2174,7 +2174,7 @@ class IndustryPulseInstrument(Base):
     enabled_for_pulse: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     valid_from: Mapped[date | None] = mapped_column(Date)
     valid_to: Mapped[date | None] = mapped_column(Date)
-    health_status: Mapped[str] = mapped_column(String(16), default="UNAVAILABLE")
+    health_status: Mapped[str] = mapped_column(String(32), default="UNAVAILABLE")
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_trading_date: Mapped[date | None] = mapped_column(Date)
     data_quality: Mapped[float | None] = mapped_column(Float)

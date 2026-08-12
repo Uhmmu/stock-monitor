@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     industry_pulse_constituent_confidence_threshold: float = 0.55
     industry_pulse_min_constituents: int = 5
     industry_pulse_min_effective_coverage: float = 0.60
-    industry_pulse_single_stock_max_weight: float = 0.18
+    industry_pulse_single_stock_max_weight: float = 0.15
     industry_pulse_top_three_max_weight: float = 0.45
     industry_pulse_yfinance_batch_size: int = 75
     industry_pulse_propagation_history_days: int = 60

@@ -28,12 +28,12 @@ from app.models import (
 )
 from app.services.industry_pulse.calculation import calculate_basket_signal, calculate_composite, calculate_etf_metrics, calculate_focus, calculate_hybrid_composite, detect_regime
 from app.services.industry_pulse.classification import classify_security
-from app.services.industry_pulse.constituents import bootstrap_ai_constituents
+from app.services.industry_pulse.constituents import bootstrap_ai_constituents, seed_manual_curated_memberships
 from app.services.industry_pulse.definitions import AI_RELATIONS, AI_TAXONOMY, BASE_TAXONOMY, ETF_REGISTRY, ETF_SYMBOLS, pulse_mappings
 from app.services.industry_pulse.provider import DailyBar, ProviderHistory, fetch_histories
 
 logger = logging.getLogger(__name__)
-CALCULATION_VERSION = "industry_pulse_v2"
+CALCULATION_VERSION = "industry_pulse_v3"
 
 
 def _json_safe(value: Any) -> Any:
@@ -131,7 +131,8 @@ def ensure_seed_data(db: Session) -> dict[str, int]:
             existing.metadata_json = {**(existing.metadata_json or {}), **metadata}
             existing.enabled = bool(registry.get("enabled", True)) and bool(mapping.get("enabled", True))
     db.flush()
-    return {"nodes": len(rows), "relations": len(AI_RELATIONS), "mappings": mapping_count, "etfs": len(ETF_REGISTRY)}
+    manual = seed_manual_curated_memberships(db)
+    return {"nodes": len(rows), "relations": len(AI_RELATIONS), "mappings": mapping_count, "etfs": len(ETF_REGISTRY), **{f"manual_{key}": value for key, value in manual.items()}}
 
 
 def sync_security_classifications(db: Session) -> dict[str, int]:
@@ -140,7 +141,9 @@ def sync_security_classifications(db: Session) -> dict[str, int]:
     stock_profiles = {row.ticker.upper(): row for row in db.scalars(select(StockProfile)).all()}
     company_profiles = {row.symbol.upper(): row for row in db.scalars(select(CompanyProfile)).all()}
     mappings_by_security: dict[int, list[IndustryPulseInstrument]] = {}
-    for row in db.scalars(select(IndustryPulseInstrument).where(IndustryPulseInstrument.instrument_type == "stock")).all():
+    stock_mappings = db.scalars(select(IndustryPulseInstrument).where(IndustryPulseInstrument.instrument_type == "stock")).all()
+    mappings_by_node_ticker = {(row.node_id, row.ticker.upper()): row for row in stock_mappings}
+    for row in stock_mappings:
         if row.security_id is not None:
             mappings_by_security.setdefault(row.security_id, []).append(row)
     classified = unclassified = mappings_written = 0
@@ -174,8 +177,13 @@ def sync_security_classifications(db: Session) -> dict[str, int]:
             node = nodes.get(node_key)
             if not node:
                 continue
-            authoritative = next((item for item in existing_rows if item.node_id == node.id and item.classification_source in {"MANUAL", "AI_CLASSIFIED"}), None)
+            global_mapping = mappings_by_node_ticker.get((node.id, ticker))
+            authoritative = next((item for item in existing_rows if item.node_id == node.id and item.classification_source in {"MANUAL_CURATED_SEED", "MANUAL", "AI_CLASSIFIED"}), None)
+            if global_mapping and global_mapping.classification_source in {"MANUAL_CURATED_SEED", "MANUAL", "AI_CLASSIFIED"}:
+                authoritative = authoritative or global_mapping
             if authoritative:
+                if authoritative.classification_source == "MANUAL_CURATED_SEED" and authoritative.security_id is None:
+                    authoritative.security_id = security.id
                 continue
             row = next((item for item in existing_rows if item.node_id == node.id and item.role == "reference" and item.classification_source in {"PROVIDER", "INHERITED"}), None)
             if row is None:
@@ -256,17 +264,40 @@ def _stock_mapping_active(mapping: IndustryPulseInstrument, day: date) -> bool:
     )
 
 
+def _constituent_health(history: ProviderHistory, failures: int, *, no_history: bool, manual_seed: bool) -> str:
+    if history.status in {"success", "degraded", "fallback"}:
+        return {"success": "ACTIVE", "degraded": "DEGRADED", "fallback": "FALLBACK"}[history.status]
+    if failures >= 5 and no_history:
+        return "SEED_INVALID" if manual_seed else "PERMANENT_SYMBOL_INVALID"
+    return "STALE" if failures >= 3 else "TEMPORARY_DATA_FAILURE"
+
+
+def _pulse_stock_mappings(mappings: list[IndustryPulseInstrument], day: date) -> list[IndustryPulseInstrument]:
+    stocks = [mapping for mapping in mappings if _stock_mapping_active(mapping, day)]
+    manual = [mapping for mapping in stocks if mapping.classification_source == "MANUAL_CURATED_SEED"]
+    return manual or stocks
+
+
+def _fetch_lookback_days(cached_dates: dict[str, set[date]], symbols: set[str]) -> int:
+    covered = sum(len(cached_dates.get(ticker, set())) >= 252 for ticker in symbols)
+    return 10 if symbols and covered / len(symbols) >= .9 else get_settings().industry_pulse_history_days
+
+
+def _history_backfill_complete(manual_node_ids: set[int], versioned_node_ids: set[int]) -> bool:
+    return bool(manual_node_ids and manual_node_ids <= versioned_node_ids)
+
+
 def _calculate_node(
     mappings: list[IndustryPulseInstrument], metrics: dict[str, dict[str, Any]], histories: dict[str, list[dict[str, Any]]],
     benchmark_rows: dict[str, list[dict[str, Any]]], day: date,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     settings = get_settings()
     etfs = [mapping for mapping in mappings if mapping.enabled and mapping.mapping_type == "etf_proxy"]
-    stocks = [mapping for mapping in mappings if _stock_mapping_active(mapping, day)]
+    stocks = _pulse_stock_mappings(mappings, day)
     etf_signal = calculate_composite(metrics, [_mapping_payload(mapping) for mapping in etfs], benchmark_metrics={name: metrics.get(name, {}) for name in ("SPY", "QQQ")}, weights=_score_weights(), exposure_threshold=settings.industry_pulse_exposure_threshold)
     basket_signal = calculate_basket_signal(
         {mapping.ticker: histories.get(mapping.ticker, []) for mapping in stocks},
-        [_mapping_payload(mapping) for mapping in stocks], benchmark_rows=benchmark_rows.get("SPY"), as_of=day,
+        [_mapping_payload(mapping) for mapping in stocks], benchmark_rows=benchmark_rows.get("SPY"), qqq_rows=benchmark_rows.get("QQQ"), as_of=day,
         minimum_constituents=settings.industry_pulse_min_constituents,
         minimum_coverage=settings.industry_pulse_min_effective_coverage,
         single_stock_max_weight=settings.industry_pulse_single_stock_max_weight,
@@ -274,6 +305,10 @@ def _calculate_node(
         weights=_score_weights(),
     )
     composite = calculate_hybrid_composite(etf_signal, basket_signal)
+    disagreement = composite.get("etf_basket_disagreement")
+    breadth = ((composite.get("basket") or {}).get("breadth") or {})
+    positive_20d = (breadth.get("positive_20d_count") or 0) / max(1, breadth.get("positive_20d_eligible") or 0)
+    divergence = "NARROW_LEADERSHIP" if disagreement is not None and etf_signal.get("pulse", 0) >= 60 and positive_20d < .4 else "EARLY_BROADENING" if disagreement is not None and basket_signal.get("pulse", 0) >= 60 and etf_signal.get("pulse", 100) < 55 and positive_20d >= .6 else None
     representative = next((metrics.get(mapping.ticker, {}) for mapping in etfs if mapping.ticker in metrics), {})
     node_metrics = {
         **representative,
@@ -282,6 +317,7 @@ def _calculate_node(
         "etf_signal": {key: etf_signal.get(key) for key in ("pulse", "status", "coverage_quality", "confidence", "members")},
         "basket_signal": {key: basket_signal.get(key) for key in ("pulse", "status", "coverage_quality", "confidence", "members")},
         "etf_basket_disagreement": composite.get("etf_basket_disagreement"),
+        "proxy_divergence": divergence,
     }
     return composite, node_metrics
 
@@ -366,14 +402,23 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
     cached_dates: dict[str, set[date]] = {}
     for row in stored_prices:
         cached_dates.setdefault(row.symbol, set()).add(row.date)
-    fetch_days = 45 if all(len(cached_dates.get(ticker, set())) >= 252 for ticker in pulse_symbols) else get_settings().industry_pulse_history_days
+    fetch_days = _fetch_lookback_days(cached_dates, pulse_symbols)
     histories = fetch_histories(sorted(pulse_symbols), days=fetch_days)
     run.etf_total = len(ETF_SYMBOLS)
     for ticker, history in histories.items():
         if history.provider:
             _upsert_history(db, ticker, history, stored_price_cache)
         for mapping in mappings_by_ticker.get(ticker, []):
-            mapping.health_status = "ACTIVE" if history.status == "success" else "DEGRADED" if history.status == "degraded" else "FALLBACK" if history.status == "fallback" else "UNAVAILABLE"
+            metadata = dict(mapping.metadata_json or {})
+            failures = 0 if history.bars else int(metadata.get("consecutive_data_failures") or 0) + 1
+            metadata["consecutive_data_failures"] = failures
+            no_history = not cached_dates.get(ticker)
+            mapping.health_status = _constituent_health(history, failures, no_history=no_history, manual_seed=mapping.classification_source == "MANUAL_CURATED_SEED")
+            if mapping.classification_source == "MANUAL_CURATED_SEED":
+                metadata["seed_validation_status"] = "VALID" if history.bars else mapping.health_status
+                if mapping.health_status == "SEED_INVALID":
+                    metadata["replacement_state"] = "PENDING_REVIEW"
+            mapping.metadata_json = metadata
             mapping.last_checked_at = datetime.now(UTC)
             mapping.last_trading_date = history.bars[-1].date if history.bars else None
             mapping.data_quality = history.data_quality
@@ -444,6 +489,10 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
     backfill_limit = max(0, int(get_settings().industry_pulse_backfill_days))
     all_trading_days = sorted({row["date"] for row in benchmark_rows.get("SPY", []) if row.get("date") and row["date"] <= day})
     trading_days = all_trading_days[-backfill_limit:] if backfill_limit else []
+    manual_node_ids = {mapping.node_id for mapping in all_mappings if mapping.classification_source == "MANUAL_CURATED_SEED"}
+    versioned_node_ids = set(db.scalars(select(IndustryPulseSnapshot.node_id).where(IndustryPulseSnapshot.node_id.in_(manual_node_ids), IndustryPulseSnapshot.calculation_version == CALCULATION_VERSION).distinct()).all()) if manual_node_ids else set()
+    if _history_backfill_complete(manual_node_ids, versioned_node_ids):
+        trading_days = [day]
     snapshot_history: dict[int, list[IndustryPulseSnapshot]] = {node.id: [] for node, _ in mapped_nodes}
     existing_snapshot_by_key: dict[tuple[int, date], IndustryPulseSnapshot] = {}
     if nodes:
@@ -528,7 +577,16 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
     run.finished_at = datetime.now(UTC)
     run.duration_ms = int((perf_counter() - started) * 1000)
     db.commit()
-    return {"status": run.status, "run_id": run.id, "trading_date": day.isoformat(), "etf_total": run.etf_total, "constituent_total": len(pulse_symbols - set(ETF_SYMBOLS)), "yfinance_success": run.yfinance_success, "finnhub_fallback": run.finnhub_fallback, "failed": run.failed, "sector_calculated": run.sector_calculated, "sector_unavailable": run.sector_unavailable, "focus_signal_count": run.focus_signal_count, "duration_ms": run.duration_ms, "bootstrap": bootstrap}
+    health_counts: dict[str, int] = {}
+    manual_rows = [mapping for mapping in all_mappings if mapping.classification_source == "MANUAL_CURATED_SEED"]
+    manual_symbols = {mapping.ticker for mapping in manual_rows}
+    valid_symbols = {ticker for ticker in manual_symbols if histories.get(ticker) and histories[ticker].bars}
+    temporary_symbols = {mapping.ticker for mapping in manual_rows if mapping.health_status == "TEMPORARY_DATA_FAILURE"}
+    invalid_symbols = {mapping.ticker for mapping in manual_rows if mapping.health_status in {"SEED_INVALID", "PERMANENT_SYMBOL_INVALID"}}
+    for mapping in all_mappings:
+        if mapping.classification_source == "MANUAL_CURATED_SEED":
+            health_counts[mapping.health_status] = health_counts.get(mapping.health_status, 0) + 1
+    return {"status": run.status, "run_id": run.id, "trading_date": day.isoformat(), "etf_total": run.etf_total, "constituent_total": len(pulse_symbols - set(ETF_SYMBOLS)), "manual_seed_memberships": len(manual_rows), "unique_ticker_count": len(manual_symbols), "valid_ticker_count": len(valid_symbols), "invalid_ticker_count": len(invalid_symbols), "temporary_data_failures": len(temporary_symbols), "yfinance_success": run.yfinance_success, "finnhub_fallback": run.finnhub_fallback, "failed": run.failed, "health_counts": health_counts, "sector_calculated": run.sector_calculated, "sector_unavailable": run.sector_unavailable, "focus_signal_count": run.focus_signal_count, "duration_ms": run.duration_ms, "bootstrap": bootstrap}
 
 
 def _score_weights() -> dict[str, float]:
@@ -635,6 +693,9 @@ def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
             "derived_from_children": snapshot is None and bool(descendants),
             "proxy_mode": direct_metrics.get("proxy_mode") if snapshot else "DERIVED" if descendants else None,
             "constituent_count": basket.get("valid_constituents", 0),
+            "synthetic_available": int(basket.get("valid_constituents", 0) or 0) >= get_settings().industry_pulse_min_constituents,
+            "synthetic_confidence": basket.get("coverage_confidence", "UNAVAILABLE"),
+            "synthetic_coverage_quality": basket.get("effective_weight_coverage"),
             "breadth_detail": basket.get("breadth") or {},
             "calculation_status": "READY" if evidence and mean("pulse") is not None else "INSUFFICIENT_COVERAGE",
         }
@@ -724,6 +785,9 @@ def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
         if row.get("proxy_mode") in proxy_counts:
             proxy_counts[row["proxy_mode"]] += 1
     coverage = {"total_nodes": total_groups, "direct_etf_nodes": proxy_counts["DIRECT_ETF"], "equity_basket_nodes": proxy_counts["EQUITY_BASKET"], "hybrid_nodes": proxy_counts["HYBRID"], "calculable_nodes": len(calculable_rows), "eligible_nodes": len(eligible_rows), "insufficient_nodes": total_groups - len(calculable_rows), "confidence": confidence_counts}
+    synthetic_confidence = {key: sum(str(row.get("synthetic_confidence") or "UNAVAILABLE").upper() == key.upper() for row in group_rows) for key in ("high", "medium", "low", "unavailable")}
+    synthetic_quality = [float(row["synthetic_coverage_quality"]) for row in group_rows if row.get("synthetic_coverage_quality") is not None]
+    synthetic_coverage = {"total_nodes": len(group_rows), "available_nodes": sum(bool(row.get("synthetic_available")) for row in group_rows), "effective_data_coverage": sum(synthetic_quality) / len(synthetic_quality) if synthetic_quality else None, "confidence": synthetic_confidence}
     def historical_breadth(period: int) -> float | None:
         rows: list[IndustryPulseSnapshot] = []
         for group in [node for node in nodes if node.level == "group"]:
@@ -738,7 +802,7 @@ def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
     breadth_change_20d = breadth - breadth_20d if breadth_20d is not None else None
     broadening_state = "RAPIDLY_BROADENING" if (breadth_change_5d or 0) >= .15 else "BROADENING" if (breadth_change_5d or 0) >= .05 or (breadth_change_20d or 0) >= .10 else "CONCENTRATING" if (breadth_change_5d or 0) <= -.05 else "STABLE"
     leaf_nodes = [leaf for category in groups for group in category["industry_groups"] for leaf in group["nodes"]]
-    return {"as_of": day.isoformat() if day else None, "groups": groups, "nodes": leaf_nodes, "relations": relations, "hierarchy": relations, "breadth": breadth, "breadth_summary": breadth_summary, "chain_breadth_score": breadth, "chain_breadth_change_5d": breadth_change_5d, "chain_breadth_change_20d": breadth_change_20d, "chain_broadening_status": broadening_state, "concentration": concentration, "propagation_status": propagation_status, "propagation_frontier": propagation_frontier, "propagation_edges": propagation_edges, "coverage": coverage, "available_groups": len(available_groups), "total_groups": total_groups}
+    return {"as_of": day.isoformat() if day else None, "groups": groups, "nodes": leaf_nodes, "relations": relations, "hierarchy": relations, "breadth": breadth, "breadth_summary": breadth_summary, "chain_breadth_score": breadth, "chain_breadth_change_5d": breadth_change_5d, "chain_breadth_change_20d": breadth_change_20d, "chain_broadening_status": broadening_state, "concentration": concentration, "propagation_status": propagation_status, "propagation_frontier": propagation_frontier, "propagation_edges": propagation_edges, "coverage": coverage, "synthetic_coverage": synthetic_coverage, "available_groups": len(available_groups), "total_groups": total_groups}
 
 
 def node_detail_payload(db: Session, node_id: int, range_days: int = 30) -> dict[str, Any] | None:
@@ -752,7 +816,8 @@ def node_detail_payload(db: Session, node_id: int, range_days: int = 30) -> dict
     composite = _snapshot_payload(db, latest) if latest else None
     node_payload = {"id": node.id, "node_key": node.node_key, "name": node.name, "name_zh": node.name_zh, "taxonomy": node.taxonomy, "level": node.level, "parent_id": node.parent_id, **(composite or {})}
     narrative = db.scalar(select(IndustryPulseNarrative).where(IndustryPulseNarrative.node_id == node_id).order_by(IndustryPulseNarrative.trading_date.desc()).limit(1))
-    relative = (latest.metrics_json or {}).get("relative_strength_benchmarks", {}) if latest else {}
+    latest_metrics = latest.metrics_json or {} if latest else {}
+    relative = latest_metrics.get("relative_strength_benchmarks") or (latest_metrics.get("basket") or {}).get("relative_strength_benchmarks") or {}
     node_payload["relative_strength"] = relative
     metrics = latest.metrics_json if latest else {}
     basket = metrics.get("basket") or {}
@@ -762,7 +827,7 @@ def node_detail_payload(db: Session, node_id: int, range_days: int = 30) -> dict
     for row in mappings:
         if row.instrument_type != "stock" or row.mapping_type != "theme_exposure":
             continue
-        constituents.append({"ticker": row.ticker, "role": row.constituent_role, "exposure": row.exposure, "confidence": row.confidence, "weight": (basket_members.get(row.ticker) or {}).get("weight"), "classification_source": row.classification_source, "short_reason": (row.metadata_json or {}).get("short_reason"), "enabled_for_pulse": row.enabled_for_pulse, "valid_from": row.valid_from.isoformat() if row.valid_from else None, "valid_to": row.valid_to.isoformat() if row.valid_to else None, **(breadth_members.get(row.ticker) or {})})
+        constituents.append({"ticker": row.ticker, "role": row.constituent_role, "sub_role": (row.metadata_json or {}).get("sub_role"), "purity": row.purity, "exposure": row.exposure, "confidence": row.confidence, "weight": (basket_members.get(row.ticker) or {}).get("weight"), "classification_source": row.classification_source, "audit_status": (row.metadata_json or {}).get("audit_status"), "validation_status": (row.metadata_json or {}).get("seed_validation_status"), "health_status": row.health_status, "short_reason": (row.metadata_json or {}).get("short_reason"), "enabled_for_pulse": row.enabled_for_pulse, "valid_from": row.valid_from.isoformat() if row.valid_from else None, "valid_to": row.valid_to.isoformat() if row.valid_to else None, **(breadth_members.get(row.ticker) or {})})
     etfs = [{"ticker": row.ticker, "role": row.role, "mapping_type": row.mapping_type, "purity": row.purity, "exposure": row.exposure, "confidence": row.confidence, "health_status": row.health_status, "data_quality": row.data_quality} for row in mappings if row.mapping_type == "etf_proxy"]
     return {"node": node_payload, "proxy_mode": metrics.get("proxy_mode") or "DIRECT_ETF", "etfs": etfs, "constituents": constituents, "breadth": basket.get("breadth") or {}, "metrics": metrics, "composite": composite, "history": [_snapshot_payload(db, row) for row in snapshots], "mood": latest.mood if latest else "unavailable", "benchmark": latest.benchmark_json if latest else {}, "relative_strength": relative, "ai_summary": narrative.summary if narrative else None, "ai_summary_meta": {"model": narrative.model, "status": narrative.status} if narrative else None}
 

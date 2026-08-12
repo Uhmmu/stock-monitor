@@ -58,8 +58,25 @@ const BUCKET_LABELS: Record<string, string> = {
   cooling: '领涨降温', cooling_leaders: '领涨降温',
   risk_off: '风险规避', panic: '风险规避',
   reversal_candidates: '早期反转候选', reversal: '早期反转候选', rotation: '轮动增强',
-  breadth_expansion: '广度扩张', narrow_leadership: '窄幅领涨', internal_confirmation: '内部确认',
+  breadth_expansion: '广度扩张', early_broadening: '早期扩散', narrow_leadership: '窄幅领涨', internal_confirmation: '内部确认',
 }
+
+const PROXY_LABELS: Record<string, string> = {
+  DIRECT_ETF: '外部 ETF 确认',
+  EQUITY_BASKET: '代表性股票篮子',
+  HYBRID: '篮子 + 外部 ETF',
+  DERIVED: '子节点聚合',
+}
+
+const DIVERGENCE_LABELS: Record<string, string> = {
+  NARROW_LEADERSHIP: '窄幅领涨',
+  EARLY_BROADENING: '早期扩散',
+  BROADENING: '广度扩张',
+  CONVERGENCE: '走势一致',
+  DIVERGENCE: '走势分化',
+}
+
+const THEME_BASKET_KEYS = ['healthcare_ai', 'financial_ai', 'consumer_ai', 'ai_platform', 'ai_platforms', 'enterprise_ai', 'data', 'cybersecurity', 'developer_ecosystem', 'robotics', 'autonomous_systems', 'defense_ai']
 
 const asRecord = (value: unknown): JsonRecord => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}
 const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : []
@@ -82,6 +99,45 @@ const pickArray = (value: unknown, keys: string[]): unknown[] => {
 const scoreValue = (raw: JsonRecord, keys: string[]) => asNumber(first(...keys.map(key => raw[key])))
 
 const score = (value: number | null) => value == null ? null : Math.max(0, Math.min(100, value))
+
+const nestedValue = (value: unknown, keys: string[]) => {
+  const record = asRecord(value)
+  return first(...keys.map(key => record[key]))
+}
+
+const scalarValue = (value: unknown, keys: string[]) => {
+  const nested = nestedValue(value, keys)
+  return nested === undefined ? value : nested
+}
+
+const proxyLabel = (value: string | null) => value == null ? '代理不足' : PROXY_LABELS[value.toUpperCase()] || value
+
+const themeBasket = (row: PulseRow) => {
+  const raw = row.raw
+  if (first(raw.is_theme_basket, raw.theme_basket, raw.themeBasket) === true) return true
+  const key = String(first(raw.node_key, raw.nodeKey, raw.code, row.code, raw.slug, '')).toLowerCase()
+  return THEME_BASKET_KEYS.some(candidate => key.includes(candidate))
+}
+
+const ratioText = (value: unknown) => {
+  const number = asNumber(value)
+  if (number == null) return null
+  return `${number >= 0 ? '+' : ''}${number.toFixed(1)}%`
+}
+
+const contributionText = (value: unknown) => {
+  const number = asNumber(value)
+  if (number == null) return '数据不足'
+  return `${number >= 0 ? '+' : ''}${number.toFixed(1)}%`
+}
+
+function breadthFraction(breadth: JsonRecord, key: string): string {
+  const nested = asRecord(breadth[key])
+  const numerator = asNumber(first(breadth[`${key}_count`], breadth[`${key}_numerator`], nested.count, nested.numerator, nested.positive, key === 'breadth' ? breadth.strong_count : undefined, key === 'breadth' ? breadth.bullish_count : undefined, key === 'breadth' ? breadth.positive_20d_count : undefined))
+  const denominator = asNumber(first(breadth[`${key}_eligible`], breadth[`${key}_denominator`], nested.eligible, nested.denominator, nested.total, key === 'breadth' ? breadth.valid_constituents : undefined, key === 'breadth' ? breadth.constituent_count : undefined, key === 'breadth' ? breadth.positive_20d_eligible : undefined))
+  if (numerator == null && denominator == null) return '数据不足'
+  return `${numerator == null ? '—' : numerator} / ${denominator == null ? '—' : denominator}`
+}
 
 const rowId = (raw: JsonRecord, fallback: string) => String(first(raw.id, raw.node_id, raw.node_key, raw.key, raw.code, raw.symbol, fallback))
 
@@ -110,8 +166,8 @@ export function normalizePulseRow(value: unknown, index = 0): PulseRow {
     risk: score(scoreValue(raw, ['risk', 'risk_score'])),
     change5d: rowChange(raw),
     mood: asText(first(raw.mood, raw.regime, raw.status, raw.direction)),
-    confidence: first(raw.confidence, raw.confidence_score, raw.data_confidence) as number | string | null ?? null,
-    coverage: first(raw.coverage, raw.coverage_quality, raw.data_quality, raw.coverage_percent) as number | string | null ?? null,
+    confidence: scalarValue(first(raw.confidence, raw.confidence_score, raw.data_confidence), ['confidence', 'score', 'value', 'level']) as number | string | null ?? null,
+    coverage: scalarValue(first(raw.coverage, raw.coverage_quality, raw.data_quality, raw.coverage_percent), ['quality', 'coverage', 'value', 'percent', 'level']) as number | string | null ?? null,
     breadth: score(scoreValue(raw, ['breadth', 'breadth_score', 'breadth_percent'])),
     relativeStrength: score(scoreValue(raw, ['relative_strength', 'relative_strength_score', 'rs_score', 'rs'])),
     proxyMode: asText(first(raw.proxy_mode, raw.proxyMode)),
@@ -189,11 +245,11 @@ function ScoreCell({ label, value, inverse = false }: { label: string; value: nu
 
 function PulseCard({ row, onSelect, compact = false }: { row: PulseRow; onSelect: (row: PulseRow) => void; compact?: boolean }) {
   return <button type="button" className={`industry-pulse-card${compact ? ' compact' : ''}`} onClick={() => onSelect(row)}>
-    <div className="industry-pulse-card-head"><span><b>{row.name}</b>{row.code && <small>{row.code}</small>}</span><em>{row.rank != null ? `#${row.rank}` : moodText(row.mood)}</em></div>
+    <div className="industry-pulse-card-head"><span><b>{row.name}</b>{row.code && <small>{row.code}</small>}{themeBasket(row) && <small className="industry-theme-badge">Theme Basket</small>}</span><em>{row.rank != null ? `#${row.rank}` : moodText(row.mood)}</em></div>
     <div className="industry-pulse-value"><strong>{scoreText(row.pulse)}</strong><span>Pulse</span><small className={row.change5d == null ? '' : row.change5d >= 0 ? 'positive' : 'negative'}>{signedText(row.change5d)} · 5D</small></div>
     {!compact && <Sparkline values={row.sparkline}/>}
     <div className="industry-score-grid four"><ScoreCell label="Breadth" value={row.breadth}/><ScoreCell label="RS" value={row.relativeStrength}/><ScoreCell label="Heat" value={row.heat}/><ScoreCell label="Risk" value={row.risk} inverse/></div>
-    <footer><span>{moodText(row.mood)}</span><span>{row.proxyMode || 'Proxy不足'} · {row.constituentCount} 只 · {confidenceText(row.confidence)}</span></footer>
+    <footer><span>{moodText(row.mood)}</span><span>{proxyLabel(row.proxyMode)} · {row.constituentCount ? `${row.constituentCount} 只` : '篮子数据不足'} · {confidenceText(row.confidence)}</span></footer>
   </button>
 }
 
@@ -254,10 +310,19 @@ function AIChainView({ data, loading, error, onSelect }: { data: unknown; loadin
   const eligibleNodes = asNumber(breadthSummary.eligible_nodes) ?? 0
   const concentrationValue = asText(concentration.status) === 'NO_STRONG_NODES' ? '暂无强势链条' : concentrationScore == null ? '数据不足' : `${concentrationScore.toFixed(0)}%`
   if (!groups.length) return <EmptyState text="暂无 AI 产业链快照。" />
+  const chainRows = groups.flatMap(group => group.rows)
+  const syntheticCoverageRaw = first(record.synthetic_coverage, record.synthetic_node_coverage, coverage.synthetic, coverage.synthetic_nodes, concentration.synthetic_coverage)
+  const syntheticCoverage = asRecord(syntheticCoverageRaw)
+  const syntheticTotal = asNumber(first(syntheticCoverage.total_nodes, syntheticCoverage.total, coverage.synthetic_total_nodes, record.synthetic_total_nodes, record.total_synthetic_nodes, coverage.synthetic_nodes)) ?? chainRows.length
+  const syntheticAvailable = asNumber(first(syntheticCoverage.available_nodes, syntheticCoverage.valid_nodes, syntheticCoverage.calculable_nodes, coverage.synthetic_available_nodes, record.synthetic_available_nodes, record.available_synthetic_nodes)) ?? chainRows.filter(row => row.pulse != null && row.constituentCount >= 5).length
+  const syntheticQuality = scalarValue(first(syntheticCoverage.quality, syntheticCoverage.coverage, syntheticCoverage.effective_data_coverage, syntheticCoverage.effective_weight_coverage, syntheticCoverageRaw, coverage.synthetic_coverage, record.synthetic_coverage_quality), ['quality', 'coverage', 'value', 'effective_weight_coverage'])
+  const syntheticConfidenceRaw = first(syntheticCoverage.confidence, record.synthetic_confidence, coverage.synthetic_confidence)
+  const syntheticConfidence = asRecord(syntheticConfidenceRaw)
+  const confidenceTextValue = Object.keys(syntheticConfidence).length ? `${asNumber(syntheticConfidence.high) ?? 0}/${asNumber(syntheticConfidence.medium) ?? 0}/${asNumber(syntheticConfidence.low) ?? 0}` : confidenceText(syntheticConfidenceRaw as number | string | null)
   return <div className="industry-view-content">
-    <section className="industry-chain-banner"><div><p>AI TRADE STRUCTURE</p><h3>AI 产业链状态</h3><p>以下为板块行为与节点扩散信号，不是新闻情绪，也不是资金流入/流出记录。</p></div><div className="industry-chain-facts"><span><b>{concentrationValue}</b><small>{asText(first(concentration.label_zh, concentration.label)) || '链条集中度'}</small></span><span><b>{scoreText(chainBreadth)}</b><small>链条广度 · {strongNodes}/{eligibleNodes}</small></span></div></section>
-    <div className="industry-coverage-grid"><span><b>{asNumber(coverage.calculable_nodes) ?? availableGroups ?? 0}/{asNumber(coverage.total_nodes) ?? totalGroups ?? 0}</b><small>可计算节点</small></span><span><b>{asNumber(coverage.direct_etf_nodes) ?? 0}</b><small>ETF</small></span><span><b>{asNumber(coverage.hybrid_nodes) ?? 0}</b><small>Hybrid</small></span><span><b>{asNumber(coverage.equity_basket_nodes) ?? 0}</b><small>Basket</small></span><span><b>{asNumber(confidence.high) ?? 0}/{asNumber(confidence.medium) ?? 0}/{asNumber(confidence.low) ?? 0}</b><small>高 / 中 / 低置信度</small></span></div>
-    <p className="industry-signal-note"><b>覆盖口径</b>ETF、股票篮子与 Hybrid 分开统计；链条广度使用 {strongNodes}/{eligibleNodes} 个 eligible 节点。{propagationText ? ` ${propagationText}${propagationFrontier ? ` · 当前前沿：${propagationFrontier}` : ''}` : ''}</p>
+    <section className="industry-chain-banner"><div><p>AI TRADE STRUCTURE</p><h3>AI 产业链状态</h3><p>主要覆盖口径是每个 AI 节点的代表性股票篮子；外部 ETF 仅作市场确认，不替代篮子数据。</p></div><div className="industry-chain-facts"><span><b>{concentrationValue}</b><small>{asText(first(concentration.label_zh, concentration.label)) || '链条集中度'}</small></span><span><b>{scoreText(chainBreadth)}</b><small>链条广度 · {strongNodes}/{eligibleNodes}</small></span></div></section>
+    <div className="industry-coverage-grid"><span><b>{syntheticAvailable}/{syntheticTotal}</b><small>代表性股票篮子覆盖</small></span><span><b>{coverageText(syntheticQuality as number | string | null)}</b><small>有效篮子数据</small></span><span><b>{confidenceTextValue}</b><small>篮子置信度 · 高 / 中 / 低</small></span><span><b>{asNumber(coverage.direct_etf_nodes) ?? 0}</b><small>外部 ETF 确认</small></span><span><b>{strongNodes}/{eligibleNodes}</b><small>节点广度分子 / 分母</small></span></div>
+    <p className="industry-signal-note"><b>覆盖口径</b>代表性股票篮子是 AI 产业链的主要数据层；链条广度使用 {strongNodes}/{eligibleNodes} 个 eligible 节点。{propagationText ? ` ${propagationText}${propagationFrontier ? ` · 当前前沿：${propagationFrontier}` : ''}` : ''}</p>
     <div className="industry-chain-grid">{groups.map(group => <section className="industry-chain-group" key={group.key}><div className="industry-section-heading"><div><p>CHAIN NODE</p><h3>{group.label}</h3></div><small>{group.rows.length} 个节点</small></div><div className="industry-chain-nodes">{group.rows.map(row => <PulseCard key={row.id} row={row} onSelect={onSelect} compact/>)}</div></section>)}</div>
   </div>
 }
@@ -275,7 +340,7 @@ function FocusView({ data, loading, error, onSelect }: { data: unknown; loading:
   if (error) return <ErrorState text="重点板块信号暂时无法读取。" />
   const buckets = extractFocusBuckets(data)
   if (!buckets.length) return <EmptyState text="暂无重点板块信号。" />
-  return <div className="industry-view-content"><p className="industry-signal-note"><b>信号口径</b>这些分组由价格、趋势、相对强度、成交量和波动变化推导；不代表真实资金流向，也不是买入或卖出建议。</p><div className="industry-focus-grid">{buckets.map(bucket => <section className="industry-focus-bucket" key={bucket.key}><div className="industry-section-heading"><div><p>FOCUS SIGNAL</p><h3>{bucket.label}</h3></div><small>{bucket.rows.length} 个</small></div><div className="industry-focus-list">{bucket.rows.slice(0, 8).map(row => <FocusNote key={row.id} row={row} onSelect={onSelect}/>)}</div></section>)}</div></div>
+  return <div className="industry-view-content"><p className="industry-signal-note"><b>信号口径</b>这些分组由价格、趋势、相对强度、成交量和波动变化推导；不代表真实资金流向，也不构成投资建议。</p><div className="industry-focus-grid">{buckets.map(bucket => <section className="industry-focus-bucket" key={bucket.key}><div className="industry-section-heading"><div><p>FOCUS SIGNAL</p><h3>{bucket.label}</h3></div><small>{bucket.rows.length} 个</small></div><div className="industry-focus-list">{bucket.rows.slice(0, 8).map(row => <FocusNote key={row.id} row={row} onSelect={onSelect}/>)}</div></section>)}</div></div>
 }
 
 function TaxonomyTree({ nodes, onSelect }: { nodes: TaxonomyNode[]; onSelect: (row: PulseRow) => void }) {
@@ -299,10 +364,49 @@ function TaxonomyView({ data, loading, error, onSelect }: { data: unknown; loadi
   return <div className="industry-view-content"><section className="industry-section"><div className="industry-section-heading"><div><p>BASE INDUSTRY TAXONOMY</p><h3>全市场三层分类</h3></div><small>公司业务身份与主题暴露分开</small></div><TaxonomyTree nodes={nodes} onSelect={onSelect}/></section></div>
 }
 
-type DetailData = { node: PulseRow; history: { date: string; value: number }[]; etfs: JsonRecord[]; constituents: JsonRecord[]; breadth: JsonRecord; proxyMode: string | null; summary: string | null; relative: JsonRecord }
+type DetailData = {
+  node: PulseRow
+  history: { date: string; value: number }[]
+  etfs: JsonRecord[]
+  constituents: JsonRecord[]
+  breadth: JsonRecord
+  basket: JsonRecord
+  contributions: { leaders: JsonRecord[]; laggards: JsonRecord[] }
+  proxyMode: string | null
+  proxyDivergence: unknown
+  summary: string | null
+  relative: JsonRecord
+}
+
+function contributionRows(value: unknown, keys: string[]): JsonRecord[] {
+  return pickArray(value, keys).map(asRecord).filter(row => Object.keys(row).length)
+}
+
+function contributionData(record: JsonRecord, basket: JsonRecord): { leaders: JsonRecord[]; laggards: JsonRecord[] } {
+  const metrics = asRecord(record.metrics)
+  const basketSignal = asRecord(metrics.basket_signal)
+  const synthetic = asRecord(first(metrics.synthetic, metrics.synthetic_etf, metrics.synthetic_basket))
+  const source = first(record.contributions, record.contribution, basket.contributions, basket.contribution, basketSignal.contributions, basketSignal.contribution, synthetic.contributions, synthetic.contribution)
+  const leaders = [
+    contributionRows(source, ['leaders', 'top', 'top_contributors', 'positive', 'gainers', 'top_5d']),
+    contributionRows(basket, ['contribution_leaders', 'top_contributors_5d', 'top_5d_contributors']),
+    contributionRows(basketSignal, ['contribution_leaders', 'top_contributors', 'leaders', 'top_5d_contributors']),
+    contributionRows(synthetic, ['contribution_leaders', 'top_contributors', 'leaders', 'top_5d_contributors']),
+    contributionRows(record, ['contribution_leaders', 'top_contributors', 'leaders', 'top_5d_contributors']),
+  ].find(rows => rows.length) || []
+  const laggards = [
+    contributionRows(source, ['laggards', 'bottom', 'bottom_contributors', 'negative', 'losers', 'bottom_5d']),
+    contributionRows(basket, ['contribution_laggards', 'bottom_contributors_5d', 'bottom_5d_contributors']),
+    contributionRows(basketSignal, ['contribution_laggards', 'bottom_contributors', 'laggards', 'bottom_5d_contributors']),
+    contributionRows(synthetic, ['contribution_laggards', 'bottom_contributors', 'laggards', 'bottom_5d_contributors']),
+    contributionRows(record, ['contribution_laggards', 'bottom_contributors', 'laggards', 'bottom_5d_contributors']),
+  ].find(rows => rows.length) || []
+  return { leaders, laggards }
+}
 
 function detailData(value: unknown, fallback: PulseRow): DetailData {
   const record = asRecord(value)
+  const metrics = asRecord(record.metrics)
   const rawNode = first(record.node, record.detail, record.item, value)
   const node = normalizePulseRow(rawNode, 0)
   const historyRows = pickArray(record, ['history', 'pulse_history', 'snapshots', 'series'])
@@ -310,11 +414,21 @@ function detailData(value: unknown, fallback: PulseRow): DetailData {
     const row = asRecord(item)
     return { date: String(first(row.date, row.trading_date, row.as_of, row.observation_date, '')), value: scoreValue(row, ['pulse', 'pulse_score', 'score', 'value']) ?? NaN }
   }).filter(item => item.date && Number.isFinite(item.value))
+  const basketSignal = asRecord(metrics.basket_signal)
+  const basketBase = asRecord(first(record.synthetic_etf, record.synthetic_basket, record.representative_basket, record.basket, metrics.synthetic_etf, metrics.synthetic_basket, metrics.basket, basketSignal.basket))
+  const basket: JsonRecord = { ...basketBase, metric: first(basketBase.metric, basketSignal.metric, asRecord(metrics.synthetic).metric) }
   const etfs = pickArray(record, ['etfs', 'proxies', 'instruments', 'proxy_etfs']).map(asRecord).filter(item => Object.keys(item).length)
-  const constituents = pickArray(record, ['constituents', 'basket_members']).map(asRecord).filter(item => Object.keys(item).length)
-  const breadth = asRecord(record.breadth)
-  const relative = asRecord(first(record.relative_strength, record.relative, record.benchmark_comparison))
-  return { node: node.id === 'node-0' && fallback.id !== 'node-0' ? fallback : node, history, etfs, constituents, breadth, proxyMode: asText(first(record.proxy_mode, node.proxyMode)), summary: asText(first(record.ai_summary, record.summary, record.narrative)), relative }
+  const directConstituents = pickArray(record, ['constituents', 'basket_members']).map(asRecord).filter(item => Object.keys(item).length)
+  const constituents = directConstituents.length ? directConstituents : pickArray(basket, ['members', 'constituents']).map(asRecord).filter(item => Object.keys(item).length)
+  const breadth = asRecord(first(record.breadth, basket.breadth, metrics.breadth))
+  const relative = asRecord(first(record.relative_strength, record.relative, record.benchmark_comparison, metrics.relative_strength_benchmarks, node.raw.relative_strength))
+  const contributions = contributionData(record, basket)
+  const divergenceRaw = first(record.proxy_divergence, metrics.proxy_divergence, basket.proxy_divergence)
+  const divergenceObject = asRecord(divergenceRaw)
+  const divergenceStatus = first(divergenceObject.status, divergenceObject.signal, divergenceObject.label, typeof divergenceRaw === 'string' ? divergenceRaw : undefined)
+  const divergenceValue = first(divergenceObject.value, divergenceObject.points, divergenceObject.score, divergenceObject.percent, record.etf_basket_disagreement, record.proxy_disagreement, metrics.etf_basket_disagreement, basket.etf_basket_disagreement, typeof divergenceRaw === 'number' ? divergenceRaw : undefined)
+  const proxyDivergence = divergenceStatus == null && divergenceValue == null ? null : { status: divergenceStatus, value: divergenceValue }
+  return { node: node.id === 'node-0' && fallback.id !== 'node-0' ? fallback : node, history, etfs, constituents, breadth, basket, contributions, proxyMode: asText(first(record.proxy_mode, node.proxyMode)), proxyDivergence, summary: asText(first(record.ai_summary, record.summary, record.narrative)), relative }
 }
 
 function HistoryChart({ points }: { points: { date: string; value: number }[] }) {
@@ -337,25 +451,57 @@ function ConstituentTable({ rows }: { rows: JsonRecord[] }) {
   })}</div>
 }
 
+function ContributionList({ label, rows }: { label: string; rows: JsonRecord[] }) {
+  if (!rows.length) return null
+  return <div className="industry-contribution-column"><h4>{label}</h4>{rows.slice(0, 5).map((row, index) => {
+    const symbol = String(first(row.ticker, row.symbol, row.code, row.name, `成分 ${index + 1}`))
+    const contribution = first(row.contribution_5d, row.contribution5d, row.contribution, row.impact, row.weighted_return, row.return_5d, row.return5d)
+    const return20 = asNumber(first(row.return_20d, row.return20d))
+    return <div className="industry-contribution-row" key={`${symbol}-${index}`}><span><b>{symbol}</b>{return20 != null && <small>20D {ratioText(return20)}</small>}</span><strong>{contributionText(contribution)}</strong></div>
+  })}</div>
+}
+
+function proxyDivergenceText(value: unknown): string {
+  const record = asRecord(value)
+  const magnitude = asNumber(first(record.value, record.points, record.score, record.percent, value))
+  const status = asText(first(record.status, record.signal, record.label, record.code, value))
+  const label = status ? DIVERGENCE_LABELS[status.toUpperCase()] || status : null
+  if (magnitude != null && label) return `${magnitude.toFixed(1)} pts · ${label}`
+  if (magnitude != null) return `${magnitude.toFixed(1)} pts`
+  return label || '数据不足'
+}
+
 function NodeDetail({ selected, range, onRange, onClose }: { selected: PulseRow | null; range: PulseRange; onRange: (range: PulseRange) => void; onClose: () => void }) {
   const detail = useQuery({ queryKey: ['industry-pulse', 'node', selected?.id, range], queryFn: () => api<unknown>(`/industry-pulse/nodes/${encodeURIComponent(selected!.id)}?range=${range}`), enabled: selected !== null, staleTime: 5 * 60_000 })
-  const data = selected && detail.data ? detailData(detail.data, selected) : selected ? { node: selected, history: [], etfs: [], constituents: [], breadth: {}, proxyMode: selected.proxyMode, summary: null, relative: {} } : null
+  const data = selected && detail.data ? detailData(detail.data, selected) : selected ? { node: selected, history: [], etfs: [], constituents: [], breadth: {}, basket: {}, contributions: { leaders: [], laggards: [] }, proxyMode: selected.proxyMode, proxyDivergence: null, summary: null, relative: {} } : null
   const relativeBenchmarks = data ? [...new Set(['SPY', 'QQQ', ...Object.keys(data.relative)])] : ['SPY', 'QQQ']
+  const basket = data?.basket || {}
+  const configuredConstituents = data ? asNumber(first(basket.target_constituents, basket.configured_constituents, basket.constituent_count, asArray(basket.members).length, data.node.raw.target_constituents, data.constituents.length)) : null
+  const validConstituents = data ? asNumber(first(basket.valid_constituents, basket.valid_count, basket.available_constituents, data.node.raw.valid_constituents, data.node.constituentCount, data.constituents.length)) : null
+  const basketQuality = data ? scalarValue(first(basket.effective_data_coverage, basket.effective_weight_coverage, basket.coverage_quality, basket.coverage, data.node.raw.synthetic_coverage, data.node.coverage), ['quality', 'coverage', 'value', 'effective_weight_coverage']) : null
+  const basketConfidence = data ? scalarValue(first(basket.coverage_confidence, basket.synthetic_confidence, basket.confidence, data.node.raw.synthetic_confidence, data.node.confidence), ['confidence', 'value', 'score']) as number | string | null : null
+  const basketHistory = data ? asNumber(first(basket.history_days, basket.synthetic_points, basket.history_length, data.node.raw.synthetic_history_days)) : null
+  const breadthOverall = data ? breadthFraction(data.breadth, 'breadth') : '数据不足'
+  const qqqRelative = data ? asRecord(first(data.relative.QQQ, data.relative.qqq, data.relative.Qqq)) : {}
+  const qqq20d = data ? asNumber(first(qqqRelative.rs_20d, qqqRelative.value, data.relative.QQQ_20d, data.relative.qqq_20d, data.relative.QQQ, data.relative.qqq)) : null
+  const basketMetric = data ? asRecord(first(basket.metric, basket.metrics, data.node.raw.synthetic_metric)) : {}
+  const basket20d = data ? asNumber(first(basket.return_20d, basket.change_20d, basket.synthetic_return_20d, basketMetric.return_20d, data.node.raw.return_20d, data.node.raw.change_20d, nestedValue(data.node.raw.change, ['20d', '20D']))) : null
   return <Sheet open={selected !== null} onClose={onClose} title={selected?.name || '行业板块详情'} size="wide">
     {!selected ? null : detail.isLoading ? <LoadingState text="正在读取板块详情…"/> : detail.isError ? <ErrorState text="板块详情暂时无法读取。"/> : data && <article className="industry-node-detail">
-      <div className="industry-node-heading"><div><p>NODE DETAIL · CACHED SNAPSHOT</p><h2>{data.node.name}</h2><p>{data.node.code || '行业节点'} · 只读数据；页面不会触发 AI 或外部行情请求。</p></div><div className="industry-node-facts"><span><b>{coverageText(data.node.coverage)}</b><small>覆盖</small></span><span><b>{confidenceText(data.node.confidence)}</b><small>置信度</small></span></div></div>
+      <div className="industry-node-heading"><div><p>NODE DETAIL · CACHED SNAPSHOT</p><h2>{data.node.name}</h2><p>{data.node.code || '行业节点'} · 只读数据；页面不会触发 AI 或外部行情请求。</p>{themeBasket(data.node) && <span className="industry-theme-label">Theme Basket · 主题篮子</span>}</div><div className="industry-node-facts"><span><b>{configuredConstituents == null || validConstituents == null ? '数据不足' : `${validConstituents} / ${configuredConstituents}`}</b><small>篮子覆盖</small></span><span><b>{confidenceText(basketConfidence)}</b><small>篮子置信度</small></span></div></div>
       <div className="industry-detail-score-grid"><ScoreCell label="Pulse" value={data.node.pulse}/><ScoreCell label="Strength" value={data.node.strength ?? data.node.pulse}/><ScoreCell label="Heat" value={data.node.heat}/><ScoreCell label="Risk" value={data.node.risk} inverse/></div>
-      <div className="industry-detail-facts"><div><span>状态</span><b>{moodText(data.node.mood)}</b></div><div><span>Proxy</span><b>{data.proxyMode || '数据不足'}</b></div><div><span>Breadth</span><b>{scoreText(data.node.breadth)}</b></div><div><span>成分股</span><b>{data.constituents.length}</b></div></div>
-      <div className="industry-breadth-grid">{[['MA20', 'above_ma20'], ['MA50', 'above_ma50'], ['5D 正收益', 'positive_5d'], ['20D 正收益', 'positive_20d'], ['RS 改善', 'improving_rs'], ['量能扩张', 'expanding_volume']].map(([label, key]) => <span key={key}><b>{asNumber(data.breadth[`${key}_count`]) ?? 0} / {asNumber(data.breadth[`${key}_eligible`]) ?? 0}</b><small>{label}</small></span>)}</div>
+      <div className="industry-detail-facts"><div><span>状态</span><b>{moodText(data.node.mood)}</b></div><div><span>数据层</span><b>{proxyLabel(data.proxyMode)}</b></div><div><span>内部广度</span><b>{breadthOverall}</b><small>{scoreText(data.node.breadth)} 分</small></div><div><span>有效成分</span><b>{validConstituents == null ? '数据不足' : validConstituents}</b><small>{basketQuality == null ? '覆盖不足' : `${coverageText(basketQuality as number | string | null)} · ${basketHistory == null ? '历史不足' : `${basketHistory} 日历史`}`}</small></div></div>
+      <div className="industry-breadth-grid">{[['MA20', 'above_ma20'], ['MA50', 'above_ma50'], ['5D 正收益', 'positive_5d'], ['20D 正收益', 'positive_20d'], ['RS 改善', 'improving_rs'], ['量能扩张', 'expanding_volume']].map(([label, key]) => <span key={key}><b>{breadthFraction(data.breadth, key)}</b><small>{label} · 分子 / 分母</small></span>)}</div>
       <div className="industry-detail-toolbar"><div role="tablist" aria-label="历史范围">{(['30', '90', '365'] as PulseRange[]).map(value => <button type="button" role="tab" aria-selected={range === value} className={range === value ? 'active' : ''} onClick={() => onRange(value)} key={value}>{value}D</button>)}</div><small>按已保存的 Pulse 快照计算</small></div>
       <section className="industry-detail-section"><div className="industry-section-heading"><div><p>PULSE HISTORY</p><h3>历史状态与趋势</h3></div><small>{data.history.length} 个有效点</small></div><HistoryChart points={data.history}/></section>
-      <section className="industry-detail-section"><div className="industry-section-heading"><div><p>BENCHMARK COMPARISON</p><h3>相对强度</h3></div><small>SPY / QQQ / 一级板块基准</small></div><div className="industry-relative-grid">{relativeBenchmarks.map(label => {
+      <section className="industry-detail-section"><div className="industry-section-heading"><div><p>BENCHMARK COMPARISON</p><h3>相对强度</h3></div><small>代表性股票篮子 vs QQQ / SPY</small></div><div className="industry-relative-highlight"><span><b>{qqq20d == null ? '数据不足' : signedText(qqq20d)}</b><small>RS vs QQQ · 20D</small></span><span><b>{basket20d == null ? '数据不足' : signedText(basket20d)}</b><small>代表性股票篮子 · 20D</small></span></div><div className="industry-relative-grid">{relativeBenchmarks.map(label => {
         const item = asRecord(first(data.relative[label], data.relative[label.toLowerCase()]))
         const value = asNumber(first(item.rs_20d, item.value, data.relative[label], data.relative[label.toLowerCase()]))
         return <div key={label}><span>{label}</span><b>{value === null ? '数据不足' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`}</b><small>相对回报 / 走势由后端快照提供</small></div>
       })}</div></section>
-      <section className="industry-detail-section"><div className="industry-section-heading"><div><p>ETF PROXIES</p><h3>ETF 行情代理</h3></div><small>Role / Purity / Data status</small></div><ProxyTable rows={data.etfs}/></section>
-      <section className="industry-detail-section"><div className="industry-section-heading"><div><p>SYNTHETIC EQUITY BASKET</p><h3>代表股票与内部状态</h3></div><small>分类来源仅用于审核；Pulse 使用已启用成员</small></div><ConstituentTable rows={data.constituents}/></section>
+      {(data.proxyDivergence != null || data.contributions.leaders.length || data.contributions.laggards.length) && <section className="industry-detail-section"><div className="industry-section-heading"><div><p>BASKET EVIDENCE</p><h3>篮子内部证据</h3></div><small>用于判断共振还是少数股票拉动</small></div>{data.proxyDivergence != null && <div className="industry-divergence-note"><span><b>代理分歧</b><small>外部 ETF 与代表性股票篮子的差异</small></span><strong>{proxyDivergenceText(data.proxyDivergence)}</strong></div>}<div className="industry-contribution-grid"><ContributionList label="5D 贡献领先" rows={data.contributions.leaders}/><ContributionList label="5D 贡献落后" rows={data.contributions.laggards}/></div></section>}
+      <section className="industry-detail-section"><div className="industry-section-heading"><div><p>EXTERNAL CONFIRMATION</p><h3>外部 ETF 确认</h3></div><small>不替代代表性股票篮子</small></div><ProxyTable rows={data.etfs}/></section>
+      <section className="industry-detail-section"><div className="industry-section-heading"><div><p>REPRESENTATIVE STOCK BASKET</p><h3>代表性股票篮子</h3></div><small>{themeBasket(data.node) ? 'Theme Basket · 主题篮子' : '分类来源仅用于审核'}；Pulse 使用已启用成员</small></div><ConstituentTable rows={data.constituents}/></section>
       {data.summary && <section className="industry-detail-note"><b>缓存摘要</b><p>{data.summary}</p><small>摘要只解释已保存的确定性结果，不参与 Pulse 计算。</small></section>}
     </article>}
   </Sheet>
@@ -389,7 +535,7 @@ export function IndustryPulse({ enabled = true }: { enabled?: boolean }) {
   }, [overview.data])
   const showDetail = (row: PulseRow) => { setRange('90'); setSelected(row) }
   return <div className="industry-pulse-page">
-    <div className="industry-page-heading"><div><p className="eyebrow">INDUSTRY / SECTOR PULSE</p><h2>行业板块检测</h2><p>用已保存的行业分类、ETF 代理和确定性指标，观察板块强弱、变化速度与 AI 产业链扩散。</p></div><span className="industry-readonly-badge">只读快照{generatedAt ? ` · ${generatedAt}` : ''}</span></div>
+    <div className="industry-page-heading"><div><p className="eyebrow">INDUSTRY / SECTOR PULSE</p><h2>行业板块检测</h2><p>用已保存的代表性股票篮子、外部 ETF 确认和确定性指标，观察板块强弱、变化速度与 AI 产业链扩散。</p></div><span className="industry-readonly-badge">只读快照{generatedAt ? ` · ${generatedAt}` : ''}</span></div>
     <div className="industry-view-tabs" role="tablist" aria-label="行业板块视图">{VIEW_TABS.map(([key, label]) => <button type="button" role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} onClick={() => setView(key)} key={key}>{label}</button>)}</div>
     {view === 'overview' && <OverviewView data={overview.data} loading={overview.isLoading} error={overview.isError} onSelect={showDetail}/>}
     {view === 'ai-chain' && <AIChainView data={aiChain.data} loading={aiChain.isLoading} error={aiChain.isError} onSelect={showDetail}/>}

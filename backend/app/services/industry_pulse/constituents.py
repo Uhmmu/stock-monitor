@@ -25,8 +25,108 @@ from app.models import (
 )
 from app.services.fmp_market import FmpError, FmpQuotaExhausted, sync_profile
 from app.services.industry_pulse.candidates import candidates_by_symbol
+from app.services.industry_pulse.definitions import (
+    CLASSIFICATION_SOURCE_PRIORITY,
+    MANUAL_CURATED_SEED,
+    MANUAL_CURATED_SEED_SOURCE,
+    MANUAL_SEED_MIN_CONSTITUENTS,
+    MANUAL_SEED_PREFERRED_RANGE,
+    MANUAL_SEED_TARGET_CONSTITUENTS,
+    MANUAL_SEED_VERSION,
+)
 
 TAXONOMY_VERSION = "ai-chain-v1"
+
+
+def classification_source_priority(source: str | None) -> int:
+    """Return the persisted source precedence used at membership boundaries."""
+    return CLASSIFICATION_SOURCE_PRIORITY.get(str(source or "").upper(), 0)
+
+
+def seed_manual_curated_memberships(db: Session, *, seed: dict[str, tuple[dict, ...]] | None = None, as_of: date | None = None) -> dict[str, int]:
+    """Persist the canonical 25-node basket without consulting the classifier.
+
+    The state needed for later validation/audit/replacement is metadata only;
+    a failed quote must not disable a configured manual membership here.
+    """
+    seed = seed or MANUAL_CURATED_SEED
+    day = as_of or datetime.now(UTC).date()
+    node_keys = tuple(seed)
+    nodes = {row.node_key: row for row in db.scalars(select(IndustryPulseNode).where(IndustryPulseNode.taxonomy == "ai", IndustryPulseNode.node_key.in_(node_keys), IndustryPulseNode.level == "group")).all()}
+    tickers = {str(item["ticker"]).upper() for rows in seed.values() for item in rows}
+    securities = {
+        (row.yahoo_symbol or row.display_symbol or "").upper(): row
+        for row in db.scalars(select(Security).where(or_(Security.yahoo_symbol.in_(tickers), Security.display_symbol.in_(tickers)))).all()
+        if (row.yahoo_symbol or row.display_symbol)
+    }
+    existing = db.scalars(select(IndustryPulseInstrument).where(IndustryPulseInstrument.instrument_type == "stock", IndustryPulseInstrument.ticker.in_(tickers))).all()
+    by_key: dict[tuple[int, str], list[IndustryPulseInstrument]] = {}
+    for row in existing:
+        by_key.setdefault((row.node_id, row.ticker.upper()), []).append(row)
+    created = updated = missing_nodes = 0
+    for node_key, members in seed.items():
+        node = nodes.get(node_key)
+        if node is None:
+            missing_nodes += 1
+            continue
+        node.metadata_json = {
+            **(node.metadata_json or {}),
+            "synthetic_etf": {
+                "target_constituents": MANUAL_SEED_TARGET_CONSTITUENTS,
+                "preferred_range": list(MANUAL_SEED_PREFERRED_RANGE),
+                "minimum_constituents": MANUAL_SEED_MIN_CONSTITUENTS,
+                "seed_source": MANUAL_CURATED_SEED_SOURCE,
+            },
+        }
+        for member in members:
+            ticker = str(member["ticker"]).upper()
+            candidates = by_key.get((node.id, ticker), [])
+            item = next((row for row in candidates if row.classification_source == MANUAL_CURATED_SEED_SOURCE), None)
+            item = item or next((row for row in sorted(candidates, key=lambda row: classification_source_priority(row.classification_source), reverse=True)), None)
+            if item is None:
+                item = IndustryPulseInstrument(node_id=node.id, ticker=ticker, instrument_type="stock", role="reference")
+                db.add(item)
+                by_key.setdefault((node.id, ticker), []).append(item)
+                created += 1
+            else:
+                updated += 1
+            security = securities.get(ticker)
+            metadata = dict(item.metadata_json or {})
+            metadata.update({
+                "manual_seed": True,
+                "seed_node": node_key,
+                "seed_version": MANUAL_SEED_VERSION,
+                "seed_notes": member.get("notes"),
+                "sub_role": member.get("sub_role"),
+                "role_factor": member.get("role_factor"),
+                "seed_weight": member.get("weight"),
+                "weight": member.get("weight"),
+                "exposure_weight": member.get("exposure_weight"),
+                "historical_membership_mode": "MONTHLY_ROLE_WEIGHT_RECONSTRUCTION",
+                "seed_validation_status": metadata.get("seed_validation_status", "PENDING"),
+                "validation_status": metadata.get("validation_status", "PENDING"),
+                "audit_status": metadata.get("audit_status", "PENDING"),
+                "replacement_state": metadata.get("replacement_state", "NONE"),
+                "replacement_status": metadata.get("replacement_status", "NONE"),
+            })
+            item.security_id = security.id if security else item.security_id
+            item.mapping_type = "theme_exposure"
+            item.role = "reference"
+            item.constituent_role = str(member["role"]).upper()
+            item.purity = float(member.get("purity", 0) or 0)
+            item.exposure = float(member.get("exposure_weight", 0) or 0)
+            item.confidence = 1.0
+            item.liquidity = float(member.get("liquidity", 1) or 1)
+            item.classification_source = MANUAL_CURATED_SEED_SOURCE
+            item.enabled = True
+            item.enabled_for_pulse = True
+            # Manual seeds define the canonical basket for reconstructed
+            # history; a today's start date would erase the backfill window.
+            item.valid_from = None
+            item.valid_to = None
+            item.metadata_json = metadata
+    db.flush()
+    return {"nodes": len(nodes), "configured_nodes": len(seed), "missing_nodes": missing_nodes, "memberships": sum(len(rows) for rows in seed.values()), "created": created, "updated": updated, "unique_tickers": len(tickers)}
 
 
 class MembershipSuggestion(BaseModel):
@@ -184,7 +284,7 @@ def _persist_result(db: Session, row: dict, result: SymbolClassification, *, met
         if node is None:
             continue
         accepted_node_ids.add(node.id)
-        manual = db.scalar(select(IndustryPulseInstrument).where(IndustryPulseInstrument.node_id == node.id, IndustryPulseInstrument.ticker == symbol, IndustryPulseInstrument.classification_source == "MANUAL").limit(1))
+        manual = db.scalar(select(IndustryPulseInstrument).where(IndustryPulseInstrument.node_id == node.id, IndustryPulseInstrument.ticker == symbol, IndustryPulseInstrument.classification_source.in_(("MANUAL_CURATED_SEED", "MANUAL"))).limit(1))
         if manual:
             continue
         item = by_node.get(node.id)
@@ -270,4 +370,16 @@ def bootstrap_ai_constituents(db: Session, *, force: bool = False, classifier=No
     return {"seed_candidates": len(metadata), "due": len(due), "classified": classified, "rejected": rejected, "enabled_memberships": enabled, "low_confidence_memberships": low, "luna_calls": calls, "model": settings.model_medium, "metadata_attempted": hydration["attempted"], "metadata_completed": hydration["completed"], "metadata_failed": hydration["failed"]}
 
 
-__all__ = ["ClassificationBatch", "MembershipSuggestion", "SymbolClassification", "bootstrap_ai_constituents", "hydrate_candidate_metadata"]
+bootstrap_manual_curated_seed = seed_manual_curated_memberships
+
+
+__all__ = [
+    "ClassificationBatch",
+    "MembershipSuggestion",
+    "SymbolClassification",
+    "bootstrap_ai_constituents",
+    "bootstrap_manual_curated_seed",
+    "classification_source_priority",
+    "hydrate_candidate_metadata",
+    "seed_manual_curated_memberships",
+]
