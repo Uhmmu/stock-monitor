@@ -317,7 +317,7 @@ function AIChainView({ data, loading, error, onSelect }: { data: unknown; loadin
     <div className="industry-coverage-grid"><span><b>{syntheticAvailable}/{syntheticTotal}</b><small>代表性股票篮子覆盖</small></span><span><b>{coverageText(syntheticQuality as number | string | null)}</b><small>有效篮子数据</small></span><span><b>{confidenceTextValue}</b><small>篮子置信度 · 高 / 中 / 低</small></span><span><b>{asNumber(coverage.direct_etf_nodes) ?? 0}</b><small>外部 ETF 确认</small></span><span><b>{strongNodes}/{eligibleNodes}</b><small>节点广度分子 / 分母</small></span></div>
     <p className="industry-signal-note"><b>覆盖口径</b>代表性股票篮子是 AI 产业链的主要数据层；链条广度使用 {strongNodes}/{eligibleNodes} 个 eligible 节点。{propagationText ? ` ${propagationText}${propagationFrontier ? ` · 当前前沿：${propagationFrontier}` : ''}` : ''}</p>
     <div className="industry-flow" aria-label="AI 产业链上游到下游流程图">{phases.map((phase, index) => <section className="industry-flow-stage" key={phase.key}>
-      <header><span>{index + 1}</span><div><h3>{phase.label}</h3><p>{phase.note}</p></div>{index < phases.length - 1 && <i aria-hidden="true">→</i>}</header>
+      <div className="industry-flow-stage-heading"><span>{index + 1}</span><div><h3>{phase.label}</h3><p>{phase.note}</p></div>{index < phases.length - 1 && <i aria-hidden="true">→</i>}</div>
       <div className="industry-flow-waterfall">{phase.rows.map(row => <FlowNodeCard key={row.id} row={row} onSelect={onSelect}/>)}</div>
     </section>)}</div>
   </div>
