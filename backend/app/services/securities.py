@@ -14,7 +14,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Security
+from app.models import Security, SecuritySymbolAlias
 from app.services.market_data import fetch_stock_profile
 
 _CACHE_TTL = 15 * 60
@@ -244,6 +244,14 @@ def resolve_security(db: Session, *, security_id: int | None = None, source: str
         existing = db.scalar(select(Security).where(Security.yahoo_symbol == yahoo))
     if not existing and finnhub:
         existing = db.scalar(select(Security).where(Security.finnhub_symbol == finnhub))
+    if not existing and yahoo:
+        alias = db.scalar(select(SecuritySymbolAlias).where(SecuritySymbolAlias.provider == "yahoo", SecuritySymbolAlias.symbol == yahoo))
+        existing = db.get(Security, alias.security_id) if alias else None
+    if not existing and finnhub:
+        alias = db.scalar(select(SecuritySymbolAlias).where(SecuritySymbolAlias.provider == "finnhub", SecuritySymbolAlias.symbol == finnhub))
+        existing = db.get(Security, alias.security_id) if alias else None
+    if existing:
+        yahoo, finnhub = existing.yahoo_symbol or yahoo, existing.finnhub_symbol or finnhub
     profile = fetch_stock_profile(yahoo) if yahoo else None
     if yahoo and not profile:
         raise ValueError("该证券暂时无法通过 Yahoo 验证")
@@ -324,6 +332,9 @@ def clear_search_cache() -> None:
 def provider_symbol(db: Session, ticker: str, provider: str) -> str | None:
     """Resolve a legacy Yahoo-facing ticker without guessing provider suffix rules."""
     row = db.scalar(select(Security).where(or_(Security.yahoo_symbol == ticker, Security.display_symbol == ticker)))
+    if not row:
+        alias = db.scalar(select(SecuritySymbolAlias).where(SecuritySymbolAlias.provider == "yahoo", SecuritySymbolAlias.symbol == ticker.upper()))
+        row = db.get(Security, alias.security_id) if alias else None
     if not row:
         return ticker if provider == "yahoo" else None
     return row.yahoo_symbol if provider == "yahoo" else row.finnhub_symbol

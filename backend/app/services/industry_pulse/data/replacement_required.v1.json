@@ -1,0 +1,322 @@
+{
+  "schema_version": 1,
+  "source_registry": "leaf_industry_seed_registry.v1.json",
+  "count": 21,
+  "items": [
+    {
+      "old_ticker": "CFLT",
+      "leaf_code": "01.03.04",
+      "leaf_name": "Database / Data Platform",
+      "reason": "Acquired by IBM",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2026-03-16",
+      "current_other_4_constituents": [
+        "ORCL",
+        "SNOW",
+        "MDB",
+        "ESTC"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/1699838/000110465926029071/tm268826d6_ex99-1.htm"
+    },
+    {
+      "old_ticker": "IAS",
+      "leaf_code": "02.01.05",
+      "leaf_name": "Digital Advertising Technology",
+      "reason": "Acquired by Novacap and taken private",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2025-12-22",
+      "current_other_4_constituents": [
+        "TTD",
+        "APP",
+        "MGNI",
+        "PUBM"
+      ],
+      "evidence": "https://integralads.com/news/ias-priorities-in-2026/"
+    },
+    {
+      "old_ticker": "SNBR",
+      "leaf_code": "03.03.05",
+      "leaf_name": "Furniture / Home Products",
+      "reason": "Chapter 11 filing followed by Nasdaq suspension",
+      "lifecycle_status": "BANKRUPTCY_DELISTED",
+      "last_valid_date": "2026-06-22",
+      "current_other_4_constituents": [
+        "WSM",
+        "RH",
+        "LZB",
+        "LEG"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/827187/000082718726000053/snbr-20260616.htm"
+    },
+    {
+      "old_ticker": "BRFS",
+      "leaf_code": "04.01.03",
+      "leaf_name": "Meat / Protein",
+      "reason": "BRF shares merged into MBRF; successor selection requires curator review",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2025-09-22",
+      "current_other_4_constituents": [
+        "TSN",
+        "HRL",
+        "PPC",
+        "JBS"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/1122491/000121390025090372/ea025837701ex99-63_marfrig.htm"
+    },
+    {
+      "old_ticker": "VGR",
+      "leaf_code": "04.05.01",
+      "leaf_name": "Tobacco",
+      "reason": "Acquired by JT Group",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2024-10-04",
+      "current_other_4_constituents": [
+        "PM",
+        "MO",
+        "BTI",
+        "TPB"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/59440/000110465924106503/tm2425692d1_ex99-a5f.htm"
+    },
+    {
+      "old_ticker": "HOLX",
+      "leaf_code": "05.03.05",
+      "leaf_name": "Imaging Equipment",
+      "reason": "Acquired by Blackstone and TPG and taken private",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2026-04-06",
+      "current_other_4_constituents": [
+        "GEHC",
+        "PHG",
+        "BFLY",
+        "VREX"
+      ],
+      "evidence": "https://www.hologic.com/about/press-release/blackstone-and-tpg-complete-acquisition-hologic"
+    },
+    {
+      "old_ticker": "EXAS",
+      "leaf_code": "05.04.01",
+      "leaf_name": "Diagnostics",
+      "reason": "Acquired by Abbott",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2026-03-20",
+      "current_other_4_constituents": [
+        "DGX",
+        "LH",
+        "QDEL",
+        "TMO"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/1800/000110465926033079/tm268709d2_ex99-1.htm"
+    },
+    {
+      "old_ticker": "SEM",
+      "leaf_code": "05.05.03",
+      "leaf_name": "Clinics",
+      "reason": "Taken private by an investor consortium",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2026-06-30",
+      "current_other_4_constituents": [
+        "DVA",
+        "USPH",
+        "ACHC",
+        "UHS"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/1320414/000110465926079643/tm2619266d7_ex99-1.htm"
+    },
+    {
+      "old_ticker": "ABB",
+      "leaf_code": "07.02.03",
+      "leaf_name": "Factory Automation",
+      "reason": "NYSE ADR voluntarily delisted; Swiss ABBN listing is a different listing instrument",
+      "lifecycle_status": "FOREIGN_SYMBOL_MAPPING_ERROR",
+      "last_valid_date": "2023-05-22",
+      "current_other_4_constituents": [
+        "ROK",
+        "EMR",
+        "HON",
+        "CGNX"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/1091587/000110465924069980/tm2416822d1_ex1-1.htm"
+    },
+    {
+      "old_ticker": "ABB",
+      "leaf_code": "07.02.04",
+      "leaf_name": "Robotics",
+      "reason": "NYSE ADR voluntarily delisted; Swiss ABBN listing is a different listing instrument",
+      "lifecycle_status": "FOREIGN_SYMBOL_MAPPING_ERROR",
+      "last_valid_date": "2023-05-22",
+      "current_other_4_constituents": [
+        "ROK",
+        "TER",
+        "SYM",
+        "CGNX"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/1091587/000110465924069980/tm2416822d1_ex1-1.htm"
+    },
+    {
+      "old_ticker": "ABB",
+      "leaf_code": "07.03.05",
+      "leaf_name": "Industrial Electrical Systems",
+      "reason": "NYSE ADR voluntarily delisted; Swiss ABBN listing is a different listing instrument",
+      "lifecycle_status": "FOREIGN_SYMBOL_MAPPING_ERROR",
+      "last_valid_date": "2023-05-22",
+      "current_other_4_constituents": [
+        "ETN",
+        "EMR",
+        "ROK",
+        "HUBB"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/1091587/000110465924069980/tm2416822d1_ex1-1.htm"
+    },
+    {
+      "old_ticker": "HSII",
+      "leaf_code": "07.06.02",
+      "leaf_name": "Staffing",
+      "reason": "Taken private by Advent-led consortium",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2025-12-09",
+      "current_other_4_constituents": [
+        "RHI",
+        "MAN",
+        "KELYA",
+        "NSP"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/1066605/000119312525313582/d832427dex991.htm"
+    },
+    {
+      "old_ticker": "MEG",
+      "leaf_code": "07.06.04",
+      "leaf_name": "Environmental Services",
+      "reason": "Acquired by Cenovus",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2025-11-12",
+      "current_other_4_constituents": [
+        "CLH",
+        "TTEK",
+        "CECO",
+        "HCCI"
+      ],
+      "evidence": "https://www.cenovus.com/News-and-Stories/News-releases/2025/3187577"
+    },
+    {
+      "old_ticker": "HCCI",
+      "leaf_code": "07.06.04",
+      "leaf_name": "Environmental Services",
+      "reason": "Acquired by J.F. Lehman and taken private",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2023-10-16",
+      "current_other_4_constituents": [
+        "CLH",
+        "MEG",
+        "TTEK",
+        "CECO"
+      ],
+      "evidence": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2023-595"
+    },
+    {
+      "old_ticker": "ZEUS",
+      "leaf_code": "09.01.03",
+      "leaf_name": "Steel",
+      "reason": "Merged into Ryerson; successor selection requires curator review",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2026-02-12",
+      "current_other_4_constituents": [
+        "NUE",
+        "STLD",
+        "CLF",
+        "CMC"
+      ],
+      "evidence": "https://ir.ryerson.com/news/news-details/2026/Ryerson-and-Olympic-Steel-Announce-Successful-Closing-of-Merger/default.aspx"
+    },
+    {
+      "old_ticker": "MAG",
+      "leaf_code": "09.01.06",
+      "leaf_name": "Silver",
+      "reason": "Acquired by Pan American Silver",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2025-09-03",
+      "current_other_4_constituents": [
+        "PAAS",
+        "HL",
+        "AG",
+        "EXK"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/771992/000077199225000071/magcompletionnr.htm"
+    },
+    {
+      "old_ticker": "PLL",
+      "leaf_code": "09.01.07",
+      "leaf_name": "Lithium",
+      "reason": "Merged with Sayona to form Elevra Lithium",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2025-08-29",
+      "current_other_4_constituents": [
+        "ALB",
+        "SQM",
+        "LAC",
+        "SGML"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/1728205/000114036125033733/ef20055055_ex99-1.htm"
+    },
+    {
+      "old_ticker": "PCH",
+      "leaf_code": "09.03.03",
+      "leaf_name": "Paper / Forest Products",
+      "reason": "Merged with Rayonier",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2026-01-30",
+      "current_other_4_constituents": [
+        "IP",
+        "WY",
+        "RYAM",
+        "SUZ"
+      ],
+      "evidence": "https://www.sec.gov/Archives/edgar/data/1338749/000119312526032108/d65514d8k.htm"
+    },
+    {
+      "old_ticker": "INE.TO",
+      "leaf_code": "10.04.03",
+      "leaf_name": "Hydro",
+      "reason": "Acquired by La Caisse and delisted from TSX",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2025-07-21",
+      "current_other_4_constituents": [
+        "BEP",
+        "AQN",
+        "BLX.TO",
+        "NPI.TO"
+      ],
+      "evidence": "https://www.innergex.com/en/media/la-caisse-completes-acquisition-of-innergex"
+    },
+    {
+      "old_ticker": "NSA",
+      "leaf_code": "11.04.02",
+      "leaf_name": "Storage REIT",
+      "reason": "Acquired by Public Storage",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2026-07-21",
+      "current_other_4_constituents": [
+        "PSA",
+        "EXR",
+        "CUBE",
+        "SELF"
+      ],
+      "evidence": "https://investors.publicstorage.com/news-events/press-releases/news-details/2026/Public-Storage-Announces-Closing-of-National-Storage-Affiliates-Acquisition/default.aspx"
+    },
+    {
+      "old_ticker": "EA",
+      "leaf_code": "02.02.04",
+      "leaf_name": "Gaming",
+      "reason": "Taken private by PIF, Silver Lake, and Affinity Partners",
+      "lifecycle_status": "MERGED_OR_ACQUIRED",
+      "last_valid_date": "2026-08-04",
+      "current_other_4_constituents": [
+        "TTWO",
+        "RBLX",
+        "U",
+        "SONY"
+      ],
+      "evidence": "https://apnews.com/article/e50d653ac4616d063296e2021d826a3c"
+    }
+  ]
+}

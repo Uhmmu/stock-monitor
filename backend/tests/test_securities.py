@@ -1,10 +1,14 @@
+import importlib.util
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.models import Security
+from app.models import Security, SecuritySymbolAlias
 from app.services import securities
 
 
@@ -21,6 +25,7 @@ def clean_cache(monkeypatch):
 def db():
     engine = create_engine("sqlite:///:memory:")
     Security.__table__.create(engine)
+    SecuritySymbolAlias.__table__.create(engine)
     with Session(engine) as session:
         yield session
 
@@ -110,3 +115,33 @@ def test_resolve_reuses_existing_security(db, monkeypatch):
     resolved = securities.resolve_security(db, source="yahoo", yahoo_symbol="AAPL")
     assert resolved.id == row.id
     assert db.query(Security).count() == 1
+
+
+def test_historical_alias_resolves_current_provider_symbol(db, monkeypatch):
+    row = Security(display_symbol="FISV", yahoo_symbol="FISV", yahoo_status="available", finnhub_status="unsupported", mapping_method="unresolved")
+    db.add(row); db.flush()
+    db.add(SecuritySymbolAlias(security_id=row.id, provider="yahoo", symbol="FI", change_reason="TICKER_CHANGED"))
+    db.commit()
+    assert securities.provider_symbol(db, "FI", "yahoo") == "FISV"
+    monkeypatch.setattr(securities, "fetch_stock_profile", lambda symbol: {"longName": "Fiserv", "symbol": symbol})
+    assert securities.resolve_security(db, source="yahoo", yahoo_symbol="FI").id == row.id
+
+
+def test_symbol_alias_migration_round_trip():
+    path = Path(__file__).parents[1] / "alembic/versions/0054_security_symbol_aliases.py"
+    spec = importlib.util.spec_from_file_location("security_symbol_alias_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(migration)
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        Security.__table__.create(connection)
+        original = migration.op
+        migration.op = Operations(MigrationContext.configure(connection))
+        try:
+            migration.upgrade()
+            assert "security_symbol_aliases" in migration.sa.inspect(connection).get_table_names()
+            migration.downgrade()
+            assert "security_symbol_aliases" not in migration.sa.inspect(connection).get_table_names()
+        finally:
+            migration.op = original

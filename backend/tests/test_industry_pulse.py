@@ -275,7 +275,7 @@ def test_constituent_failures_are_temporary_before_stale_or_invalid():
     failed = ProviderHistory("BAD", status="unavailable", error_code="empty_response")
     assert _constituent_health(failed, 1, no_history=True, manual_seed=True) == "TEMPORARY_DATA_FAILURE"
     assert _constituent_health(failed, 3, no_history=False, manual_seed=True) == "STALE"
-    assert _constituent_health(failed, 5, no_history=True, manual_seed=True) == "SEED_INVALID"
+    assert _constituent_health(failed, 5, no_history=True, manual_seed=True) == "STALE"
 
 
 def test_manual_seed_is_canonical_when_ai_memberships_also_exist():

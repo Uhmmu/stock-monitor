@@ -267,8 +267,6 @@ def _stock_mapping_active(mapping: IndustryPulseInstrument, day: date) -> bool:
 def _constituent_health(history: ProviderHistory, failures: int, *, no_history: bool, manual_seed: bool) -> str:
     if history.status in {"success", "degraded", "fallback"}:
         return {"success": "ACTIVE", "degraded": "DEGRADED", "fallback": "FALLBACK"}[history.status]
-    if failures >= 5 and no_history:
-        return "SEED_INVALID" if manual_seed else "PERMANENT_SYMBOL_INVALID"
     return "STALE" if failures >= 3 else "TEMPORARY_DATA_FAILURE"
 
 
@@ -420,8 +418,8 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
             mapping.health_status = _constituent_health(history, failures, no_history=no_history, manual_seed=mapping.classification_source == "MANUAL_CURATED_SEED")
             if mapping.classification_source == "MANUAL_CURATED_SEED":
                 metadata["seed_validation_status"] = "VALID" if history.bars else mapping.health_status
-                if mapping.health_status == "SEED_INVALID":
-                    metadata["replacement_state"] = "PENDING_REVIEW"
+                metadata["market_data_failure"] = None if history.bars else history.error_code or "unknown"
+                metadata["failure_semantic"] = None if history.bars else "STALE" if mapping.health_status == "STALE" else "TEMPORARY"
             mapping.metadata_json = metadata
             mapping.last_checked_at = datetime.now(UTC)
             mapping.last_trading_date = history.bars[-1].date if history.bars else None
