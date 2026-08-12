@@ -28,7 +28,7 @@ from app.services.industry_pulse.calculation import calculate_basket_signal, cal
 from app.services.industry_pulse.classification import classify_security
 from app.services.industry_pulse.constituents import ClassificationBatch, MembershipSuggestion, SymbolClassification, _normalize_classification_payload, bootstrap_ai_constituents
 from app.services.industry_pulse.provider import DailyBar, ProviderHistory, fetch_histories
-from app.services.industry_pulse.service import _constituent_health, _fetch_lookback_days, _history_backfill_complete, _merge_history, _pulse_stock_mappings, _rollup_base_hierarchy, _snapshot_history_start, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, system_status_payload, taxonomy_payload
+from app.services.industry_pulse.service import _constituent_health, _fetch_lookback_days, _history_backfill_complete, _merge_history, _prune_snapshot_history, _pulse_stock_mappings, _rollup_base_hierarchy, _snapshot_history_start, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, system_status_payload, taxonomy_payload
 
 
 TABLES = [
@@ -233,6 +233,20 @@ def test_pulse_deltas_require_exact_prior_trading_points(db):
     row = _upsert_snapshot(db, node.id, date(2026, 8, 10), {"pulse": 70, "coverage_quality": .8, "confidence": .7, "components": {}}, metrics={}, benchmark={}, previous=prior[-1], prior_rows=prior)
     assert row.change_5d == 20
     assert row.change_20d is None
+
+
+def test_snapshot_backfill_keeps_only_required_rolling_history():
+    rows = [IndustryPulseSnapshot(node_id=1, trading_date=date(2026, 1, 1) + timedelta(days=index)) for index in range(30)]
+    future = IndustryPulseSnapshot(node_id=1, trading_date=date(2026, 2, 10))
+    cache = {(row.node_id, row.trading_date): row for row in [*rows, future]}
+    history = {1: [*rows, future]}
+
+    _prune_snapshot_history(cache, history, rows[-1].trading_date)
+
+    assert len(history[1]) == 21
+    assert history[1][0] is rows[-20]
+    assert history[1][-1] is future
+    assert set(cache) == {(1, rows[-1].trading_date), (1, future.trading_date)}
 
 
 def test_base_hierarchy_rolls_leaves_into_group_then_sector(db):

@@ -283,6 +283,20 @@ def _snapshot_history_start(trading_days: list[date], all_trading_days: list[dat
     return min(trading_days[0], all_trading_days[max(0, len(all_trading_days) - 21)])
 
 
+def _prune_snapshot_history(
+    snapshots: dict[tuple[int, date], IndustryPulseSnapshot],
+    history: dict[int, list[IndustryPulseSnapshot]],
+    day: date,
+) -> None:
+    """Keep only the 20 prior rows needed by change calculations."""
+    for key in [key for key in snapshots if key[1] < day]:
+        snapshots.pop(key)
+    for node_id, rows in history.items():
+        past = [row for row in rows if row.trading_date <= day]
+        future = [row for row in rows if row.trading_date > day]
+        history[node_id] = past[-20:] + future
+
+
 def _calculate_node(
     mappings: list[IndustryPulseInstrument], metrics: dict[str, dict[str, Any]], histories: dict[str, list[dict[str, Any]]],
     benchmark_rows: dict[str, list[dict[str, Any]]], day: date,
@@ -561,6 +575,7 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
         for existing_snapshot in existing_snapshots:
             existing_snapshot_by_key[(existing_snapshot.node_id, existing_snapshot.trading_date)] = existing_snapshot
             snapshot_history.setdefault(existing_snapshot.node_id, []).append(existing_snapshot)
+        del existing_snapshots
     for calc_day in trading_days[:-1]:
         metrics_at_day: dict[str, dict[str, Any]] = {}
         for ticker, history in histories.items():
@@ -588,6 +603,8 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
             rolled_snapshot = existing_snapshot_by_key[(rolled["node_id"], calc_day)]
             if rolled_snapshot not in snapshot_history.setdefault(rolled["node_id"], []):
                 snapshot_history[rolled["node_id"]].append(rolled_snapshot)
+        db.flush()
+        _prune_snapshot_history(existing_snapshot_by_key, snapshot_history, calc_day)
     db.flush()
     current_rows: list[dict[str, Any]] = []
     previous_by_node: dict[int, dict[str, Any]] = {}
