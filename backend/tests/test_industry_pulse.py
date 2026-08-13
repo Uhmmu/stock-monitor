@@ -235,6 +235,16 @@ def test_pulse_deltas_require_exact_prior_trading_points(db):
     assert row.change_20d is None
 
 
+def test_unavailable_snapshot_is_persisted_with_explicit_regime(db):
+    node = IndustryPulseNode(taxonomy="base", node_key="test.unavailable", name="Unavailable", level="leaf")
+    db.add(node); db.flush()
+
+    row = _upsert_snapshot(db, node.id, date(2026, 8, 10), {"pulse": None, "status": "INSUFFICIENT_COVERAGE", "coverage_quality": .6, "confidence": 0}, metrics={}, benchmark={}, previous=None, prior_rows=[])
+
+    assert row.pulse is None
+    assert row.regime == "unavailable"
+
+
 def test_snapshot_backfill_keeps_only_required_rolling_history():
     rows = [IndustryPulseSnapshot(node_id=1, trading_date=date(2026, 1, 1) + timedelta(days=index)) for index in range(30)]
     future = IndustryPulseSnapshot(node_id=1, trading_date=date(2026, 2, 10))

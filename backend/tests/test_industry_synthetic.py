@@ -55,6 +55,29 @@ def test_leaf_indexes_persist_idempotently_with_equal_weights():
         assert latest.calculation_status == "DEGRADED" and latest.valid_constituents == 4
 
 
+def test_leaf_index_persists_explicit_insufficient_coverage():
+    engine = create_engine("sqlite:///:memory:")
+    for table in (Security.__table__, IndustryPulseNode.__table__, IndustryPulseInstrument.__table__, IndustrySyntheticIndex.__table__):
+        table.create(engine)
+    with Session(engine) as db:
+        leaf = IndustryPulseNode(taxonomy="base", node_key="base.insufficient", name="Insufficient", level="leaf")
+        db.add(leaf); db.flush()
+        histories = {}
+        for index in range(5):
+            symbol = f"S{index}"
+            security = Security(display_symbol=symbol, yahoo_symbol=symbol)
+            db.add(security); db.flush()
+            db.add(IndustryPulseInstrument(node_id=leaf.id, security_id=security.id, ticker=symbol, instrument_type="stock", mapping_type="primary_industry", role="reference", classification_source="MANUAL_CURATED_SEED", seed_version=1))
+            histories[symbol] = _history(index) if index < 3 else []
+
+        result = persist_leaf_indexes(db, histories, as_of=date(2026, 2, 1))
+        latest = db.query(IndustrySyntheticIndex).one()
+
+        assert result["insufficient"] == 1
+        assert latest.calculation_status == "INSUFFICIENT_COVERAGE"
+        assert latest.valid_constituents == 3 and latest.coverage_quality == .6
+
+
 def test_synthetic_index_migration_round_trip():
     path = Path(__file__).parents[1] / "alembic/versions/0057_industry_synthetic_indexes.py"
     spec = importlib.util.spec_from_file_location("industry_synthetic_migration", path)

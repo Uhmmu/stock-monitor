@@ -79,6 +79,9 @@ def persist_leaf_indexes(db: Session, histories: dict[str, list[dict]], *, as_of
             for mapping in members
         }
         points = calculate_equal_weight_index(leaf_histories)
+        if not points and as_of:
+            available = sum(bool(rows) for rows in leaf_histories.values())
+            points = [{"date": as_of, "index_value": None, "daily_return": None, "valid_constituents": available, "expected_constituents": 5, "coverage_quality": available / 5, "calculation_status": "INSUFFICIENT_COVERAGE"}]
         synthetic_rows = [{"date": point["date"], "open": point["index_value"], "high": point["index_value"], "low": point["index_value"], "close": point["index_value"], "volume": None} for point in points if point["index_value"] is not None]
         metrics = calculate_etf_metrics(synthetic_rows, as_of=as_of) if synthetic_rows else {}
         breadth = calculate_constituent_breadth(leaf_histories, {symbol: 1 / max(1, len(leaf_histories)) for symbol in leaf_histories}, as_of=as_of)

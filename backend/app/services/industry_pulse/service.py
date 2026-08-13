@@ -629,12 +629,10 @@ def sync_pulse(db: Session, *, as_of: date | None = None, trigger_type: str = "s
         if previous:
             previous_by_node[node.id] = {"pulse": previous.pulse, "change_5d": previous.change_5d, "breadth": previous.breadth_score, "relative_strength": previous.relative_strength_score}
         cached_snapshot = existing_snapshot_by_key.get((node.id, day))
-        if composite.get("pulse") is None and not (cached_snapshot and cached_snapshot.pulse is not None):
-            continue
         benchmark_payload = {name: metrics_by_ticker.get(name, {}) for name in ("SPY", "QQQ")}
         if sector_benchmark_by_node.get(node.id) and (not representative_mapping or sector_benchmark_by_node[node.id] != representative_mapping.ticker):
             benchmark_payload[sector_benchmark_by_node[node.id]] = metrics_by_ticker.get(sector_benchmark_by_node[node.id], {})
-        snapshot = cached_snapshot if composite.get("pulse") is None else _upsert_snapshot(db, node.id, day, composite, metrics=metrics, benchmark=benchmark_payload, previous=previous, prior_rows=prior, snapshot_cache=existing_snapshot_by_key)
+        snapshot = cached_snapshot if composite.get("pulse") is None and cached_snapshot else _upsert_snapshot(db, node.id, day, composite, metrics=metrics, benchmark=benchmark_payload, previous=previous, prior_rows=prior, snapshot_cache=existing_snapshot_by_key)
         existing_snapshot_by_key[(node.id, day)] = snapshot
         if snapshot not in snapshot_history.setdefault(node.id, []):
             snapshot_history[node.id].append(snapshot)
