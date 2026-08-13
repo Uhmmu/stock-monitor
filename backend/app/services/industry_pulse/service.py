@@ -965,12 +965,14 @@ def _aggregate_child_constituents(db: Session, node: IndustryPulseNode, day: dat
             basket = metrics.get("basket") or {}
             stock_share = .55 if mode == "HYBRID" else 1.0 if mode == "EQUITY_BASKET" else 0.0
             stats = {row.get("ticker"): row for row in (basket.get("breadth") or {}).get("constituents", [])}
-            for member in basket.get("members", []):
-                ticker = member.get("ticker")
-                if not ticker or member.get("weight") is None:
+            weights = basket.get("weights") or {
+                member.get("ticker"): member.get("weight") for member in basket.get("members", []) if member.get("ticker")
+            }
+            for ticker, weight in weights.items():
+                if weight is None:
                     continue
-                effective_weight = child_weight * stock_share * float(member["weight"])
-                row = aggregated.setdefault(ticker, {"ticker": ticker, "weight": 0.0, **(stats.get(ticker) or {})})
+                effective_weight = child_weight * stock_share * float(weight)
+                row = aggregated.setdefault(ticker, {**(stats.get(ticker) or {}), "ticker": ticker, "weight": 0.0})
                 row["weight"] += effective_weight
                 row["contribution_5d"] = float(row.get("return_5d") or 0) * row["weight"]
 

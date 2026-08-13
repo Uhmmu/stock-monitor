@@ -285,7 +285,7 @@ def test_aggregate_node_detail_reuses_weighted_child_baskets(db):
     day = date(2026, 8, 10)
     db.add(IndustryPulseSnapshot(node_id=group.id, trading_date=day, pulse=60, coverage_quality=1, metrics_json={"proxy_mode": "CHILD_AGGREGATE"}))
     for leaf, ticker in zip(leaves, ("AAA", "BBB")):
-        db.add(IndustryPulseSnapshot(node_id=leaf.id, trading_date=day, pulse=60, coverage_quality=1, metrics_json={"proxy_mode": "EQUITY_BASKET", "basket": {"members": [{"ticker": ticker, "weight": 1}], "breadth": {"constituents": [{"ticker": ticker, "return_5d": 2}]}}}))
+        db.add(IndustryPulseSnapshot(node_id=leaf.id, trading_date=day, pulse=60, coverage_quality=1, metrics_json={"proxy_mode": "EQUITY_BASKET", "basket": {"weights": {ticker: 1}, "members": [{"ticker": ticker, "weight": 1}, {"ticker": ticker, "weight": 1}], "breadth": {"constituents": [{"ticker": ticker, "weight": 1, "return_5d": 2}]}}}))
     db.commit()
 
     detail = node_detail_payload(db, group.id)
