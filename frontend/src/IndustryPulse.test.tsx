@@ -24,6 +24,14 @@ describe('行业板块检测', () => {
     expect(row.children[0]).toMatchObject({ id: 'chips', name: '芯片', pulse: 77 })
   })
 
+  it('标量分数不被同名详情对象遮住', () => {
+    const row = normalizePulseRow({
+      id: 'aggregate', breadth: { source: 'basket' }, breadth_score: 50.7,
+      relative_strength: { benchmark: 'SPY' }, relative_strength_score: 43.8,
+    })
+    expect(row).toMatchObject({ breadth: 50.7, relativeStrength: 43.8 })
+  })
+
   it('缺失值使用明确的数据不足语义', () => {
     expect(scoreText(null)).toBe('数据不足')
     expect(confidenceText(null)).toBe('置信度不足')

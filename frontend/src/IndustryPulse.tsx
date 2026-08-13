@@ -69,6 +69,7 @@ const PROXY_LABELS: Record<string, string> = {
   EQUITY_BASKET: '代表性股票篮子',
   HYBRID: '篮子 + 外部 ETF',
   DERIVED: '子节点聚合',
+  CHILD_AGGREGATE: '子节点加权聚合',
 }
 
 const THEME_BASKET_KEYS = ['healthcare_ai', 'financial_ai', 'consumer_ai', 'ai_platform', 'ai_platforms', 'enterprise_ai', 'data', 'cybersecurity', 'developer_ecosystem', 'robotics', 'autonomous_systems', 'defense_ai']
@@ -145,8 +146,8 @@ export function normalizePulseRow(value: unknown, index = 0): PulseRow {
     confidence: scalarValue(first(raw.confidence, raw.confidence_score, raw.data_confidence), ['confidence', 'score', 'value', 'level']) as number | string | null ?? null,
     coverage: scalarValue(first(raw.coverage, raw.coverage_quality, raw.data_quality, raw.coverage_percent), ['quality', 'coverage', 'value', 'percent', 'level']) as number | string | null ?? null,
     freshness: asText(first(raw.freshness, raw.freshness_status)),
-    breadth: score(scoreValue(raw, ['breadth', 'breadth_score', 'breadth_percent'])),
-    relativeStrength: score(scoreValue(raw, ['relative_strength', 'relative_strength_score', 'rs_score', 'rs'])),
+    breadth: score(scoreValue(raw, ['breadth_score', 'breadth_percent', 'breadth'])),
+    relativeStrength: score(scoreValue(raw, ['relative_strength_score', 'rs_score', 'rs', 'relative_strength'])),
     proxyMode: asText(first(raw.proxy_mode, raw.proxyMode)),
     proxyEtfs: asArray(first(raw.proxy_etfs, raw.etfs)).map(item => asText(typeof item === 'object' ? first(asRecord(item).ticker, asRecord(item).symbol) : item)).filter((item): item is string => item != null),
     constituentCount: asNumber(first(raw.constituent_count, raw.valid_constituents)) ?? 0,
@@ -425,11 +426,11 @@ function NodeDetail({ selected, range, onRange, onClose }: { selected: PulseRow 
   const validConstituents = data ? asNumber(first(basket.valid_constituents, basket.valid_count, basket.available_constituents, data.node.raw.valid_constituents, data.node.constituentCount, data.constituents.length)) : null
   const basketQuality = data ? scalarValue(first(basket.effective_data_coverage, basket.effective_weight_coverage, basket.coverage_quality, basket.coverage, data.node.raw.synthetic_coverage, data.node.coverage), ['quality', 'coverage', 'value', 'effective_weight_coverage']) : null
   const basketConfidence = data ? scalarValue(first(basket.coverage_confidence, basket.synthetic_confidence, basket.confidence, data.node.raw.synthetic_confidence, data.node.confidence), ['confidence', 'value', 'score']) as number | string | null : null
-  const basketHistory = data ? asNumber(first(basket.history_days, basket.synthetic_points, basket.history_length, data.node.raw.synthetic_history_days)) : null
+  const basketHistory = data ? asNumber(first(basket.history_days, basket.synthetic_points, basket.history_length, data.node.raw.synthetic_history_days)) ?? (data.history.length || null) : null
   return <Sheet open={selected !== null} onClose={onClose} title={selected?.name || '行业板块详情'} size="wide">
     {!selected ? null : detail.isLoading ? <LoadingState text="正在读取板块详情…"/> : detail.isError ? <ErrorState text="板块详情暂时无法读取。"/> : data && <article className="industry-node-detail">
       <div className="industry-node-heading"><div><p>NODE DETAIL · CACHED SNAPSHOT</p><h2>{data.node.name}</h2><p>{data.node.code || '行业节点'} · 只读数据；页面不会触发 AI 或外部行情请求。</p>{themeBasket(data.node) && <span className="industry-theme-label">Theme Basket · 主题篮子</span>}</div><div className="industry-node-facts"><span><b>{configuredConstituents == null || validConstituents == null ? '数据不足' : `${validConstituents} / ${configuredConstituents}`}</b><small>篮子覆盖</small></span><span><b>{confidenceText(basketConfidence)}</b><small>篮子置信度</small></span></div></div>
-      <div className="industry-detail-facts"><div><span>趋势强度</span><b>{scoreText(data.node.pulse)}</b></div><div><span>5D / 20D</span><b>{signedText(data.node.change5d)} / {signedText(data.node.change20d)}</b></div><div><span>广度 / RS</span><b>{scoreText(data.node.breadth)} / {scoreText(data.node.relativeStrength)}</b></div><div><span>Heat / Risk</span><b>{scoreText(data.node.heat)} / {scoreText(data.node.risk)}</b><small>{moodText(data.node.mood)} · {data.node.freshness || '新鲜度不足'}</small></div><div><span>映射方式</span><b>{proxyLabel(data.proxyMode)}</b><small>{basketQuality == null ? '覆盖不足' : `${coverageText(basketQuality as number | string | null)} · ${basketHistory == null ? '历史不足' : `${basketHistory} 日历史`}`}</small></div></div>
+      <div className="industry-detail-facts"><div><span>趋势强度</span><b>{scoreText(data.node.pulse)}</b></div><div><span>5D / 20D</span><b>{signedText(data.node.change5d)} / {signedText(data.node.change20d)}</b></div><div><span>广度 / RS</span><b>{scoreText(data.node.breadth)} / {scoreText(data.node.relativeStrength)}</b></div><div><span>Heat / Risk</span><b>{scoreText(data.node.heat)} / {scoreText(data.node.risk)}</b><small>{moodText(data.node.mood)} · {data.node.freshness || '新鲜度不足'}</small></div><div><span>映射方式</span><b>{proxyLabel(data.proxyMode)}</b><small>{basketQuality == null ? '覆盖不足' : `${coverageText(basketQuality as number | string | null)} · ${basketHistory == null ? '历史不足' : `${basketHistory} 个历史点`}`}</small></div></div>
       <div className="industry-detail-toolbar"><div role="tablist" aria-label="历史范围">{(['30', '90', '365'] as PulseRange[]).map(value => <button type="button" role="tab" aria-selected={range === value} className={range === value ? 'active' : ''} onClick={() => onRange(value)} key={value}>{value}D</button>)}</div><small>按已保存的 Pulse 快照计算</small></div>
       <section className="industry-detail-section"><div className="industry-section-heading"><div><p>PULSE HISTORY</p><h3>历史状态与趋势</h3></div><small>{data.history.length} 个有效点</small></div><HistoryChart points={data.history}/></section>
       <section className="industry-detail-section"><div className="industry-section-heading"><div><p>EXTERNAL CONFIRMATION</p><h3>外部 ETF 确认</h3></div><small>不替代代表性股票篮子</small></div><ProxyTable rows={data.etfs}/></section>
@@ -460,9 +461,11 @@ export function IndustryPulse({ enabled = true }: { enabled?: boolean }) {
   const focus = useQuery({ queryKey: ['industry-pulse', 'focus'], queryFn: () => api<unknown>('/industry-pulse/focus'), staleTime: 5 * 60_000, enabled: enabled && view === 'focus' })
   const taxonomy = useQuery({ queryKey: ['industry-pulse', 'taxonomy'], queryFn: () => api<unknown>('/industry-pulse/taxonomy'), staleTime: 10 * 60_000, enabled: enabled && view === 'taxonomy' })
   const status = useQuery({ queryKey: ['industry-pulse', 'status'], queryFn: () => api<unknown>('/industry-pulse/status'), staleTime: 5 * 60_000, enabled })
-  const generatedAt = useMemo(() => {
+  const snapshotDate = useMemo(() => {
     const value = asText(first(asRecord(overview.data).generated_at, asRecord(overview.data).as_of, asRecord(overview.data).updated_at))
     if (!value) return null
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+    if (dateOnly) return `${Number(dateOnly[1])}/${Number(dateOnly[2])}/${Number(dateOnly[3])}`
     const parsed = new Date(value)
     return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString('zh-CN') : '时间不足'
   }, [overview.data])
@@ -473,7 +476,7 @@ export function IndustryPulse({ enabled = true }: { enabled?: boolean }) {
   const replacementPending = asNumber(asRecord(status.data).replacement_pending) ?? 0
   const showDetail = (row: PulseRow) => { setRange('90'); setSelected(row) }
   return <div className="industry-pulse-page">
-    <div className="industry-page-heading"><div><p className="eyebrow">INDUSTRY / SECTOR PULSE</p><h2>行业板块检测</h2><p>用已保存的代表性股票篮子、外部 ETF 确认和确定性指标，观察板块强弱、变化速度与 AI 产业链扩散。</p></div><span className="industry-readonly-badge">只读快照{generatedAt ? ` · ${generatedAt}` : ''}{marketTotal ? ` · 行情 ${freshCount}/${marketTotal} fresh` : ''}{replacementPending ? ` · ${replacementPending} 待人工替换` : ''}</span></div>
+    <div className="industry-page-heading"><div><p className="eyebrow">INDUSTRY / SECTOR PULSE</p><h2>行业板块检测</h2><p>用已保存的代表性股票篮子、外部 ETF 确认和确定性指标，观察板块强弱、变化速度与 AI 产业链扩散。</p></div><span className="industry-readonly-badge">后台定期快照{snapshotDate ? ` · 交易日 ${snapshotDate}` : ''}{marketTotal ? ` · 行情 ${freshCount}/${marketTotal} fresh` : ''}{replacementPending ? ` · ${replacementPending} 待人工替换` : ''}</span></div>
     <div className="industry-view-tabs" role="tablist" aria-label="行业板块视图">{VIEW_TABS.map(([key, label]) => <button type="button" role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} onClick={() => setView(key)} key={key}>{label}</button>)}</div>
     {view === 'overview' && <OverviewView data={overview.data} loading={overview.isLoading} error={overview.isError} onSelect={showDetail}/>}
     {view === 'ai-chain' && <AIChainView data={aiChain.data} loading={aiChain.isLoading} error={aiChain.isError} onSelect={showDetail}/>}
