@@ -25,6 +25,7 @@ DOMAIN_RULES = {
     "ownership": ("国会", "议员", "名人持仓", "13f", "ownership", "congress", "institutional"),
     "discovery": ("机会发现", "候选股", "资金流", "discovery", "candidate", "flow"),
     "market": ("价格", "股价", "涨跌", "price", "market"),
+    "options": ("期权", "隐含波动率", "put/call", "put call", "skew", "options", "option activity", "iv rank"),
     "company": ("公司", "业务", "概况", "company", "profile"),
     "memory": (
         "记忆",
@@ -53,6 +54,7 @@ PREFERRED = {
     "ownership": ["get_company_ownership_activity", "get_congress_trades", "get_institutional_holdings", "get_tracked_figures"],
     "discovery": ["get_discovery_runs", "get_discovery_run", "get_discovery_candidates"],
     "market": ["get_realtime_quote", "get_intraday_summary", "get_intraday_bars", "get_latest_price", "get_price_history", "get_market_context"],
+    "options": ["get_options_overview", "get_symbol_options_summary"],
     "company": ["get_company_snapshot", "get_company_profile", "get_company_peers"],
     "memory": [
         "get_relevant_user_memories",

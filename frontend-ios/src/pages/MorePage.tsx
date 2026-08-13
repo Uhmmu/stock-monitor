@@ -5,7 +5,7 @@ import type { Report, WatchItem } from '@shared/types'
 import { IOSPage, InsetList, ListRow } from '../components'
 import { Icon } from '../icons'
 
-export function MorePage({ user, openWatchlist, openReports, openDiscovery, logout }: { user: AuthUser; openWatchlist: () => void; openReports: () => void; openDiscovery: () => void; logout: () => void }) {
+export function MorePage({ user, openWatchlist, openReports, openDiscovery, openOptions, logout }: { user: AuthUser; openWatchlist: () => void; openReports: () => void; openDiscovery: () => void; openOptions: () => void; logout: () => void }) {
   const watchlist = useQuery({ queryKey: ['ios-watchlist-count'], queryFn: () => api<WatchItem[]>('/watchlist'), staleTime: 60_000 })
   const reports = useQuery({ queryKey: ['ios-report-count'], queryFn: () => api<Report[]>('/reports'), staleTime: 60_000 })
   const useDesktop = () => { localStorage.setItem('preferred_ui', 'desktop'); window.location.assign('/') }
@@ -15,6 +15,7 @@ export function MorePage({ user, openWatchlist, openReports, openDiscovery, logo
     <section className="profile-card"><span>{user.username.slice(0, 1).toUpperCase()}</span><div><strong>{user.username}</strong><small>{user.role === 'admin' ? '管理员' : '已安全连接'}</small></div></section>
     <InsetList label="研究资料">
       <ListRow title="机会发现" subtitle="查看组合之外的研究候选" icon={<Icon name="discovery"/>} onClick={openDiscovery}/>
+      <ListRow title="期权研究" subtitle="查看市场、行业和自选股期权指标" icon={<Icon name="activity"/>} onClick={openOptions}/>
       <ListRow title="自选股" subtitle="查看当前监控证券" value={watchlist.data?.length ?? '—'} icon={<Icon name="overview"/>} onClick={openWatchlist}/>
       <ListRow title="智能报告" subtitle="阅读完整分析报告" value={reports.data?.length ?? '—'} icon={<Icon name="news"/>} onClick={openReports}/>
     </InsetList>

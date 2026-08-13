@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     industry_pulse_sync_lock_seconds: int = 7200
     industry_pulse_ai_enabled: bool = True
     industry_pulse_score_weights: str = '{"trend":0.25,"relative_strength":0.25,"volume":0.15,"momentum":0.10,"breadth":0.15,"consensus":0.10}'
+    # Bounded, low-frequency options analytics; only configured ETFs and the
+    # enabled watchlist are eligible, never the full security universe.
+    options_enabled: bool = True
+    options_refresh_hours: int = 6
+    options_provider_timeout_seconds: float = 20.0
+    options_chain_cache_hours: int = 12
+    options_sync_lock_seconds: int = 3600
+    options_history_days: int = 365
     # Server-only realtime market data. Providers remain opt-in so missing
     # credentials never prevent the API, workers, or migrations from starting.
     alpaca_market_data_enabled: bool = False

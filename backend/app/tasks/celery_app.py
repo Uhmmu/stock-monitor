@@ -29,6 +29,14 @@ from app.models import (
     InvestmentCalendarSyncRun,
     MacroSyncRun,
     IndustryPulseSyncRun,
+    IndustryPulseInstrument,
+    IndustryPulseNode,
+    OptionsChainCache,
+    OptionsSnapshot,
+    OptionsSyncRun,
+    Security,
+    StockGroup,
+    StockProfile,
     NewsItem,
     NewsProviderState,
     PortfolioPosition,
@@ -84,6 +92,11 @@ from app.services.macro.definitions import RAW_SERIES
 from app.services.macro.sync import can_start_sync, run_macro_sync
 from app.services.industry_pulse.service import _snapshot_payload, sync_pulse
 from app.services.industry_pulse.narrative import generate_node_narrative
+from app.services.options.service import semantic_options_context
+from app.services.options.analytics import compute_options_analytics, filter_contracts
+from app.services.options.provider import fetch_options_chain
+from app.services.options.universe import build_options_universe
+from app.services.finnhub_mcp import fetch_quote as fetch_finnhub_quote
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -162,6 +175,10 @@ celery_app.conf.beat_schedule = {
     },
     "sync-industry-pulse-due": {
         "task": "app.tasks.celery_app.ensure_industry_pulse_fresh",
+        "schedule": 1800,
+    },
+    "sync-options-due": {
+        "task": "app.tasks.celery_app.ensure_options_fresh",
         "schedule": 1800,
     },
 }
@@ -542,6 +559,13 @@ def _save_report(db, key: str, ticker: str | None, report_type: ReportType, titl
             evidence = build_market_context(ticker, provider_symbol(db, ticker, "finnhub")) + "\n\n# 新闻线索\n" + evidence
         except Exception:
             pass
+    # Reports consume the same persisted aggregate as the Options page and
+    # Chat tools. Missing history stays explicit and never blocks a report.
+    try:
+        options = semantic_options_context(db, symbol=ticker) if ticker else semantic_options_context(db, scope="market")
+        evidence += "\n\n# 已持久化期权分析（无 provider 实时调用）\n" + json.dumps(options, ensure_ascii=False, default=str)
+    except Exception:
+        logger.debug("options_report_context_unavailable ticker=%s", ticker, exc_info=True)
     content, model = generate_analysis(title, evidence, tier, report_type.value)
     db.add(Report(idempotency_key=key, ticker=ticker, report_type=report_type, title=title, content=content, model=model, sources=sources, period_start=start, period_end=end))
 
@@ -1468,6 +1492,7 @@ def sync_ticker_full(ticker: str):
     sync_ticker_congress.delay(value)
     sync_ticker_valuation.delay(value)
     sync_ticker_price_snapshot.delay(value)
+    sync_options_symbol.delay(value)
     poll_news.delay(value)
     sync_fmp_symbol.delay(value)  # FMP 优先，其失败时内部回退 yahoo，并生成技术分析
     return {"ticker": value, "status": "queued_full_sync"}
@@ -2388,4 +2413,174 @@ def ensure_industry_pulse_fresh(force: bool = False):
     if not due:
         return {"status": "not_due", "run_id": latest.id if latest else None}
     queued = sync_industry_pulse.delay()
+    return {"status": "queued", "task_id": queued.id}
+
+
+def _options_jobs(db, only_symbol: str | None = None):
+    watched = list(db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all())
+    payload = []
+    security_by_ticker = {}
+    for item in watched:
+        security = db.get(Security, item.security_id) if item.security_id else None
+        profile = db.get(StockProfile, item.ticker)
+        group = db.get(StockGroup, item.user_group_id) if item.user_group_id else None
+        security_by_ticker[item.ticker] = security
+        payload.append({
+            "ticker": item.ticker,
+            "company_name": (security.display_name if security else None) or (profile.company_name if profile else None),
+            "official_sector": profile.official_sector if profile else None,
+            "official_industry": profile.official_industry if profile else None,
+            "group": group.name if group else None,
+        })
+    nodes = {row.node_key: row for row in db.scalars(select(IndustryPulseNode).where(IndustryPulseNode.taxonomy == "base")).all()}
+    classifications = {}
+    priority = case((IndustryPulseInstrument.classification_source == "MANUAL_CURATED_SEED", 0), (IndustryPulseInstrument.classification_source == "MANUAL", 1), (IndustryPulseInstrument.classification_source == "AI_CLASSIFIED", 2), else_=3)
+    for mapping in db.scalars(select(IndustryPulseInstrument).where(IndustryPulseInstrument.ticker.in_([item.ticker for item in watched]), IndustryPulseInstrument.mapping_type == "primary_industry", IndustryPulseInstrument.enabled.is_(True)).order_by(priority, IndustryPulseInstrument.confidence.desc())).all():
+        node = db.get(IndustryPulseNode, mapping.node_id)
+        seen = set()
+        while node and node.level != "sector" and node.parent_id and node.id not in seen:
+            seen.add(node.id); node = db.get(IndustryPulseNode, node.parent_id)
+        if node and node.level == "sector":
+            classifications.setdefault(mapping.ticker, node.node_key)
+    rows = build_options_universe(payload, classifications=classifications)
+    jobs = []
+    for row in rows:
+        if only_symbol and row["symbol"] != only_symbol.upper():
+            continue
+        security = security_by_ticker.get(row["symbol"])
+        provider_symbol_value = security.yahoo_symbol if security and security.yahoo_symbol else row["symbol"]
+        jobs.append({
+            **row,
+            "security_id": security.id if security else None,
+            "provider_symbol": provider_symbol_value,
+            "finnhub_symbol": security.finnhub_symbol if security else None,
+            "sector_node_id": nodes.get(row.get("sector_id")).id if nodes.get(row.get("sector_id")) else None,
+        })
+    return jobs
+
+
+def _persist_options_symbol(db, job):
+    history_rows = list(db.scalars(select(OptionsSnapshot).where(OptionsSnapshot.symbol == job["symbol"]).order_by(OptionsSnapshot.trading_date.desc()).limit(60)).all())
+    history = [{"atm_iv": row.atm_iv, "total_volume": (row.metrics_json or {}).get("total_volume"), "activity_score": row.activity_score} for row in reversed(history_rows)]
+    validator = None
+    if job.get("finnhub_symbol") and settings.finnhub_api_key:
+        validator = lambda _symbol: fetch_finnhub_quote(job["finnhub_symbol"])
+    raw = fetch_options_chain(job["provider_symbol"], timeout_seconds=settings.options_provider_timeout_seconds, quote_validator=validator)
+    raw.update({"symbol": job["symbol"], "asset_type": job["asset_type"], "sector_node_id": job.get("sector_node_id")})
+    values = compute_options_analytics(raw, history)
+    market_day = datetime.now(ZoneInfo(settings.market_timezone)).date()
+    row = db.scalar(select(OptionsSnapshot).where(OptionsSnapshot.symbol == job["symbol"], OptionsSnapshot.trading_date == market_day))
+    if row is None:
+        row = OptionsSnapshot(symbol=job["symbol"], trading_date=market_day, fetched_at=datetime.now(UTC), asset_type=job["asset_type"], status=values["status"])
+        db.add(row)
+    for key in (
+        "asset_type", "sector_node_id", "status", "provider", "underlying_price", "days_to_expiration", "active_contracts",
+        "call_volume", "put_volume", "call_open_interest", "put_open_interest", "put_call_volume_ratio", "put_call_oi_ratio",
+        "atm_iv", "near_term_iv", "next_term_iv", "iv_change", "downside_skew", "upside_skew", "activity_score",
+        "activity_status", "quality_score", "coverage", "sample_size", "warnings", "metrics_json",
+    ):
+        setattr(row, key, values.get(key))
+    row.security_id = job.get("security_id")
+    row.nearest_expiration = date.fromisoformat(values["nearest_expiration"]) if values.get("nearest_expiration") else None
+    row.next_expiration = date.fromisoformat(values["next_expiration"]) if values.get("next_expiration") else None
+    row.fetched_at = datetime.fromisoformat(values["fetched_at"]) if values.get("fetched_at") else datetime.now(UTC)
+    row.updated_at = datetime.now(UTC)
+    expires_at = datetime.now(UTC) + timedelta(hours=settings.options_chain_cache_hours)
+    for expiration in raw.get("expirations", []):
+        expiration_date = date.fromisoformat(expiration["expiration"])
+        cache = db.scalar(select(OptionsChainCache).where(OptionsChainCache.symbol == job["symbol"], OptionsChainCache.expiration == expiration_date))
+        if cache is None:
+            cache = OptionsChainCache(symbol=job["symbol"], expiration=expiration_date, fetched_at=datetime.now(UTC), expires_at=expires_at)
+            db.add(cache)
+        cache.provider = raw.get("provider", "yfinance")
+        cache.calls_json = filter_contracts(expiration.get("calls", []), raw.get("underlying_price"))
+        cache.puts_json = filter_contracts(expiration.get("puts", []), raw.get("underlying_price"))
+        cache.contract_count = len(cache.calls_json) + len(cache.puts_json)
+        cache.fetched_at, cache.expires_at = datetime.now(UTC), expires_at
+    return values, sum(item.get("contract_count", 0) for item in raw.get("expirations", [])), sum(len(filter_contracts(item.get(side, []), raw.get("underlying_price"))) for item in raw.get("expirations", []) for side in ("calls", "puts"))
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_options_symbol")
+def sync_options_symbol(symbol: str):
+    if not settings.options_enabled:
+        return {"status": "disabled"}
+    with SessionLocal() as db:
+        jobs = _options_jobs(db, symbol)
+        if not jobs:
+            return {"status": "not_eligible", "symbol": symbol.upper()}
+        result, received, filtered = _persist_options_symbol(db, jobs[0])
+        db.commit()
+        return {"symbol": symbol.upper(), "status": result["status"], "contracts_received": received, "contracts_filtered": filtered}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_options")
+def sync_options():
+    if not settings.options_enabled:
+        return {"status": "disabled"}
+    lock = None
+    try:
+        import redis
+        lock = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=1, socket_timeout=1).lock("stock-monitor:options:sync", timeout=settings.options_sync_lock_seconds, blocking=False)
+        if not lock.acquire(blocking=False):
+            return {"status": "running"}
+    except Exception:
+        lock = None
+        logger.debug("options Redis lock unavailable; using durable active-run guard", exc_info=True)
+    started = perf_counter()
+    try:
+        with SessionLocal() as db:
+            active = db.scalar(select(OptionsSyncRun).where(OptionsSyncRun.status == "running", OptionsSyncRun.started_at >= datetime.now(UTC) - timedelta(seconds=settings.options_sync_lock_seconds)).order_by(OptionsSyncRun.started_at.desc()).limit(1))
+            if active:
+                return {"status": "running", "run_id": active.id}
+            jobs = _options_jobs(db)
+            run = OptionsSyncRun(trigger_type="scheduled", symbols_requested=len(jobs))
+            db.add(run); db.commit(); db.refresh(run)
+            errors = {}
+            for job in jobs:
+                try:
+                    result, received, filtered = _persist_options_symbol(db, job)
+                    run.contracts_received += received
+                    run.contracts_filtered += filtered
+                    run.symbols_success += int(result["status"] != "PROVIDER_ERROR")
+                    run.symbols_failed += int(result["status"] == "PROVIDER_ERROR")
+                    run.low_quality_symbols += int(float(result.get("quality_score") or 0) < .45)
+                    if result["status"] == "PROVIDER_ERROR":
+                        errors[job["symbol"]] = result.get("warnings", [])
+                    db.commit()
+                except Exception as exc:
+                    db.rollback(); run = db.get(OptionsSyncRun, run.id)
+                    run.symbols_failed += 1; errors[job["symbol"]] = [type(exc).__name__]
+                    db.commit()
+                    logger.warning("options_symbol_refresh_failed symbol=%s", job["symbol"], exc_info=True)
+            run = db.get(OptionsSyncRun, run.id)
+            run.status, run.finished_at = "completed", datetime.now(UTC)
+            run.duration_ms = int((perf_counter() - started) * 1000)
+            run.error_summary_json = errors
+            db.query(OptionsChainCache).filter(OptionsChainCache.expires_at <= datetime.now(UTC)).delete(synchronize_session=False)
+            db.query(OptionsSnapshot).filter(OptionsSnapshot.trading_date < date.today() - timedelta(days=settings.options_history_days)).delete(synchronize_session=False)
+            db.commit()
+            logger.info("options_refresh_completed run_id=%s symbols_requested=%s symbols_success=%s symbols_failed=%s contracts_received=%s contracts_filtered=%s low_quality_symbols=%s", run.id, run.symbols_requested, run.symbols_success, run.symbols_failed, run.contracts_received, run.contracts_filtered, run.low_quality_symbols)
+            return {"run_id": run.id, "status": run.status, "symbols_requested": run.symbols_requested, "symbols_success": run.symbols_success, "symbols_failed": run.symbols_failed}
+    finally:
+        if lock:
+            try: lock.release()
+            except Exception: logger.debug("options Redis lock release failed", exc_info=True)
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_options_fresh")
+def ensure_options_fresh(force: bool = False):
+    if not settings.options_enabled:
+        return {"status": "disabled"}
+    now = datetime.now(ZoneInfo(settings.market_timezone))
+    if not force and (market_status().get("session") is None or not 10 <= now.hour <= 20):
+        return {"status": "outside_refresh_window"}
+    with SessionLocal() as db:
+        active = db.scalar(select(OptionsSyncRun).where(OptionsSyncRun.status == "running", OptionsSyncRun.started_at >= datetime.now(UTC) - timedelta(seconds=settings.options_sync_lock_seconds)).order_by(OptionsSyncRun.started_at.desc()).limit(1))
+        if active and not force:
+            return {"status": "running", "run_id": active.id}
+        latest = db.scalar(select(OptionsSyncRun).where(OptionsSyncRun.status == "completed").order_by(OptionsSyncRun.finished_at.desc()).limit(1))
+        due = force or latest is None or latest.finished_at is None or latest.finished_at <= datetime.now(UTC) - timedelta(hours=settings.options_refresh_hours)
+    if not due:
+        return {"status": "not_due", "run_id": latest.id if latest else None}
+    queued = sync_options.delay()
     return {"status": "queued", "task_id": queued.id}

@@ -56,7 +56,7 @@ def test_every_taxonomy_node_has_a_chinese_display_name():
 
 
 def test_etf_registry_is_deduplicated_and_mappings_are_bounded():
-    assert len(ETF_REGISTRY) == 64
+    assert len(ETF_REGISTRY) == 65
     assert set(ETF_REGISTRY) == {row["ticker"] for row in ETF_REGISTRY.values()}
     for ticker, row in ETF_REGISTRY.items():
         assert ticker == ticker.upper() and row["instrument_class"] == "equity_etf"

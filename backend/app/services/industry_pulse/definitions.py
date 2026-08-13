@@ -2016,6 +2016,8 @@ ETF_REGISTRY = {
              _mapping(_ai_id("AI POWER", "Energy Storage", "Battery"), "secondary", purity=.35, exposure_weight=.8, confidence=.5, coverage_quality="low", notes="Battery technology proxy; not pure lithium mining.")),
         _etf("COPX", "Copper miners ETF COPX",
              _mapping(_base_id("09.01.01"), "primary", purity=.8, confidence=.85, coverage_quality="high", notes="Copper-equity proxy.")),
+        _etf("XME", "Metals and mining ETF XME",
+             _mapping(_base_id("09.01"), "secondary", purity=.7, confidence=.8, coverage_quality="medium", notes="Broad metals-and-mining options proxy.")),
         _etf("GDX", "Gold miners ETF GDX",
              _mapping(_base_id("09.01.05"), "primary", purity=.8, confidence=.85, coverage_quality="high", notes="Gold-mining equity proxy.")),
         _etf("SIL", "Silver miners ETF SIL",

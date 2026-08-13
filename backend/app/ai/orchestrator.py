@@ -59,6 +59,8 @@ TOOL_DISPLAY_NAMES = {
     "get_investment_decision": "正在读取决策详情",
     "get_investment_decision_reviews": "正在读取决策复盘",
     "get_decisions_for_symbol": "正在读取该股票的决策",
+    "get_options_overview": "正在读取期权市场摘要",
+    "get_symbol_options_summary": "正在读取该标的期权指标",
 }
 logger = logging.getLogger(__name__)
 

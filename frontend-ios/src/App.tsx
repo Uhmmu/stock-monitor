@@ -14,6 +14,7 @@ import { FundamentalsPage } from './pages/FundamentalsPage'
 import { MorePage } from './pages/MorePage'
 import { OverviewPage } from './pages/OverviewPage'
 import { JournalPage } from './pages/JournalPage'
+import { OptionsPage } from './pages/OptionsPage'
 
 const tabs: { key: RootTab; label: string; icon: string }[] = [
   { key: 'overview', label: '主页', icon: 'overview' },
@@ -47,6 +48,7 @@ export default function App() {
     if (detail.kind === 'activity') return <ActivityPage back={back} initialSegment={detail.segment || 'news'} initialTicker={typeof detail.id === 'string' ? detail.id : ''} openReport={id => push({ kind: 'reports', id })}/>
     if (detail.kind === 'discovery') return <DiscoveryPage back={back} openCandidate={id => push({ kind: 'candidate', id })}/>
     if (detail.kind === 'journal') return <JournalPage back={back} initialMode={detail.mode || 'list'} initialLogId={typeof detail.id === 'number' ? detail.id : null}/>
+    if (detail.kind === 'options') return <OptionsPage back={back} symbol={typeof detail.id === 'string' ? detail.id : ''} openDetail={symbol => push({ kind: 'options', id: symbol })}/>
   }
 
   const pages: Record<RootTab, ReactNode> = {
@@ -54,7 +56,7 @@ export default function App() {
     dynamic: <DynamicPage/>,
     chat: <ChatPage/>,
     fundamentals: <FundamentalsPage/>,
-    more: <MorePage user={user.data} openDiscovery={() => push({ kind: 'discovery' })} openWatchlist={() => push({ kind: 'watchlist' })} openReports={() => push({ kind: 'reports' })} logout={() => { clearToken(); queryClient.clear(); setTokenVersion(value => value + 1) }}/>,
+    more: <MorePage user={user.data} openDiscovery={() => push({ kind: 'discovery' })} openWatchlist={() => push({ kind: 'watchlist' })} openReports={() => push({ kind: 'reports' })} openOptions={() => push({ kind: 'options' })} logout={() => { clearToken(); queryClient.clear(); setTokenVersion(value => value + 1) }}/>,
   }
 
   return <div className="ios-app"><div className="ambient-orb one"/><div className="ambient-orb two"/><div className="page-stage" key={navigation.tab}>{pages[navigation.tab]}</div><nav className="tab-bar glass" aria-label="主导航">{tabs.map(tab => <button key={tab.key} className={navigation.tab === tab.key ? 'active' : ''} aria-current={navigation.tab === tab.key ? 'page' : undefined} onClick={() => dispatch({ type: 'tab', tab: tab.key })}><Icon name={tab.icon}/><span>{tab.label}</span></button>)}</nav></div>

@@ -1,5 +1,5 @@
 export type RootTab = 'overview' | 'dynamic' | 'chat' | 'fundamentals' | 'more'
-export type DetailRoute = { kind: 'stock' | 'position' | 'candidate' | 'reports' | 'watchlist' | 'activity' | 'discovery' | 'journal'; id?: string | number; segment?: 'news' | 'calendar' | 'reports'; mode?: 'list' | 'new' }
+export type DetailRoute = { kind: 'stock' | 'position' | 'candidate' | 'reports' | 'watchlist' | 'activity' | 'discovery' | 'journal' | 'options'; id?: string | number; segment?: 'news' | 'calendar' | 'reports'; mode?: 'list' | 'new' }
 export type NavigationState = { tab: RootTab; stack: DetailRoute[] }
 export type NavigationAction = { type: 'tab'; tab: RootTab } | { type: 'push'; route: DetailRoute } | { type: 'back' }
 

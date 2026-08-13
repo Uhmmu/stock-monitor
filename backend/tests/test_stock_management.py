@@ -159,6 +159,7 @@ def test_full_watchlist_sync_queues_all_existing_capabilities(monkeypatch):
         "sync_ticker_congress",
         "sync_ticker_valuation",
         "sync_ticker_price_snapshot",
+        "sync_options_symbol",
         "poll_news",
         "sync_fmp_symbol",
     ):
@@ -172,6 +173,7 @@ def test_full_watchlist_sync_queues_all_existing_capabilities(monkeypatch):
         "sync_ticker_congress",
         "sync_ticker_valuation",
         "sync_ticker_price_snapshot",
+        "sync_options_symbol",
         "poll_news",
         "sync_fmp_symbol",
     }

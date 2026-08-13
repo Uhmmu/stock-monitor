@@ -2393,6 +2393,88 @@ class IndustryPulseNarrative(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class OptionsSnapshot(Base):
+    """Bounded daily options analytics; filtered contracts live in payload, not a contract ledger."""
+
+    __tablename__ = "options_snapshots"
+    __table_args__ = (
+        UniqueConstraint("symbol", "trading_date", name="uq_options_snapshots_symbol_date"),
+        Index("ix_options_snapshots_symbol_date", "symbol", "trading_date"),
+        CheckConstraint("quality_score >= 0 AND quality_score <= 1", name="ck_options_snapshots_quality"),
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="ck_options_snapshots_coverage"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    security_id: Mapped[int | None] = mapped_column(ForeignKey("securities.id", ondelete="SET NULL"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    trading_date: Mapped[date] = mapped_column(Date, index=True)
+    asset_type: Mapped[str] = mapped_column(String(16), index=True)
+    sector_node_id: Mapped[int | None] = mapped_column(ForeignKey("industry_pulse_nodes.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    provider: Mapped[str] = mapped_column(String(16), default="yfinance")
+    underlying_price: Mapped[float | None] = mapped_column(Float)
+    nearest_expiration: Mapped[date | None] = mapped_column(Date)
+    next_expiration: Mapped[date | None] = mapped_column(Date)
+    days_to_expiration: Mapped[int | None] = mapped_column(Integer)
+    active_contracts: Mapped[int] = mapped_column(Integer, default=0)
+    call_volume: Mapped[int | None] = mapped_column(BigInteger)
+    put_volume: Mapped[int | None] = mapped_column(BigInteger)
+    call_open_interest: Mapped[int | None] = mapped_column(BigInteger)
+    put_open_interest: Mapped[int | None] = mapped_column(BigInteger)
+    put_call_volume_ratio: Mapped[float | None] = mapped_column(Float)
+    put_call_oi_ratio: Mapped[float | None] = mapped_column(Float)
+    atm_iv: Mapped[float | None] = mapped_column(Float)
+    near_term_iv: Mapped[float | None] = mapped_column(Float)
+    next_term_iv: Mapped[float | None] = mapped_column(Float)
+    iv_change: Mapped[float | None] = mapped_column(Float)
+    downside_skew: Mapped[float | None] = mapped_column(Float)
+    upside_skew: Mapped[float | None] = mapped_column(Float)
+    activity_score: Mapped[float | None] = mapped_column(Float)
+    activity_status: Mapped[str] = mapped_column(String(32), default="insufficient_history")
+    quality_score: Mapped[float] = mapped_column(Float, default=0)
+    coverage: Mapped[float] = mapped_column(Float, default=0)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class OptionsChainCache(Base):
+    """Short-lived, bounded provider evidence for detail views and provider debugging."""
+
+    __tablename__ = "options_chain_cache"
+    __table_args__ = (UniqueConstraint("symbol", "expiration", name="uq_options_chain_cache_symbol_expiration"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    expiration: Mapped[date] = mapped_column(Date, index=True)
+    provider: Mapped[str] = mapped_column(String(16), default="yfinance")
+    calls_json: Mapped[list] = mapped_column(JSON, default=list)
+    puts_json: Mapped[list] = mapped_column(JSON, default=list)
+    contract_count: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OptionsSyncRun(Base):
+    __tablename__ = "options_sync_runs"
+    __table_args__ = (Index("ix_options_sync_runs_started", "started_at"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(24), default="running", index=True)
+    trigger_type: Mapped[str] = mapped_column(String(24), default="scheduled")
+    symbols_requested: Mapped[int] = mapped_column(Integer, default=0)
+    symbols_success: Mapped[int] = mapped_column(Integer, default=0)
+    symbols_failed: Mapped[int] = mapped_column(Integer, default=0)
+    contracts_received: Mapped[int] = mapped_column(Integer, default=0)
+    contracts_filtered: Mapped[int] = mapped_column(Integer, default=0)
+    low_quality_symbols: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    error_summary_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 # Register integration-owned tables in the same metadata whenever core models
 # are imported (tests, application runtime, and Alembic must see one graph).
 from app.integrations.ibkr import db_models as _ibkr_db_models  # noqa: E402,F401
