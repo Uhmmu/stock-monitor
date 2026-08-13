@@ -37,7 +37,7 @@ def test_overview_detail_and_semantic_tool_share_persisted_aggregate():
     db = _db()
     sector = IndustryPulseNode(taxonomy="base", node_key="base.technology", name="TECHNOLOGY", level="sector")
     db.add(sector); db.flush()
-    db.add(IndustryPulseInstrument(node_id=sector.id, ticker="XLK", instrument_type="etf", mapping_type="etf_proxy", role="primary", enabled=True))
+    db.add(IndustryPulseInstrument(node_id=sector.id, ticker="XLK", instrument_type="equity_etf", mapping_type="etf_proxy", role="primary", enabled=True))
     db.add(WatchlistItem(ticker="NVDA", enabled=True))
     now = datetime.now(UTC)
     for symbol, asset_type, score in (("SPY", "market_etf", 80), ("XLK", "sector_etf", 70), ("NVDA", "watchlist_stock", 90)):

@@ -186,6 +186,7 @@ function NavIcon({name}:{name:string}) {
     watchlist:<><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></>,
     holdings:<><path d="M3 7h18v13H3z"/><path d="M3 7l3-4h12l3 4"/><path d="M9 11a3 3 0 0 0 6 0"/></>,
     discovery:<><circle cx="12" cy="12" r="8"/><path d="m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9z"/><circle cx="12" cy="12" r="1"/></>,
+    options:<><path d="M3 12h18"/><path d="M4 17c2.5 0 3.5-10 6-10s3.5 10 6 10 3.5-5 4-5"/><circle cx="12" cy="12" r="2"/></>,
     ai:<><path d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 9h8M8 13h5"/></>,
     memory:<><path d="M8 5a4 4 0 0 1 7-2 4 4 0 0 1 4 4 4 4 0 0 1 1 7 4 4 0 0 1-5 6l-3 2-3-2a4 4 0 0 1-5-6 4 4 0 0 1 1-7 4 4 0 0 1 3-2z"/><path d="M9 9h6M9 13h4"/></>,
     decisions:<><path d="M5 3h14v18H5z"/><path d="m8 8 2 2 4-4M8 15h8"/></>,

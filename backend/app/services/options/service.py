@@ -126,7 +126,7 @@ def overview_payload(db: Session, ranking: str = "activity") -> dict[str, Any]:
     market = [snapshot_payload(db, by_symbol[symbol]) for symbol in ("SPY", "QQQ", "IWM") if symbol in by_symbol]
     sectors = []
     for node in db.scalars(select(IndustryPulseNode).where(IndustryPulseNode.taxonomy == "base", IndustryPulseNode.level == "sector", IndustryPulseNode.enabled.is_(True)).order_by(IndustryPulseNode.node_key)).all():
-        mappings = list(db.scalars(select(IndustryPulseInstrument).where(IndustryPulseInstrument.node_id == node.id, IndustryPulseInstrument.instrument_type == "etf", IndustryPulseInstrument.enabled.is_(True)).order_by(IndustryPulseInstrument.role, IndustryPulseInstrument.ticker)).all())
+        mappings = list(db.scalars(select(IndustryPulseInstrument).where(IndustryPulseInstrument.node_id == node.id, IndustryPulseInstrument.mapping_type == "etf_proxy", IndustryPulseInstrument.enabled.is_(True)).order_by(IndustryPulseInstrument.role, IndustryPulseInstrument.ticker)).all())
         primary_symbols = list(dict.fromkeys(item.ticker for item in mappings if item.role == "primary"))
         secondary_symbols = list(dict.fromkeys(item.ticker for item in mappings if item.role == "secondary"))
         primary = next((snapshot_payload(db, by_symbol[symbol]) for symbol in primary_symbols if symbol in by_symbol), None)
