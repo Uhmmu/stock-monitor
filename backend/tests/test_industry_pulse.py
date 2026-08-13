@@ -28,7 +28,7 @@ from app.services.industry_pulse.calculation import calculate_basket_signal, cal
 from app.services.industry_pulse.classification import classify_security
 from app.services.industry_pulse.constituents import ClassificationBatch, MembershipSuggestion, SymbolClassification, _normalize_classification_payload, bootstrap_ai_constituents
 from app.services.industry_pulse.provider import DailyBar, ProviderHistory, fetch_histories
-from app.services.industry_pulse.service import _constituent_health, _fetch_lookback_days, _history_backfill_complete, _merge_history, _prune_snapshot_history, _pulse_stock_mappings, _rollup_base_hierarchy, _snapshot_history_start, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, overview_payload, sync_security_classifications, system_status_payload, taxonomy_payload
+from app.services.industry_pulse.service import _constituent_health, _fetch_lookback_days, _history_backfill_complete, _merge_history, _prune_snapshot_history, _pulse_stock_mappings, _rollup_base_hierarchy, _snapshot_history_start, _stock_mapping_active, _stored_history_payload, _upsert_history, _upsert_snapshot, ai_chain_payload, ensure_seed_data, focus_payload, node_detail_payload, overview_payload, sync_security_classifications, system_status_payload, taxonomy_payload
 
 
 TABLES = [
@@ -275,6 +275,23 @@ def test_base_hierarchy_rolls_leaves_into_group_then_sector(db):
     assert len(rows) == 2
     assert snapshots[(group.id, day)].pulse == snapshots[(sector.id, day)].pulse == 70
     assert snapshots[(sector.id, day)].metrics_json["proxy_mode"] == "CHILD_AGGREGATE"
+
+
+def test_aggregate_node_detail_reuses_weighted_child_baskets(db):
+    group = IndustryPulseNode(taxonomy="base", node_key="base.g", name="Group", level="group")
+    db.add(group); db.flush()
+    leaves = [IndustryPulseNode(taxonomy="base", node_key=f"base.g.l{index}", name=f"Leaf {index}", level="leaf", parent_id=group.id) for index in range(2)]
+    db.add_all(leaves); db.flush()
+    day = date(2026, 8, 10)
+    db.add(IndustryPulseSnapshot(node_id=group.id, trading_date=day, pulse=60, coverage_quality=1, metrics_json={"proxy_mode": "CHILD_AGGREGATE"}))
+    for leaf, ticker in zip(leaves, ("AAA", "BBB")):
+        db.add(IndustryPulseSnapshot(node_id=leaf.id, trading_date=day, pulse=60, coverage_quality=1, metrics_json={"proxy_mode": "EQUITY_BASKET", "basket": {"members": [{"ticker": ticker, "weight": 1}], "breadth": {"constituents": [{"ticker": ticker, "return_5d": 2}]}}}))
+    db.commit()
+
+    detail = node_detail_payload(db, group.id)
+
+    assert detail["constituent_total"] == 2
+    assert {row["ticker"]: row["weight"] for row in detail["constituents"]} == {"AAA": .5, "BBB": .5}
 
 
 def test_focus_and_ai_payloads_flatten_quality_and_change_fields(db):

@@ -932,6 +932,63 @@ def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
     return {"as_of": day.isoformat() if day else None, "groups": groups, "nodes": leaf_nodes, "relations": relations, "hierarchy": relations, "breadth": breadth, "breadth_summary": breadth_summary, "chain_breadth_score": breadth, "chain_breadth_change_5d": breadth_change_5d, "chain_breadth_change_20d": breadth_change_20d, "chain_broadening_status": broadening_state, "concentration": concentration, "propagation_status": propagation_status, "propagation_frontier": propagation_frontier, "propagation_edges": propagation_edges, "coverage": coverage, "synthetic_coverage": synthetic_coverage, "available_groups": len(available_groups), "total_groups": total_groups}
 
 
+def _aggregate_child_constituents(db: Session, node: IndustryPulseNode, day: date, limit: int = 100) -> tuple[list[dict[str, Any]], int]:
+    nodes = db.scalars(select(IndustryPulseNode).where(IndustryPulseNode.taxonomy == node.taxonomy)).all()
+    children: dict[int, list[IndustryPulseNode]] = {}
+    for child in nodes:
+        if child.parent_id is not None:
+            children.setdefault(child.parent_id, []).append(child)
+    descendant_ids: set[int] = set()
+    frontier = [node.id]
+    while frontier:
+        frontier = [child.id for parent_id in frontier for child in children.get(parent_id, [])]
+        descendant_ids.update(frontier)
+    snapshots = {
+        row.node_id: row
+        for row in db.scalars(select(IndustryPulseSnapshot).where(IndustryPulseSnapshot.node_id.in_(descendant_ids), IndustryPulseSnapshot.trading_date == day)).all()
+    }
+    aggregated: dict[str, dict[str, Any]] = {}
+
+    def collect(parent_id: int, parent_weight: float) -> None:
+        valid = [(child, snapshots.get(child.id)) for child in children.get(parent_id, [])]
+        valid = [(child, snapshot) for child, snapshot in valid if snapshot and snapshot.pulse is not None]
+        coverage_total = sum(float(snapshot.coverage_quality or 0) for _child, snapshot in valid)
+        if not coverage_total:
+            return
+        for child, snapshot in valid:
+            child_weight = parent_weight * float(snapshot.coverage_quality or 0) / coverage_total
+            metrics = snapshot.metrics_json or {}
+            mode = metrics.get("proxy_mode")
+            if mode == "CHILD_AGGREGATE":
+                collect(child.id, child_weight)
+                continue
+            basket = metrics.get("basket") or {}
+            stock_share = .55 if mode == "HYBRID" else 1.0 if mode == "EQUITY_BASKET" else 0.0
+            stats = {row.get("ticker"): row for row in (basket.get("breadth") or {}).get("constituents", [])}
+            for member in basket.get("members", []):
+                ticker = member.get("ticker")
+                if not ticker or member.get("weight") is None:
+                    continue
+                effective_weight = child_weight * stock_share * float(member["weight"])
+                row = aggregated.setdefault(ticker, {"ticker": ticker, "weight": 0.0, **(stats.get(ticker) or {})})
+                row["weight"] += effective_weight
+                row["contribution_5d"] = float(row.get("return_5d") or 0) * row["weight"]
+
+    collect(node.id, 1.0)
+    rows = sorted(aggregated.values(), key=lambda row: row["weight"], reverse=True)
+    total = len(rows)
+    # ponytail: cap the rendered detail list; aggregate calculations above remain untruncated.
+    rows = rows[:limit]
+    states = {
+        row.symbol: row
+        for row in db.scalars(select(MarketDataSyncState).where(MarketDataSyncState.symbol.in_([row["ticker"] for row in rows]))).all()
+    }
+    for row in rows:
+        state = states.get(row["ticker"])
+        row.update({"freshness": state.freshness_status if state else "MISSING", "health_status": "AGGREGATED", "latest_date": state.latest_market_date.isoformat() if state and state.latest_market_date else None})
+    return rows, total
+
+
 def node_detail_payload(db: Session, node_id: int, range_days: int = 30) -> dict[str, Any] | None:
     node = db.get(IndustryPulseNode, node_id)
     if not node: return None
@@ -959,8 +1016,11 @@ def node_detail_payload(db: Session, node_id: int, range_days: int = 30) -> dict
         stats = breadth_members.get(row.ticker) or {}
         weight = (basket_members.get(row.ticker) or {}).get("weight", .2 if row.classification_source == "MANUAL_CURATED_SEED" else None)
         constituents.append({"ticker": row.ticker, "slot": row.slot, "role": row.constituent_role, "sub_role": (row.metadata_json or {}).get("sub_role"), "purity": row.purity, "exposure": row.exposure, "confidence": row.confidence, "weight": weight, "classification_source": row.classification_source, "audit_status": (row.metadata_json or {}).get("audit_status"), "validation_status": (row.metadata_json or {}).get("seed_validation_status"), "health_status": "PENDING_REPLACEMENT" if not row.enabled else row.health_status, "freshness": state.freshness_status if state else "MISSING", "latest_date": state.latest_market_date.isoformat() if state and state.latest_market_date else None, "short_reason": (row.metadata_json or {}).get("short_reason"), "enabled_for_pulse": row.enabled_for_pulse, "valid_from": row.valid_from.isoformat() if row.valid_from else None, "valid_to": row.valid_to.isoformat() if row.valid_to else None, **stats, "contribution_5d": float(stats.get("return_5d") or 0) * float(weight or 0)})
+    constituent_total = len(constituents)
+    if not constituents and latest and metrics.get("proxy_mode") == "CHILD_AGGREGATE":
+        constituents, constituent_total = _aggregate_child_constituents(db, node, latest.trading_date)
     etfs = [{"ticker": row.ticker, "role": row.role, "mapping_type": row.mapping_type, "purity": row.purity, "exposure": row.exposure, "confidence": row.confidence, "health_status": row.health_status, "data_quality": row.data_quality} for row in mappings if row.mapping_type == "etf_proxy" and row.enabled]
-    return {"node": node_payload, "proxy_mode": metrics.get("proxy_mode") or "DIRECT_ETF", "etfs": etfs, "constituents": constituents, "breadth": basket.get("breadth") or {}, "metrics": metrics, "composite": composite, "history": [_snapshot_payload(db, row) for row in snapshots], "mood": latest.mood if latest else "unavailable", "benchmark": latest.benchmark_json if latest else {}, "relative_strength": relative, "ai_summary": narrative.summary if narrative else None, "ai_summary_meta": {"model": narrative.model, "status": narrative.status} if narrative else None}
+    return {"node": node_payload, "proxy_mode": metrics.get("proxy_mode") or "DIRECT_ETF", "etfs": etfs, "constituents": constituents, "constituent_total": constituent_total, "breadth": basket.get("breadth") or {}, "metrics": metrics, "composite": composite, "history": [_snapshot_payload(db, row) for row in snapshots], "mood": latest.mood if latest else "unavailable", "benchmark": latest.benchmark_json if latest else {}, "relative_strength": relative, "ai_summary": narrative.summary if narrative else None, "ai_summary_meta": {"model": narrative.model, "status": narrative.status} if narrative else None}
 
 
 __all__ = ["ai_chain_payload", "ensure_seed_data", "focus_payload", "node_detail_payload", "overview_payload", "replacement_reviews_payload", "sync_pulse", "system_status_payload", "taxonomy_payload"]

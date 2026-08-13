@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import ReactMarkdown from 'react-markdown'
+import rehypeSanitize from 'rehype-sanitize'
+import remarkGfm from 'remark-gfm'
 import { api } from './api'
 import { Sheet } from './Sheet'
 import './industry-pulse.css'
@@ -370,6 +373,7 @@ type DetailData = {
   history: { date: string; value: number }[]
   etfs: JsonRecord[]
   constituents: JsonRecord[]
+  constituentTotal: number
   basket: JsonRecord
   proxyMode: string | null
   summary: string | null
@@ -391,7 +395,11 @@ function detailData(value: unknown, fallback: PulseRow): DetailData {
   const etfs = pickArray(record, ['etfs', 'proxies', 'instruments', 'proxy_etfs']).map(asRecord).filter(item => Object.keys(item).length)
   const directConstituents = pickArray(record, ['constituents', 'basket_members']).map(asRecord).filter(item => Object.keys(item).length)
   const constituents = directConstituents.length ? directConstituents : pickArray(basket, ['members', 'constituents']).map(asRecord).filter(item => Object.keys(item).length)
-  return { node: node.id === 'node-0' && fallback.id !== 'node-0' ? fallback : node, history, etfs, constituents, basket, proxyMode: asText(first(record.proxy_mode, node.proxyMode)), summary: asText(first(record.ai_summary, record.summary, record.narrative)) }
+  return { node: node.id === 'node-0' && fallback.id !== 'node-0' ? fallback : node, history, etfs, constituents, constituentTotal: asNumber(record.constituent_total) ?? constituents.length, basket, proxyMode: asText(first(record.proxy_mode, node.proxyMode)), summary: asText(first(record.ai_summary, record.summary, record.narrative)) }
+}
+
+export function IndustrySummaryMarkdown({ content }: { content: string }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{content}</ReactMarkdown>
 }
 
 function HistoryChart({ points }: { points: { date: string; value: number }[] }) {
@@ -420,7 +428,7 @@ function ConstituentTable({ rows }: { rows: JsonRecord[] }) {
 
 function NodeDetail({ selected, range, onRange, onClose }: { selected: PulseRow | null; range: PulseRange; onRange: (range: PulseRange) => void; onClose: () => void }) {
   const detail = useQuery({ queryKey: ['industry-pulse', 'node', selected?.id, range], queryFn: () => api<unknown>(`/industry-pulse/nodes/${encodeURIComponent(selected!.id)}?range=${range}`), enabled: selected !== null, staleTime: 5 * 60_000 })
-  const data = selected && detail.data ? detailData(detail.data, selected) : selected ? { node: selected, history: [], etfs: [], constituents: [], basket: {}, proxyMode: selected.proxyMode, summary: null } : null
+  const data = selected && detail.data ? detailData(detail.data, selected) : selected ? { node: selected, history: [], etfs: [], constituents: [], constituentTotal: 0, basket: {}, proxyMode: selected.proxyMode, summary: null } : null
   const basket = data?.basket || {}
   const configuredConstituents = data ? asNumber(first(basket.target_constituents, basket.configured_constituents, basket.constituent_count, asArray(basket.members).length, data.node.raw.target_constituents, data.constituents.length)) : null
   const validConstituents = data ? asNumber(first(basket.valid_constituents, basket.valid_count, basket.available_constituents, data.node.raw.valid_constituents, data.node.constituentCount, data.constituents.length)) : null
@@ -434,8 +442,8 @@ function NodeDetail({ selected, range, onRange, onClose }: { selected: PulseRow 
       <div className="industry-detail-toolbar"><div role="tablist" aria-label="历史范围">{(['30', '90', '365'] as PulseRange[]).map(value => <button type="button" role="tab" aria-selected={range === value} className={range === value ? 'active' : ''} onClick={() => onRange(value)} key={value}>{value}D</button>)}</div><small>按已保存的 Pulse 快照计算</small></div>
       <section className="industry-detail-section"><div className="industry-section-heading"><div><p>PULSE HISTORY</p><h3>历史状态与趋势</h3></div><small>{data.history.length} 个有效点</small></div><HistoryChart points={data.history}/></section>
       <section className="industry-detail-section"><div className="industry-section-heading"><div><p>EXTERNAL CONFIRMATION</p><h3>外部 ETF 确认</h3></div><small>不替代代表性股票篮子</small></div><ProxyTable rows={data.etfs}/></section>
-      <section className="industry-detail-section"><div className="industry-section-heading"><div><p>REPRESENTATIVE STOCK BASKET</p><h3>代表性股票篮子</h3></div><small>{themeBasket(data.node) ? 'Theme Basket · 主题篮子' : '分类来源仅用于审核'}；Pulse 使用已启用成员</small></div><ConstituentTable rows={data.constituents}/></section>
-      {data.summary && <section className="industry-detail-note"><b>缓存摘要</b><p>{data.summary}</p><small>摘要只解释已保存的确定性结果，不参与 Pulse 计算。</small></section>}
+      <section className="industry-detail-section"><div className="industry-section-heading"><div><p>REPRESENTATIVE STOCK BASKET</p><h3>代表性股票篮子</h3></div><small>{data.proxyMode === 'CHILD_AGGREGATE' ? `已汇总下层篮子；展示权重最高 ${data.constituents.length} / ${data.constituentTotal}` : `${themeBasket(data.node) ? 'Theme Basket · 主题篮子' : '分类来源仅用于审核'}；Pulse 使用已启用成员`}</small></div><ConstituentTable rows={data.constituents}/></section>
+      {data.summary && <section className="industry-detail-note"><b>缓存摘要</b><div className="industry-detail-markdown"><IndustrySummaryMarkdown content={data.summary}/></div><small>摘要只解释已保存的确定性结果，不参与 Pulse 计算。</small></section>}
     </article>}
   </Sheet>
 }

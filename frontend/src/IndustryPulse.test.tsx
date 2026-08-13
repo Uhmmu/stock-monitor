@@ -9,6 +9,7 @@ import {
   confidenceText,
   coverageText,
   extractFocusBuckets,
+  IndustrySummaryMarkdown,
   normalizePulseRow,
   scoreText,
 } from './IndustryPulse'
@@ -36,6 +37,12 @@ describe('行业板块检测', () => {
     expect(scoreText(null)).toBe('数据不足')
     expect(confidenceText(null)).toBe('置信度不足')
     expect(coverageText('low')).toBe('低覆盖')
+  })
+
+  it('正确渲染缓存总结的 Markdown', () => {
+    const html = renderToStaticMarkup(<IndustrySummaryMarkdown content={'**结论**\n\n- 一\n- 二'} />)
+    expect(html).toContain('<strong>结论</strong>')
+    expect(html).toContain('<ul>')
   })
 
   it('提取重点板块分组并保留中文信号名称', () => {

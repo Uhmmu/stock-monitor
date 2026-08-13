@@ -198,6 +198,8 @@
 .industry-detail-note{margin-top:28px;padding:15px 16px;border:1px solid rgba(70,124,187,.14);border-radius:14px;background:rgba(70,124,187,.07)}
 .industry-detail-note b{font-size:12px}
 .industry-detail-note p{margin:7px 0 0;color:var(--ink-2);font-size:12px;line-height:1.75;white-space:pre-wrap}
+.industry-detail-markdown :is(ul,ol){margin:7px 0 0;padding-left:20px;color:var(--ink-2);font-size:12px;line-height:1.75}
+.industry-detail-markdown :is(h1,h2,h3,h4){margin:12px 0 0;color:var(--ink-1);font-size:13px}
 .industry-detail-note small{display:block;margin-top:7px;color:var(--ink-4);font-size:9px}
 .industry-view-tabs button:focus-visible,.industry-pulse-card:focus-visible,.industry-flow-node:focus-visible,.industry-focus-note:focus-visible,.industry-tree-toggle:focus-visible,.industry-tree-label:focus-visible,.industry-detail-toolbar button:focus-visible{outline:3px solid rgba(0,113,227,.28);outline-offset:2px}
 
