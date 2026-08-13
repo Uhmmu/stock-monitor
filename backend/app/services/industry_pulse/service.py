@@ -773,9 +773,21 @@ def ai_chain_payload(db: Session, range_days: int = 30) -> dict[str, Any]:
     nodes = [node for node in all_nodes if node.taxonomy == "ai"]
     nodes_by_id = {node.id: node for node in all_nodes}
     snapshots = {row.node_id: row for row in db.scalars(select(IndustryPulseSnapshot).where(IndustryPulseSnapshot.trading_date == day)).all()} if day else {}
-    history_by_node: dict[int, list[IndustryPulseSnapshot]] = {}
+    history_by_node: dict[int, list[Any]] = {}
     if day:
-        for row in db.scalars(select(IndustryPulseSnapshot).where(IndustryPulseSnapshot.trading_date <= day, IndustryPulseSnapshot.trading_date >= day - timedelta(days=400)).order_by(IndustryPulseSnapshot.trading_date)).all():
+        node_ids = [node.id for node in all_nodes]
+        history_rows = db.execute(select(
+            IndustryPulseSnapshot.node_id,
+            IndustryPulseSnapshot.trading_date,
+            IndustryPulseSnapshot.pulse,
+            IndustryPulseSnapshot.confidence,
+            IndustryPulseSnapshot.coverage_quality,
+        ).where(
+            IndustryPulseSnapshot.node_id.in_(node_ids),
+            IndustryPulseSnapshot.trading_date <= day,
+            IndustryPulseSnapshot.trading_date >= day - timedelta(days=400),
+        ).order_by(IndustryPulseSnapshot.trading_date))
+        for row in history_rows:
             history_by_node.setdefault(row.node_id, []).append(row)
     children: dict[int | None, list[IndustryPulseNode]] = {}
     for row in nodes: children.setdefault(row.parent_id, []).append(row)
