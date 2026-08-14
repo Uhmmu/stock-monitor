@@ -14,12 +14,13 @@ from sqlalchemy.pool import StaticPool
 from app.api.routes import router
 from app.auth import create_token
 from app.database import Base, get_db
-from app.models import PriceSnapshot, Security, StockGroup, User, WatchlistItem
+from app.models import HistoricalPrice, PriceSnapshot, Security, StockGroup, User, WatchlistItem
 from app.services.market_data import LiveQuote
 from app.services.market_calendar import market_data_collection_status
 from app.services.price_snapshots import (
     PriceSnapshotInput,
     build_ai_price_snapshot_context,
+    collect_price_snapshot,
     fetch_standardized_price_snapshot,
     get_latest_persisted_price_snapshot,
     normalize_finnhub_quote,
@@ -37,7 +38,10 @@ def db():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    Base.metadata.create_all(engine, tables=[PriceSnapshot.__table__])
+    Base.metadata.create_all(
+        engine,
+        tables=[Security.__table__, PriceSnapshot.__table__, HistoricalPrice.__table__],
+    )
     with Session(engine) as session:
         yield session
 
@@ -149,6 +153,23 @@ def test_provider_failure_falls_back_without_mislabeling_provider():
     assert value.provider_symbol == "MSFT"
 
 
+def test_realtime_snapshot_uses_reference_previous_close(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.price_snapshots._cached_realtime_snapshot",
+        lambda *_args, **_kwargs: candidate(provider="alpaca", previous_close=None),
+    )
+    monkeypatch.setattr(
+        "app.services.price_snapshots.fetch_standardized_price_snapshot",
+        lambda *_args, **_kwargs: candidate(provider="finnhub", previous_close=100),
+    )
+
+    value = collect_price_snapshot(db, "MSFT")
+
+    assert value.provider == "alpaca"
+    assert value.last_price == 105
+    assert value.previous_close == 100
+
+
 def test_invalid_high_low_is_rejected():
     with pytest.raises(ValueError, match="day_high"):
         normalize_yfinance_quote(
@@ -189,6 +210,48 @@ def test_latest_query_orders_by_market_time_not_insert_order(db):
     db.commit()
     assert older.id > newer.id
     assert get_latest_persisted_price_snapshot(db, "msft").id == newer.id
+
+
+def test_latest_query_keeps_realtime_price_and_fills_same_day_previous_close(db):
+    reference, _ = persist_price_snapshot(db, candidate(provider="finnhub"))
+    realtime, _ = persist_price_snapshot(
+        db,
+        candidate(
+            provider="alpaca",
+            last_price=110,
+            previous_close=None,
+            market_timestamp=datetime(2026, 7, 30, 20, 5, tzinfo=UTC),
+        ),
+    )
+    db.commit()
+
+    latest = get_latest_persisted_price_snapshot(db, "MSFT")
+
+    assert latest.id == realtime.id
+    assert latest.last_price == 110
+    assert latest.previous_close == reference.previous_close
+    assert latest.price_change_percent == 10
+    assert latest._previous_close_source == "finnhub:snapshot"
+    assert not db.is_modified(latest)
+
+
+def test_latest_query_falls_back_to_previous_historical_close(db):
+    realtime, _ = persist_price_snapshot(
+        db,
+        candidate(provider="alpaca", last_price=110, previous_close=None),
+    )
+    db.add(HistoricalPrice(
+        symbol="MSFT", date=date(2026, 7, 29), open=99, high=101,
+        low=98, close=100, source="fmp",
+    ))
+    db.commit()
+
+    latest = get_latest_persisted_price_snapshot(db, "MSFT")
+
+    assert latest.id == realtime.id
+    assert latest.previous_close == 100
+    assert latest.price_change_percent == 10
+    assert latest._previous_close_source == "fmp:historical"
 
 
 def test_stale_closed_and_ai_context_are_derived_from_same_row(db, monkeypatch):

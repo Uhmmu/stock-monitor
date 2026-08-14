@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -10,9 +10,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.config import get_settings
-from app.models import PriceSnapshot, Security
+from app.models import HistoricalPrice, PriceSnapshot, Security
 from app.services.finnhub_mcp import fetch_quote as fetch_finnhub_quote
 from app.services.market_calendar import market_data_collection_status, market_status
 from app.services.market_data import LiveQuote, fetch_live_quote
@@ -230,7 +231,19 @@ def collect_price_snapshot(db: Session, symbol: str) -> PriceSnapshotInput:
     )
     realtime = _cached_realtime_snapshot(value, security=security)
     if realtime is not None:
-        return realtime
+        if realtime.previous_close is not None:
+            return realtime
+        try:
+            reference = fetch_standardized_price_snapshot(
+                value,
+                yahoo_symbol=(security.yahoo_symbol if security else value),
+                finnhub_symbol=(security.finnhub_symbol if security else None),
+                exchange=(security.exchange_name if security else None),
+                currency=(security.currency if security else None),
+            )
+        except RuntimeError:
+            return realtime
+        return replace(realtime, previous_close=reference.previous_close)
     return fetch_standardized_price_snapshot(
         value,
         yahoo_symbol=(security.yahoo_symbol if security else value),
@@ -396,7 +409,7 @@ def get_latest_persisted_price_snapshot(
     symbol: str,
 ) -> PriceSnapshot | None:
     value = symbol.strip().upper()
-    return db.scalar(
+    row = db.scalar(
         select(PriceSnapshot)
         .where(
             PriceSnapshot.symbol == value,
@@ -410,6 +423,54 @@ def get_latest_persisted_price_snapshot(
         )
         .limit(1)
     )
+    if row is None:
+        return row
+    if row.previous_close is not None:
+        row._previous_close_source = f"{row.provider}:snapshot"
+        return row
+    if row.trading_date is None:
+        return row
+    reference = db.scalar(
+        select(PriceSnapshot)
+        .where(
+            PriceSnapshot.symbol == value,
+            PriceSnapshot.source_type == SOURCE_TYPE,
+            PriceSnapshot.trading_date == row.trading_date,
+            PriceSnapshot.previous_close > 0,
+        )
+        .order_by(
+            PriceSnapshot.market_timestamp.desc().nullslast(),
+            PriceSnapshot.fetched_at.desc().nullslast(),
+            PriceSnapshot.persisted_at.desc().nullslast(),
+        )
+        .limit(1)
+    )
+    previous_close = float(reference.previous_close) if reference is not None else None
+    previous_close_source = f"{reference.provider}:snapshot" if reference is not None else None
+    for source in ("fmp", "yahoo"):
+        if previous_close is not None:
+            break
+        historical_close = db.scalar(
+            select(HistoricalPrice.close)
+            .where(
+                HistoricalPrice.symbol == value,
+                HistoricalPrice.source == source,
+                HistoricalPrice.date < row.trading_date,
+                HistoricalPrice.close > 0,
+            )
+            .order_by(HistoricalPrice.date.desc())
+            .limit(1)
+        )
+        if historical_close is not None:
+            previous_close = float(historical_close)
+            previous_close_source = f"{source}:historical"
+    if previous_close is not None:
+        change = row.last_price - previous_close
+        set_committed_value(row, "previous_close", previous_close)
+        set_committed_value(row, "price_change", change)
+        set_committed_value(row, "price_change_percent", change / previous_close * 100)
+        row._previous_close_source = previous_close_source
+    return row
 
 
 def snapshot_freshness(

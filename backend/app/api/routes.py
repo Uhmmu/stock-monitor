@@ -665,6 +665,11 @@ def dashboard(db: Session = Depends(get_db)):
                 "ticker": item.ticker,
                 "price": quote.last_price if quote else None,
                 "previous_close": quote.previous_close if quote else None,
+                "price_source": (
+                    f"{quote.provider}:{quote.feed}" if quote and quote.feed else
+                    quote.provider if quote else None
+                ),
+                "previous_close_source": getattr(quote, "_previous_close_source", None),
                 "updated_at": (quote.market_timestamp or quote.fetched_at) if quote else None,
                 "volume": vol,
                 "volume_ratio": ratio,
