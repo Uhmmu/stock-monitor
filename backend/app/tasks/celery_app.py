@@ -58,7 +58,6 @@ from app.services import archive
 from app.services.alerting import evaluate_quote, evaluate_user_price_alerts
 from app.services.financials import quarters_from_yf
 from app.services.sec_edgar import fetch_filings
-from app.services.market_context import build_market_context
 from app.services.llm import curate_daily_news, curate_weekly_news, generate_analysis, summarize_news
 from app.services.llm import explain_cross_model
 from app.services.market_calendar import market_data_collection_status, market_status
@@ -130,7 +129,6 @@ celery_app.conf.timezone = "UTC"
 celery_app.conf.beat_schedule = {
     "poll-market": {"task": "app.tasks.celery_app.poll_market", "schedule": settings.price_poll_minutes * 60},
     "advance-investigations": {"task": "app.tasks.celery_app.advance_investigations", "schedule": 60},
-    "scheduled-reports": {"task": "app.tasks.celery_app.scheduled_reports", "schedule": 300},
     "sync-earnings": {"task": "app.tasks.celery_app.sync_earnings", "schedule": 21600},
     # The database-backed due check survives beat container recreation. A raw
     # 12-hour interval restarts its clock after every deployment and can starve.
@@ -139,7 +137,6 @@ celery_app.conf.beat_schedule = {
         "schedule": 600,
     },
     "sync-share-statistics": {"task": "app.tasks.celery_app.sync_share_statistics", "schedule": 86400},
-    "earnings-reports": {"task": "app.tasks.celery_app.earnings_reports", "schedule": 1800},
     "poll-news": {"task": "app.tasks.celery_app.poll_news", "schedule": settings.news_poll_minutes * 60},
     "poll-market-news": {"task": "app.tasks.celery_app.poll_market_news", "schedule": settings.market_news_poll_minutes * 60},
     "curate-daily-news": {"task": "app.tasks.celery_app.curate_daily_archives", "schedule": 1800},
@@ -551,23 +548,18 @@ def summarize_news_item(news_id: int, request_id: str, force: bool = False):
         return {"status": "failed", "news_id": news_id}
 
 
-def _save_report(db, key: str, ticker: str | None, report_type: ReportType, title: str, evidence: str, tier: str, sources: list[dict], start=None, end=None):
+def _save_report(db, key: str, ticker: str, title: str, evidence: str, sources: list[dict], start=None, end=None):
     if db.scalar(select(Report.id).where(Report.idempotency_key == key)):
         return
-    if ticker and report_type != ReportType.movement:
-        try:
-            evidence = build_market_context(ticker, provider_symbol(db, ticker, "finnhub")) + "\n\n# 新闻线索\n" + evidence
-        except Exception:
-            pass
     # Reports consume the same persisted aggregate as the Options page and
     # Chat tools. Missing history stays explicit and never blocks a report.
     try:
-        options = semantic_options_context(db, symbol=ticker) if ticker else semantic_options_context(db, scope="market")
+        options = semantic_options_context(db, symbol=ticker)
         evidence += "\n\n# 已持久化期权分析（无 provider 实时调用）\n" + json.dumps(options, ensure_ascii=False, default=str)
     except Exception:
         logger.debug("options_report_context_unavailable ticker=%s", ticker, exc_info=True)
-    content, model = generate_analysis(title, evidence, tier, report_type.value)
-    db.add(Report(idempotency_key=key, ticker=ticker, report_type=report_type, title=title, content=content, model=model, sources=sources, period_start=start, period_end=end))
+    content, model = generate_analysis(title, evidence, "important", ReportType.movement.value)
+    db.add(Report(idempotency_key=key, ticker=ticker, report_type=ReportType.movement, title=title, content=content, model=model, sources=sources, period_start=start, period_end=end))
 
 
 @celery_app.task(name="app.tasks.celery_app.poll_market", autoretry_for=(ConnectionError, TimeoutError), retry_backoff=True, max_retries=3)
@@ -633,16 +625,6 @@ def _daily_archive_text(db, ticker: str, market_date) -> str:
     return f"\n\n# 当日新闻定档（Luna 去重筛选）\n{row.content}" if row else ""
 
 
-def _stored_news(db, ticker: str, start: datetime, end: datetime, limit: int = 100) -> list[NewsItem]:
-    timestamp = func.coalesce(NewsItem.published_at, NewsItem.found_at)
-    return list(db.scalars(
-        select(NewsItem)
-        .where(NewsItem.ticker == ticker, timestamp >= start, timestamp <= end)
-        .order_by(NewsItem.ai_importance.desc().nullslast(), timestamp.desc(), NewsItem.id.desc())
-        .limit(limit)
-    ).all())
-
-
 def _movement_market_evidence(db, ticker: str, through: datetime) -> str:
     """Persisted facts only; the model, not code, decides what explains the move."""
     snapshot = get_latest_persisted_price_snapshot(db, ticker)
@@ -695,7 +677,7 @@ def _complete_investigation(db, investigation: Investigation):
     evidence += _daily_archive_text(db, investigation.ticker, market_day)
     sources = [{"title": item.title, "url": item.url} for item in news]
     key = f"movement:{investigation.id}"
-    _save_report(db, key, investigation.ticker, ReportType.movement, f"{investigation.ticker} 价格异动调查报告", evidence or "调查期内未检索到相关新闻。", "important", sources, investigation.started_at, investigation.ends_at)
+    _save_report(db, key, investigation.ticker, f"{investigation.ticker} 价格异动调查报告", evidence or "调查期内未检索到相关新闻。", sources, investigation.started_at, investigation.ends_at)
     investigation.status = InvestigationStatus.completed
 
 
@@ -719,37 +701,6 @@ def advance_investigations():
         if rows:
             reconcile_news_enrichment.delay()
         return {"processed": len(rows)}
-
-
-def _scheduled_report(db, report_type: ReportType, session: str, title: str):
-    items = db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all()
-    for item in items:
-        key = f"{report_type.value}:{session}:{item.ticker}"
-        if db.scalar(select(Report.id).where(Report.idempotency_key == key)):
-            continue
-        market_date = datetime.fromisoformat(session).date()
-        zone = ZoneInfo(settings.market_timezone)
-        end = datetime.combine(market_date + timedelta(days=1), datetime.min.time(), tzinfo=zone).astimezone(UTC)
-        rows = _stored_news(db, item.ticker, end - timedelta(days=3), end)
-        evidence = "\n\n".join(_news_analysis_evidence(row, i) for i, row in enumerate(rows, 1))
-        evidence += _daily_archive_text(db, item.ticker, market_date)
-        _save_report(db, key, item.ticker, report_type, f"{item.ticker} {title}", evidence or "暂无已入库相关新闻。", "medium", [{"title": row.title, "url": row.url} for row in rows])
-
-
-@celery_app.task(name="app.tasks.celery_app.scheduled_reports")
-def scheduled_reports():
-    now = datetime.now(UTC)
-    status = market_status(now)
-    if not status["session"]:
-        return {"skipped": "not_session"}
-    ny_hour = now.astimezone(__import__("zoneinfo").ZoneInfo(settings.market_timezone)).hour
-    with SessionLocal() as db:
-        if 7 <= ny_hour < 9:
-            _scheduled_report(db, ReportType.premarket, status["session"], "盘前信息报告")
-        elif 16 <= ny_hour < 19:
-            _scheduled_report(db, ReportType.postmarket, status["session"], "盘后信息报告")
-        db.commit()
-    return {"session": status["session"]}
 
 
 @celery_app.task(name="app.tasks.celery_app.sync_earnings")
@@ -2019,53 +1970,6 @@ def sync_ticker_sec_all(ticker: str):
         if events:
             summarize_sec_events.delay()
         return {"ticker": ticker, "events": events, "insider_trades": insider, "periods": periods}
-
-
-def _financials_text(db, ticker: str) -> str:
-    rows = db.scalars(
-        select(QuarterlyFinancial).where(QuarterlyFinancial.ticker == ticker).order_by(QuarterlyFinancial.period_end.desc()).limit(4)
-    ).all()
-    if not rows:
-        return "\n\n# 近四季度财报\n数据不足"
-    def _v(value, suffix=""):
-        return f"{value}{suffix}" if value is not None else "数据不足"
-
-    lines = ["\n\n# 近四季度财报（SEC 原始）"]
-    for row in rows:
-        lines.append(
-            f"- {row.fiscal_year} {row.fiscal_period}（截至 {row.period_end}）："
-            f"营收={_v(row.revenue)}，净利润={_v(row.net_income)}，"
-            f"营业利润={_v(row.operating_income)}，EPS={_v(row.eps)}，"
-            f"毛利率={_v(round(row.gross_margin, 1) if row.gross_margin is not None else None, '%')}，"
-            f"净利率={_v(round(row.net_margin, 1) if row.net_margin is not None else None, '%')}，"
-            f"经营现金流={_v(row.operating_cash_flow)}"
-        )
-    return "\n".join(lines)
-
-
-@celery_app.task(name="app.tasks.celery_app.earnings_reports")
-def earnings_reports():
-    now = datetime.now(UTC)
-    future = now + timedelta(days=settings.earnings_lookahead_days)
-    recent = now - timedelta(days=1)
-    with SessionLocal() as db:
-        events = db.scalars(select(EarningsEvent).where(EarningsEvent.event_time.between(recent, future))).all()
-        for event in events:
-            before = event.event_time > now
-            report_type = ReportType.earnings_before if before else ReportType.earnings_after
-            key = f"{report_type.value}:{event.id}"
-            if db.scalar(select(Report.id).where(Report.idempotency_key == key)):
-                continue
-            try:
-                rows = _stored_news(db, event.ticker, now - timedelta(days=7), now)
-                evidence = "\n\n".join(_news_analysis_evidence(row, i) for i, row in enumerate(rows, 1))
-                evidence += _financials_text(db, event.ticker)
-                label = "财报前瞻报告" if before else "财报复盘报告"
-                _save_report(db, key, event.ticker, report_type, f"{event.ticker} {label}", evidence or "暂无已入库相关新闻。", "important", [{"title": row.title, "url": row.url} for row in rows])
-            except Exception:
-                continue
-        db.commit()
-        return {"events": len(events)}
 
 
 def _upsert_congress_trade(db, raw: dict, filer_meta: dict | None = None) -> bool:

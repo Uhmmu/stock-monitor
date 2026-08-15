@@ -30,6 +30,7 @@ from app.models import (
     PeerRelation,
     QuarterlyFinancial,
     Report,
+    ReportType,
     Sec13FHolding,
     SecEvent,
     SecFiling,
@@ -755,11 +756,13 @@ def _extract_confidence(content: str | None) -> str | None:
 
 
 @router.get("/reports")
-def reports(report_type: str | None = None, db: Session = Depends(get_db)):
-    query = select(Report).order_by(Report.created_at.desc())
-    if report_type:
-        query = query.where(Report.report_type == report_type)
-    rows = db.scalars(query.limit(100)).all()
+def reports(db: Session = Depends(get_db)):
+    rows = db.scalars(
+        select(Report)
+        .where(Report.report_type == ReportType.movement)
+        .order_by(Report.created_at.desc())
+        .limit(100)
+    ).all()
     return [{"id": r.id, "ticker": r.ticker, "report_type": r.report_type, "title": r.title, "model": r.model, "created_at": r.created_at, "confidence": _extract_confidence(r.content)} for r in rows]
 
 
