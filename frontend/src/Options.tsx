@@ -1,10 +1,19 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { ColorType, CrosshairMode, LineSeries, createChart, createSeriesMarkers, type IChartApi, type LineData, type MouseEventParams, type SeriesMarker, type Time } from 'lightweight-charts'
 import { api } from './api'
 import { Sheet } from './Sheet'
 import './options.css'
 
 type Json = Record<string, unknown>
+
+export type OptionsState = Json & {
+  activity?: unknown
+  bias?: unknown
+  risk_pricing?: unknown
+  positioning?: unknown
+  historical_regime?: unknown
+}
 
 export type OptionQuality = {
   level?: string | null
@@ -35,6 +44,13 @@ export type OptionRow = {
   downside_skew: number | null
   activity_level: string | null
   activity_score: number | null
+  total_volume: number | null
+  volume_20d_average: number | null
+  near_term_iv: number | null
+  options_bias: string | null
+  bias_status: string | null
+  options_state: OptionsState | null
+  historical_comparison: Json | null
   quality: OptionQuality
   updated_at: string | null
   provider: string | null
@@ -64,7 +80,17 @@ export type OptionChainRow = Json & {
   last_price?: number | null
 }
 
-export type OptionPoint = Json & { x?: string | number | null; y?: number | null; value?: number | null; label?: string | null }
+export type OptionPoint = Json & {
+  x?: string | number | null
+  y?: number | null
+  value?: number | null
+  label?: string | null
+  date?: string | null
+  time?: string | number | null
+  comparison?: Json | null
+  anomaly_direction?: string | null
+  trend_direction?: string | null
+}
 export type OptionsDetail = OptionRow & {
   expirations: (string | Json)[]
   term_structure: OptionPoint[]
@@ -87,6 +113,21 @@ const quality = (value: unknown): OptionQuality => {
     score: number(pick(row, ['score', 'quality_score'])),
     coverage: number(pick(row, ['coverage', 'coverage_percent'])) ?? text(pick(row, ['coverage', 'coverage_percent'])),
     warnings: asArray(row.warnings).map(item => text(item)).filter((item): item is string => !!item),
+  }
+}
+
+export function normalizeOptionPoint(value: unknown): OptionPoint {
+  const point = asRecord(value)
+  return {
+    ...point,
+    x: pick(point, ['x', 'date', 'time', 'trading_date']) as string | number | null | undefined,
+    date: text(pick(point, ['date', 'time', 'trading_date', 'x'])),
+    y: number(pick(point, ['y', 'value', 'metric_value'])),
+    value: number(pick(point, ['value', 'y', 'metric_value'])),
+    label: text(pick(point, ['label', 'name'])),
+    comparison: point.comparison != null ? asRecord(point.comparison) : point.historical_comparison != null ? asRecord(point.historical_comparison) : null,
+    anomaly_direction: text(pick(point, ['anomaly_direction', 'activity_anomaly_direction', 'anomaly'])),
+    trend_direction: text(pick(point, ['trend_direction', 'trend'])),
   }
 }
 
@@ -114,6 +155,19 @@ export function normalizeOptionRow(value: unknown): OptionRow {
     downside_skew: number(pick(row, ['downside_skew', 'skew'])),
     activity_level: text(pick(row, ['activity_level', 'activity'])),
     activity_score: number(pick(row, ['activity_score', 'score'])),
+    total_volume: number(pick(row, ['total_volume', 'volume', 'call_volume_total'])),
+    volume_20d_average: number(pick(row, ['volume_20d_average', 'average_20d', 'avg_20d_volume'])),
+    near_term_iv: number(pick(row, ['near_term_iv', 'front_iv', 'short_term_iv'])),
+    options_bias: text(pick(row, ['options_bias', 'bias'])),
+    bias_status: text(pick(row, ['bias_status'])),
+    options_state: (() => {
+      const state = pick(row, ['options_state', 'option_state', 'state'])
+      return state && typeof state === 'object' && !Array.isArray(state) ? asRecord(state) as OptionsState : null
+    })(),
+    historical_comparison: (() => {
+      const comparison = pick(row, ['historical_comparison', 'history_comparison', 'comparisons'])
+      return comparison && typeof comparison === 'object' && !Array.isArray(comparison) ? asRecord(comparison) : null
+    })(),
     quality: quality(row.quality),
     updated_at: text(pick(row, ['updated_at', 'as_of', 'fetched_at'])),
     provider: text(pick(row, ['provider', 'source'])),
@@ -149,7 +203,7 @@ export function normalizeOptionsOverview(value: unknown): OptionsOverview {
 export function normalizeOptionsDetail(value: unknown): OptionsDetail {
   const source = asRecord(value)
   const base = normalizeOptionRow(source.summary ?? source)
-  const points = (key: string, fallback?: string) => asArray(source[key] ?? (fallback ? source[fallback] : undefined)).map(item => asRecord(item) as OptionPoint)
+  const points = (key: string, fallback?: string) => asArray(source[key] ?? (fallback ? source[fallback] : undefined)).map(normalizeOptionPoint)
   const chain = Array.isArray(source.chain) ? source.chain : Object.values(asRecord(source.chain)).flatMap(value => asArray(value))
   return {
     ...base,
@@ -189,6 +243,92 @@ const compact = (value: number | null) => value == null ? '数据不足' : Intl.
 const price = (value: number | null) => value == null ? '数据不足' : `$${value.toFixed(2)}`
 const date = (value: string | null) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '时间不可用'
 
+const stateLabels: Record<string, string> = {
+  low: '低', normal: '正常', elevated: '偏高', high: '高', extreme: '极高', insufficient_history: '历史不足',
+  insufficient_history_data: '历史不足', insufficient_data: '数据不足', ready: '可用', partial: '部分可用', positive: '偏正', negative: '偏负', neutral: '中性', mixed: '混合',
+  call_heavy: 'Call 偏重', put_heavy: 'Put 偏重', balanced: '相对平衡', risk_on: '风险偏好升温', risk_off: '风险偏好降温',
+}
+
+const stateText = (value: unknown) => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = asRecord(value)
+    return stateText(pick(record, ['status', 'label', 'value', 'state']) ?? pick(asRecord(record.raw_metrics), ['status', 'label']))
+  }
+  const raw = text(value)
+  if (!raw) return 'N/A'
+  return stateLabels[raw.toLowerCase()] || raw.replace(/_/g, ' ')
+}
+
+type Comparison = { current: number | null; previous: number | null; change_1d: number | null; change_7d: number | null; change_20d: number | null }
+
+const comparisonFor = (row: OptionRow, key: string, current: number | null): Comparison => {
+  const root = row.historical_comparison || {}
+  const metric: Record<string, string> = { activity: 'activity', atm_iv: 'iv', put_call_volume_ratio: 'put_call', put_call_oi_ratio: 'put_call_oi', downside_skew: 'skew' }
+  const metricKey = metric[key] || key
+  const source = asRecord(row.historical_comparison?.[key])
+  const changes = asRecord(asRecord(root.changes)[metricKey])
+  const averages = asRecord(asRecord(root.averages)[metricKey])
+  const statistics = asRecord(asRecord(root.statistics)[metricKey])
+  const fallback = asRecord(pick(root, [key, metricKey]))
+  const candidate = Object.keys(source).length ? source : fallback
+  const latest = number(pick(candidate, ['current', 'latest', 'value'])) ?? current
+  const average7 = number(averages['7'])
+  const average20 = number(averages['20'])
+  return {
+    current: latest,
+    previous: number(pick(candidate, ['previous', 'previous_value', 'value_1d'])) ?? (latest != null && number(changes['1']) != null ? latest - number(changes['1'])! : null),
+    change_1d: number(pick(candidate, ['change_1d', 'delta_1d', 'change_1d_pct'])) ?? number(changes['1']),
+    change_7d: number(pick(candidate, ['change_7d', 'delta_7d'])) ?? (latest != null && average7 != null ? latest - average7 : null),
+    change_20d: number(pick(candidate, ['change_20d', 'delta_20d'])) ?? number(changes['20']) ?? (latest != null && average20 != null ? latest - average20 : null),
+  }
+}
+
+const metricFormat = (key: string, value: number | null) => {
+  if (value == null) return 'N/A'
+  if (key === 'atm_iv' || key === 'downside_skew') return percent(value)
+  if (key.includes('ratio')) return ratio(value)
+  if (key === 'activity') return value.toFixed(0)
+  return compact(value)
+}
+
+const signedMetric = (key: string, value: number | null) => {
+  if (value == null) return 'N/A'
+  const rendered = metricFormat(key, Math.abs(value))
+  return `${value >= 0 ? '+' : '-'}${rendered}`
+}
+
+function StateGrid({ row }: { row: OptionRow }) {
+  const entries = [
+    ['activity', '活跃度', row.options_state?.activity ?? row.activity_level],
+    ['bias', '偏向', row.options_state?.bias ?? row.options_bias ?? row.bias_status],
+    ['risk_pricing', '风险定价', row.options_state?.risk_pricing],
+    ['positioning', '持仓结构', row.options_state?.positioning],
+    ['historical_regime', '历史状态', row.options_state?.historical_regime],
+  ] as const
+  return <div className="options-state-grid">{entries.map(([key, label, value]) => <div key={key}><span>{label}</span><b>{stateText(value)}</b></div>)}</div>
+}
+
+function ComparisonStrip({ row, compact: isCompact = false }: { row: OptionRow; compact?: boolean }) {
+  const entries = [
+    ['activity', '活跃度', row.activity_score ?? row.total_volume],
+    ['atm_iv', 'ATM IV', row.atm_iv],
+    ['put_call_volume_ratio', 'P/C 成交', row.put_call_volume_ratio],
+    ['downside_skew', '下行偏斜', row.downside_skew],
+  ] as const
+  const hasAny = entries.some(([key, , current]) => {
+    const comparison = comparisonFor(row, key, current)
+    return comparison.current != null || comparison.previous != null || comparison.change_1d != null || comparison.change_7d != null || comparison.change_20d != null
+  })
+  if (!hasAny) return <div className={`options-comparison-empty${isCompact ? ' compact' : ''}`}>历史对比：历史不足</div>
+  return <div className={`options-comparison${isCompact ? ' compact' : ''}`} aria-label="当前与历史变化">
+    {entries.map(([key, label, current]) => {
+      const comparison = comparisonFor(row, key, current)
+      if (comparison.current == null && comparison.previous == null && comparison.change_1d == null && comparison.change_7d == null && comparison.change_20d == null) return null
+      return <div key={key}><span>{label}</span><b>{metricFormat(key, comparison.current)}</b><small>1D {signedMetric(key, comparison.change_1d)} · 7D {signedMetric(key, comparison.change_7d)} · 20D {signedMetric(key, comparison.change_20d)}</small></div>
+    })}
+  </div>
+}
+
 function QualityBadge({ row }: { row: OptionRow }) {
   const level = row.status || row.quality.level
   return <span className={`options-quality ${String(level || '').toLowerCase()}`}>{statusLabel(level)}</span>
@@ -204,6 +344,7 @@ function OptionCard({ row, onOpen, compact: isCompact = false }: { row: OptionRo
     <div className="options-card-head"><div><strong>{row.symbol || '未命名标的'}</strong><small>{row.name || row.asset_type || '期权标的'}</small></div><QualityBadge row={row}/></div>
     <div className="options-card-price"><b>{price(row.underlying_price)}</b><span>{row.nearest_expiration || '期限不可用'}{row.dte != null ? ` · ${row.dte} 天` : ''}</span></div>
     <div className="options-card-metrics"><Metric label="ATM IV" value={percent(row.atm_iv)}/><Metric label="P/C 成交" value={ratio(row.put_call_volume_ratio)}/><Metric label="活跃度" value={row.activity_score == null ? '数据不足' : `${row.activity_score.toFixed(0)} / 100`}/><Metric label="下行偏斜" value={percent(row.downside_skew)}/></div>
+    <StateGrid row={row}/><ComparisonStrip row={row} compact={isCompact}/>
     <footer><span>{row.provider || '来源不可用'}</span><time>{date(row.updated_at)}</time></footer>
   </button>
 }
@@ -220,8 +361,129 @@ function Sparkline({ points, label }: { points: OptionPoint[]; label: string }) 
   return <figure className="options-chart"><svg viewBox="0 0 100 100" role="img" aria-label={label} preserveAspectRatio="none"><polyline points={coords}/></svg><figcaption><span>{label}</span><b>{values.at(-1)?.toFixed(2)}</b></figcaption></figure>
 }
 
+type DailySeries = { key: string; label: string; color: string; aliases?: string[] }
+
+const historyMetric = (key: string) => key === 'average_20d' ? 'activity' : key === 'put_call_volume_ratio' ? 'put_call' : key === 'put_call_oi_ratio' ? 'put_call_oi' : key === 'atm_iv' ? 'iv' : key === 'downside_skew' ? 'skew' : key === 'total_volume' ? 'total_volume' : 'activity'
+
+const pointDate = (point: OptionPoint) => {
+  const raw = point.date ?? point.time ?? point.x
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10)
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    const timestamp = raw < 2_000_000_000 ? raw * 1000 : raw
+    return new Date(timestamp).toISOString().slice(0, 10)
+  }
+  const parsed = raw == null ? NaN : Date.parse(String(raw))
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : null
+}
+
+const pointMetric = (point: OptionPoint, series: DailySeries) => {
+  const source = asRecord(point)
+  const comparison = asRecord(point.comparison)
+  const keys = [series.key, ...(series.aliases || [])]
+  const metric = historyMetric(series.key)
+  const averages = asRecord(asRecord(comparison.averages)[metric])
+  return number(pick(source, keys)) ?? number(pick(comparison, keys)) ?? (series.key === 'average_20d' ? number(averages['20']) : null) ?? (series.key === 'value' ? number(point.value ?? point.y) : null)
+}
+
+type ChartPoint = { date: string; point: OptionPoint; value: number }
+
+const chartPoints = (points: OptionPoint[], series: DailySeries): ChartPoint[] => {
+  const byDate = new Map<string, ChartPoint>()
+  points.forEach(point => {
+    const dateValue = pointDate(point)
+    const value = pointMetric(point, series)
+    if (dateValue && value != null) byDate.set(dateValue, { date: dateValue, point, value })
+  })
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
+}
+
+const tooltipComparison = (point: OptionPoint, metricKey: string, current?: number | null) => {
+  const source = asRecord(point.comparison)
+  const metric = historyMetric(metricKey)
+  const changes = asRecord(asRecord(source.changes)[metric])
+  const averages = asRecord(asRecord(source.averages)[metric])
+  const statistics = asRecord(asRecord(source.statistics)[metric])
+  const selectedWindow = number(pick(statistics, ['selected_window'])) || 20
+  const selected = asRecord(statistics[String(selectedWindow)])
+  const anomaly = asRecord(asRecord(source.metric_anomalies)[metric])
+  return {
+    previous: number(pick(source, ['previous', 'previous_value', 'value_1d'])) ?? (current != null && number(changes['1']) != null ? current - number(changes['1'])! : null),
+    average: number(pick(averages, ['20', '7'])) ?? number(pick(source, ['average_20d', 'rolling_average', 'avg_20d', 'average_7d'])) ?? number(pick(point, ['average_20d', 'rolling_average', 'avg_20d', 'average_7d'])),
+    percentile: number(pick(selected, ['percentile'])) ?? number(pick(source, ['percentile_20d', 'percentile_60d', 'percentile'])) ?? number(pick(point, ['percentile_20d', 'percentile_60d', 'percentile'])),
+    zscore: number(pick(selected, ['zscore'])) ?? number(pick(source, ['zscore_20d', 'z_score_20d', 'zscore'])) ?? number(pick(point, ['zscore_20d', 'z_score_20d', 'zscore'])),
+    anomaly: text(pick(anomaly, ['direction', 'status'])) || text(pick(point, ['anomaly_direction', 'anomaly_status', 'anomaly'])),
+  }
+}
+
+const chartValue = (series: DailySeries, value: number | null) => {
+  if (value == null) return 'N/A'
+  if (series.key.includes('iv') || series.key.includes('skew')) return percent(value)
+  if (series.key.includes('ratio')) return ratio(value)
+  return compact(value)
+}
+
+function DailyOptionsChart({ points, title, primary, secondary }: { points: OptionPoint[]; title: string; primary: DailySeries; secondary?: DailySeries }) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const [hovered, setHovered] = useState<ChartPoint | null>(null)
+  const primaryPoints = useMemo(() => chartPoints(points, primary), [points, primary.key, primary.aliases?.join('|')])
+  const secondaryPoints = useMemo(() => secondary ? chartPoints(points, secondary) : [], [points, secondary?.key, secondary?.aliases?.join('|')])
+  const latest = primaryPoints.at(-1) || null
+  useEffect(() => {
+    if (!containerRef.current || !primaryPoints.length) return
+    const chart = createChart(containerRef.current, {
+      autoSize: true,
+      height: 220,
+      layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: '#667085', fontFamily: 'Inter, system-ui, sans-serif', fontSize: 11 },
+      grid: { vertLines: { color: 'rgba(148, 163, 184, 0.12)' }, horzLines: { color: 'rgba(148, 163, 184, 0.12)' } },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderVisible: false },
+      timeScale: { borderVisible: false, timeVisible: false, secondsVisible: false, fixLeftEdge: true, fixRightEdge: true },
+    })
+    chartRef.current = chart
+    const primarySeries = chart.addSeries(LineSeries, { color: '#6d5dfc', lineWidth: 2, priceLineVisible: false, lastValueVisible: true })
+    const primaryData: LineData<Time>[] = primaryPoints.map(item => ({ time: item.date as Time, value: item.value }))
+    primarySeries.setData(primaryData)
+    if (secondary && secondaryPoints.length) {
+      const secondarySeries = chart.addSeries(LineSeries, { color: '#13a8a8', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: true })
+      secondarySeries.setData(secondaryPoints.map(item => ({ time: item.date as Time, value: item.value })))
+    }
+    const markers: SeriesMarker<Time>[] = primaryPoints.flatMap(item => {
+      const direction = String(tooltipComparison(item.point, primary.key, item.value).anomaly || '').toLowerCase()
+      const isUp = ['up', 'rise', 'increase', 'positive', '↑'].includes(direction)
+      const isDown = ['down', 'fall', 'decrease', 'negative', '↓'].includes(direction)
+      if (!isUp && !isDown) return []
+      return [{ time: item.date as Time, position: isUp ? 'belowBar' : 'aboveBar', shape: isUp ? 'arrowUp' : 'arrowDown', color: isUp ? '#0f9d74' : '#d65a69', text: isUp ? '↑' : '↓' }]
+    })
+    const markerApi = markers.length ? createSeriesMarkers(primarySeries, markers) : null
+    const handleCrosshairMove = (param: MouseEventParams<Time>) => {
+      if (!param.time) return setHovered(null)
+      const key = typeof param.time === 'string' ? param.time : String(param.time)
+      setHovered(primaryPoints.find(item => item.date === key) || null)
+    }
+    chart.subscribeCrosshairMove(handleCrosshairMove)
+    chart.timeScale().fitContent()
+    const resize = new ResizeObserver(() => chart.applyOptions({ width: containerRef.current?.clientWidth || 0 }))
+    resize.observe(containerRef.current)
+    return () => {
+      resize.disconnect()
+      markerApi?.detach()
+      chart.unsubscribeCrosshairMove(handleCrosshairMove)
+      chart.remove()
+      chartRef.current = null
+    }
+  }, [primary.key, primary.label, primaryPoints, secondary?.key, secondary?.label, secondaryPoints])
+  const selected = hovered || latest
+  const comparison = selected ? tooltipComparison(selected.point, primary.key, selected.value) : null
+  return <figure className="options-daily-chart" aria-label={title}>
+    <div className="options-daily-chart-head"><div><strong>{title}</strong><small>{primary.label}{secondary ? ` · ${secondary.label}` : ''}</small></div>{selected && <time>{selected.date}</time>}</div>
+    <div className="options-daily-chart-canvas" ref={containerRef}>{!primaryPoints.length && <div className="options-chart-empty">{title}：历史不足</div>}</div>
+    {selected && <div className="options-chart-tooltip" role="status"><span>{selected.date}</span><b>{chartValue(primary, selected.value)}</b>{comparison?.previous != null && <small>上一日 {chartValue(primary, comparison.previous)}</small>}{comparison?.average != null && <small>滚动均值 {chartValue(primary, comparison.average)}</small>}{comparison?.percentile != null && <small>分位 {comparison.percentile.toFixed(0)}%</small>}{comparison?.zscore != null && <small>Z {comparison.zscore.toFixed(2)}</small>}{comparison?.anomaly && <small className="options-anomaly">异常 {stateText(comparison.anomaly)}</small>}</div>}
+  </figure>
+}
+
 function DetailMetricGrid({ data }: { data: OptionsDetail }) {
-  return <div className="options-detail-metrics"><Metric label="标的价格" value={price(data.underlying_price)}/><Metric label="ATM IV" value={percent(data.atm_iv)}/><Metric label="P/C 成交量" value={ratio(data.put_call_volume_ratio)}/><Metric label="P/C 持仓量" value={ratio(data.put_call_oi_ratio)}/><Metric label="总成交量" value={compact((data.call_volume || 0) + (data.put_volume || 0) || null)}/><Metric label="活跃度" value={data.activity_score == null ? '数据不足' : `${data.activity_score.toFixed(0)} / 100`}/></div>
+  return <><div className="options-detail-metrics"><Metric label="标的价格" value={price(data.underlying_price)}/><Metric label="ATM IV" value={percent(data.atm_iv)}/><Metric label="P/C 成交量" value={ratio(data.put_call_volume_ratio)}/><Metric label="P/C 持仓量" value={ratio(data.put_call_oi_ratio)}/><Metric label="总成交量" value={compact(data.total_volume ?? ((data.call_volume || 0) + (data.put_volume || 0) || null))}/><Metric label="活跃度" value={data.activity_score == null ? '数据不足' : `${data.activity_score.toFixed(0)} / 100`}/></div><StateGrid row={data}/><ComparisonStrip row={data}/></>
 }
 
 function ChainTable({ rows, type }: { rows: OptionChainRow[]; type: 'call' | 'put' }) {
@@ -249,7 +511,8 @@ function OptionsDetailSheet({ symbol, onClose }: { symbol: string | null; onClos
       <DetailMetricGrid data={data}/>
       <section className="options-detail-section"><div className="options-section-title"><div><h3>期限结构</h3><small>选择已保存的到期日查看链</small></div><select aria-label="选择期权到期日" value={expiration || expValue(expirations[0] || '')} onChange={event => setExpiration(event.target.value)}><option value="">最近期限</option>{expirations.map(item => <option value={expValue(item)} key={expValue(item)}>{expValue(item)}</option>)}</select></div><div className="options-expiration-strip">{expirations.slice(0, 8).map(item => <button type="button" className={expValue(item) === expiration ? 'active' : ''} key={expValue(item)} onClick={() => setExpiration(expValue(item))}>{expValue(item) || '数据不足'}</button>)}{!expirations.length && <span>期限数据不足</span>}</div></section>
       <section className="options-detail-section"><div className="options-section-title"><div><h3>Call / Put 链</h3><small>仅展示已保存的前 80 条合约，非交易终端</small></div><div className="options-toggle"><button type="button" className={chainType === 'call' ? 'active' : ''} onClick={() => setChainType('call')}>Calls</button><button type="button" className={chainType === 'put' ? 'active' : ''} onClick={() => setChainType('put')}>Puts</button></div></div><ChainTable rows={data.chain} type={chainType}/></section>
-      <div className="options-chart-grid"><Sparkline label="ATM IV / 期限结构" points={data.term_structure}/><Sparkline label="持仓量分布" points={data.oi_distribution}/><Sparkline label="成交量分布" points={data.volume_distribution}/><Sparkline label="历史快照" points={data.history}/></div>
+      <section className="options-detail-section options-history-section"><div className="options-section-title"><div><h3>每日历史</h3><small>日期轴、滚动均值与异常方向；趋势只作背景，不生成标记</small></div><span className="options-history-quality">{data.history.length ? `${data.history.length} 个日点` : '历史不足'}</span></div><div className="options-daily-chart-grid"><DailyOptionsChart title="成交活动" points={data.history} primary={{ key: 'total_volume', aliases: ['volume', 'activity_score'], label: '总成交量', color: 'var(--accent, #6d5dfc)' }} secondary={{ key: 'average_20d', aliases: ['avg_20d', 'volume_20d_average'], label: '20D 均值', color: 'var(--options-secondary, #13a8a8)' }}/><DailyOptionsChart title="成交量与持仓量结构" points={data.history} primary={{ key: 'put_call_volume_ratio', aliases: ['pc_volume'], label: 'P/C 成交量', color: 'var(--accent, #6d5dfc)' }} secondary={{ key: 'put_call_oi_ratio', aliases: ['pc_oi'], label: 'P/C 持仓量', color: 'var(--options-secondary, #13a8a8)' }}/><DailyOptionsChart title="ATM 波动率" points={data.history} primary={{ key: 'atm_iv', aliases: ['iv'], label: 'ATM IV', color: 'var(--accent, #6d5dfc)' }} secondary={{ key: 'near_term_iv', aliases: ['front_iv', 'short_term_iv'], label: '近月 IV', color: 'var(--options-secondary, #13a8a8)' }}/><DailyOptionsChart title="下行偏斜" points={data.history} primary={{ key: 'downside_skew', aliases: ['skew'], label: '下行偏斜', color: 'var(--accent, #6d5dfc)' }}/></div></section>
+      <div className="options-chart-grid options-distribution-grid"><Sparkline label="ATM IV / 期限结构" points={data.term_structure}/><Sparkline label="持仓量分布" points={data.oi_distribution}/><Sparkline label="成交量分布" points={data.volume_distribution}/></div>
       <p className="options-detail-note">期权活跃度描述成交与持仓活动，不代表涨跌概率或交易建议。缺失指标保持“数据不足”。</p>
     </article>}
   </Sheet>

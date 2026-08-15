@@ -2364,16 +2364,25 @@ def _options_jobs(db, only_symbol: str | None = None):
 
 
 def _persist_options_symbol(db, job):
-    history_rows = list(db.scalars(select(OptionsSnapshot).where(OptionsSnapshot.symbol == job["symbol"]).order_by(OptionsSnapshot.trading_date.desc()).limit(60)).all())
-    history = [{"atm_iv": row.atm_iv, "total_volume": (row.metrics_json or {}).get("total_volume"), "activity_score": row.activity_score} for row in reversed(history_rows)]
+    market_day = datetime.now(ZoneInfo(settings.market_timezone)).date()
+    history_rows = list(db.scalars(select(OptionsSnapshot).where(OptionsSnapshot.symbol == job["symbol"], OptionsSnapshot.trading_date != market_day).order_by(OptionsSnapshot.trading_date.desc()).limit(60)).all())
+    history = list(reversed(history_rows))
     validator = None
     if job.get("finnhub_symbol") and settings.finnhub_api_key:
         validator = lambda _symbol: fetch_finnhub_quote(job["finnhub_symbol"])
     raw = fetch_options_chain(job["provider_symbol"], timeout_seconds=settings.options_provider_timeout_seconds, quote_validator=validator)
     raw.update({"symbol": job["symbol"], "asset_type": job["asset_type"], "sector_node_id": job.get("sector_node_id")})
     values = compute_options_analytics(raw, history)
-    market_day = datetime.now(ZoneInfo(settings.market_timezone)).date()
     row = db.scalar(select(OptionsSnapshot).where(OptionsSnapshot.symbol == job["symbol"], OptionsSnapshot.trading_date == market_day))
+    failure_statuses = {"PROVIDER_ERROR", "NO_VALID_EXPIRATION", "NO_OPTIONS"}
+    if row is not None and values.get("status") in failure_statuses:
+        # A transient refresh failure must not erase a good same-day snapshot.
+        # Keep the failure in the run counters/return value while retaining the
+        # last valid aggregate for readers.
+        warning = f"refresh_failed:{values['status']}"
+        row.warnings = list(dict.fromkeys((row.warnings or []) + [warning]))
+        values["preserved_existing"] = True
+        return values, 0, 0
     if row is None:
         row = OptionsSnapshot(symbol=job["symbol"], trading_date=market_day, fetched_at=datetime.now(UTC), asset_type=job["asset_type"], status=values["status"])
         db.add(row)
@@ -2445,10 +2454,11 @@ def sync_options():
                     result, received, filtered = _persist_options_symbol(db, job)
                     run.contracts_received += received
                     run.contracts_filtered += filtered
-                    run.symbols_success += int(result["status"] != "PROVIDER_ERROR")
-                    run.symbols_failed += int(result["status"] == "PROVIDER_ERROR")
+                    failed = result.get("status") in {"PROVIDER_ERROR", "NO_VALID_EXPIRATION", "NO_OPTIONS"}
+                    run.symbols_success += int(not failed)
+                    run.symbols_failed += int(failed)
                     run.low_quality_symbols += int(float(result.get("quality_score") or 0) < .45)
-                    if result["status"] == "PROVIDER_ERROR":
+                    if failed:
                         errors[job["symbol"]] = result.get("warnings", [])
                     db.commit()
                 except Exception as exc:

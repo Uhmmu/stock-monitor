@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
-from app.services.options.analytics import compute_options_analytics
+from app.services.options.analytics import compute_options_analytics, enrich_options_history
 from app.services.options.provider import fetch_options_chain
 from app.services.options.universe import (
     MARKET_ETFS,
@@ -108,7 +108,9 @@ def test_analytics_ratios_atm_skew_and_history_status():
     assert row["atm_iv"] == pytest.approx(.21)
     assert row["downside_skew"] == pytest.approx(.19)
     assert row["iv_change"] == pytest.approx(.03)
-    assert row["activity_status"] == "high"
+    assert row["activity_status"] == "INSUFFICIENT_HISTORY"
+    assert row["activity_score"] is None
+    assert row["options_state"]["activity"]["status"] == "INSUFFICIENT_HISTORY"
     assert row["metrics_json"]["skew_method"] == "moneyness_proxy"
 
 
@@ -120,3 +122,79 @@ def test_analytics_missing_liquidity_is_not_zero_filled():
     assert row["call_volume"] is None and row["put_open_interest"] is None
     assert row["status"] == "INSUFFICIENT_LIQUIDITY"
     assert "missing_volume_and_open_interest" in row["warnings"]
+
+
+def test_history_enrichment_uses_observed_points_and_excludes_current():
+    history = [
+        {"trading_date": date(2026, 1, 1) + timedelta(days=index), "atm_iv": .2 + index / 1000, "total_volume": 100 + index, "total_oi": 1000 + index, "put_call_volume_ratio": 1.0, "put_call_oi_ratio": .9, "downside_skew": .1}
+        for index in range(1, 36)
+    ]
+    history.insert(10, {"trading_date": date(2026, 1, 20), "atm_iv": None, "total_volume": None, "total_oi": None})
+    result = enrich_options_history(history)
+    comparison = result["historical_comparison"]
+    assert result["status"] == "READY"
+    assert comparison["changes"]["activity"]["1"] == 1
+    assert comparison["statistics"]["activity"]["20"]["sample_count"] == 20
+    assert comparison["statistics"]["activity"]["60"]["sample_count"] >= 30
+    assert comparison["activity_percentile"] is not None
+    assert comparison["metric_anomalies"]["activity"]["trend"] == "UP"
+
+
+def test_history_enrichment_keeps_short_baseline_na():
+    result = enrich_options_history([
+        {"trading_date": "2026-01-01", "total_volume": 10, "atm_iv": .2},
+        {"trading_date": "2026-01-03", "total_volume": 20, "atm_iv": .3},
+    ])
+    comparison = result["historical_comparison"]
+    assert comparison["status"] == "INSUFFICIENT_HISTORY"
+    assert comparison["activity_percentile"] is None
+    assert comparison["statistics"]["activity"]["20"]["sample_count"] == 1
+
+
+def test_history_anomaly_direction_is_not_one_day_trend():
+    baseline = [
+        {"trading_date": date(2026, 1, 1) + timedelta(days=index), "total_volume": 100 + index}
+        for index in range(20)
+    ]
+    normal = enrich_options_history(baseline, current={"trading_date": "2026-02-01", "total_volume": 120})["historical_comparison"]
+    assert normal["trend"]["activity"] == "UP"
+    assert normal["metric_anomalies"]["activity"]["direction"] == "NONE"
+    high = enrich_options_history(baseline, current={"trading_date": "2026-02-01", "total_volume": 1000})["historical_comparison"]
+    low = enrich_options_history(baseline, current={"trading_date": "2026-02-01", "total_volume": 1})["historical_comparison"]
+    assert high["metric_anomalies"]["activity"]["direction"] == "UP"
+    assert low["metric_anomalies"]["activity"]["direction"] == "DOWN"
+
+
+def test_iv_estimate_excludes_stale_wide_and_inactive_contracts():
+    payload = {
+        "symbol": "SPY", "underlying_price": 100, "fetched_at": "2099-08-14T12:00:00+00:00",
+        "expirations": [{
+            "expiration": "2099-08-20",
+            "calls": [
+                {"strike": 100, "bid": 1, "ask": 2, "volume": 100, "openInterest": 100, "impliedVolatility": 4},
+                {"strike": 101, "bid": 1, "ask": 1.1, "volume": 0, "openInterest": 0, "impliedVolatility": .8, "lastTradeDate": "2099-07-01"},
+                {"strike": 99, "volume": 0, "openInterest": 0, "impliedVolatility": .7},
+                {"strike": 100, "bid": .95, "ask": 1.05, "volume": 10, "openInterest": 50, "impliedVolatility": .25, "lastTradeDate": "2099-08-14"},
+            ],
+            "puts": [],
+        }],
+    }
+    result = compute_options_analytics(payload)
+    assert result["call_atm_iv"] == pytest.approx(.25)
+    assert result["iv_quality"]["sample_size"] == 1
+
+
+def test_bias_term_structure_and_positioning_use_explicit_labels():
+    payload = {
+        "symbol": "SPY", "underlying_price": 100, "fetched_at": "2099-08-14T12:00:00+00:00",
+        "expirations": [
+            {"expiration": "2099-08-20", "days_to_expiration": 6, "calls": [{"strike": 100, "volume": 100, "openInterest": 1000, "impliedVolatility": .2}], "puts": [{"strike": 100, "volume": 10, "openInterest": 100, "impliedVolatility": .22}]},
+            {"expiration": "2099-09-17", "days_to_expiration": 34, "calls": [{"strike": 100, "volume": 10, "openInterest": 200, "impliedVolatility": .3}], "puts": [{"strike": 100, "volume": 5, "openInterest": 20, "impliedVolatility": .32}]},
+        ],
+    }
+    result = compute_options_analytics(payload)
+    assert result["options_bias"] in {"CALL_HEAVY", "SLIGHT_CALL_HEAVY", "BALANCED", "SLIGHT_PUT_HEAVY", "PUT_HEAVY", "MIXED"}
+    assert result["term_structure_status"] == "NORMAL"
+    positioning = result["options_state"]["positioning"]["raw_metrics"]
+    assert positioning["call_oi"] == 1000 and positioning["put_oi"] == 100
+    assert positioning["largest_oi_strikes"][0]["strike"] == 100.0

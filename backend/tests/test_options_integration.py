@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 import importlib.util
 from pathlib import Path
 import sys
+from zoneinfo import ZoneInfo
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
@@ -48,11 +49,16 @@ def test_overview_detail_and_semantic_tool_share_persisted_aggregate():
     overview = overview_payload(db)
     assert overview["market"][0]["symbol"] == "SPY"
     assert overview["sectors"][0]["primary"]["symbol"] == "XLK"
-    assert overview["rankings"]["activity"][0]["symbol"] == "NVDA"
+    assert overview["rankings"]["activity"] == []
     detail = symbol_payload(db, "NVDA")
     assert {row["option_type"] for row in detail["chain"]} == {"call", "put"}
     semantic = semantic_options_context(db, symbol="NVDA")
     assert "chain" not in semantic and semantic["quality"]["level"] == "HIGH"
+    assert set((semantic["options_state"] or {})) == {"activity", "bias", "risk_pricing", "positioning", "historical_regime"}
+    assert semantic["activity_score"] is None
+    assert semantic["options_state"]["bias"]["status"] != "INSUFFICIENT_DATA"
+    assert semantic["options_state"]["positioning"]["status"] != "INSUFFICIENT_DATA"
+    assert {"most_active", "highest_iv", "largest_oi_change"} <= set(overview["rankings"])
     assert options_overview(ranking="activity", db=db, user=None)["market"][0]["symbol"] == "SPY"
     assert options_symbol("NVDA", db=db, user=None)["selected_expiration"] is not None
     assert options_history("NVDA", days=365, db=db, user=None)["count"] == 1
@@ -127,3 +133,25 @@ def test_sync_options_isolates_per_symbol_failures(monkeypatch):
     with factory() as verify:
         run = verify.get(OptionsSyncRun, result["run_id"])
         assert run.error_summary_json == {"BAD": ["RuntimeError"]}
+
+
+def test_same_day_options_failure_preserves_good_snapshot(monkeypatch):
+    db = _db()
+    today = datetime.now(ZoneInfo(tasks.settings.market_timezone)).date()
+    now = datetime.now(UTC)
+    db.add(OptionsSnapshot(
+        symbol="NVDA", trading_date=today, asset_type="watchlist_stock", status="OK", provider="yfinance",
+        underlying_price=100, active_contracts=2, call_volume=10, put_volume=5,
+        call_open_interest=20, put_open_interest=10, atm_iv=.3, activity_score=50,
+        activity_status="NORMAL", quality_score=.8, coverage=.9, sample_size=2,
+        warnings=[], metrics_json={"total_volume": 15, "total_oi": 30}, fetched_at=now,
+    ))
+    db.commit()
+    monkeypatch.setattr(tasks, "fetch_options_chain", lambda *_args, **_kwargs: {"symbol": "NVDA", "status": "NO_OPTIONS", "fetched_at": now.isoformat(), "warnings": ["no_future_expiration"]})
+    values, received, filtered = tasks._persist_options_symbol(db, {"symbol": "NVDA", "provider_symbol": "NVDA", "asset_type": "watchlist_stock", "sector_node_id": None, "security_id": None})
+    row = db.query(OptionsSnapshot).filter(OptionsSnapshot.symbol == "NVDA", OptionsSnapshot.trading_date == today).one()
+    assert values["status"] == "NO_OPTIONS"
+    assert values["preserved_existing"] is True
+    assert received == filtered == 0
+    assert row.status == "OK" and row.atm_iv == .3
+    assert "refresh_failed:NO_OPTIONS" in row.warnings
