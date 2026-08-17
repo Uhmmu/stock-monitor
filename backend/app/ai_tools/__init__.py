@@ -3,6 +3,7 @@ from app.config import get_settings
 from .adapters.external_search import build_external_search_adapters
 from .adapters.realtime_market import build_realtime_market_adapters
 from .adapters.options import build_options_adapters
+from .adapters.mood import build_mood_adapters
 from .catalog import build_adapters
 from .registry import tool_registry
 from app.ai_memory.tools import build_memory_adapters
@@ -17,6 +18,7 @@ def register_builtin_tools() -> None:
         *build_external_search_adapters(disabled),
         *build_realtime_market_adapters(disabled),
         *build_options_adapters(disabled),
+        *build_mood_adapters(disabled),
     ]:
         tool_registry.register(adapter)
 

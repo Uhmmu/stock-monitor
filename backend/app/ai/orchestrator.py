@@ -61,6 +61,9 @@ TOOL_DISPLAY_NAMES = {
     "get_decisions_for_symbol": "正在读取该股票的决策",
     "get_options_overview": "正在读取期权市场摘要",
     "get_symbol_options_summary": "正在读取该标的期权指标",
+    "get_mood_overview": "正在读取市场与板块情绪状态",
+    "get_mood_history": "正在读取情绪状态迁移与分歧历史",
+    "get_mood_validation": "正在读取 Mood 历史验证与校准结果",
 }
 logger = logging.getLogger(__name__)
 

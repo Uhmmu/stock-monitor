@@ -75,7 +75,7 @@ export function MessageComposer({ value, onChange, onSend, onStop, generating, s
       if (value.trim() && value.length <= MAX_CHARS && !generating && !disabled) onSend()
     }
   }
-  const contextLabel: Record<string, string> = { company: '公司页', portfolio: '持仓', valuation: '估值页', technical: '技术页', news: '新闻页', calendar: '日历' }
+  const contextLabel: Record<string, string> = { company: '公司页', portfolio: '持仓', valuation: '估值页', technical: '技术页', news: '新闻页', calendar: '日历', mood: '情绪台' }
   const groups = useMemo(() => groupModels(models), [models])
   const currentModel = models.find(option => option.id === model)
   return <div className="ai-composer-shell">

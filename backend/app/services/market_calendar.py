@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
@@ -27,6 +27,13 @@ def expected_latest_market_session(moment: datetime | None = None):
     now = pd.Timestamp((moment or datetime.now(UTC)).astimezone(UTC))
     position = _calendar.schedule["close"].searchsorted(now, side="right") - 1
     return _calendar.schedule.index[position].date() if position >= 0 else None
+
+
+def market_sessions(start: date, end: date) -> list[date]:
+    """XNYS sessions in a closed date range."""
+    if start > end:
+        return []
+    return [value.date() for value in _calendar.schedule.loc[str(start):str(end)].index]
 
 
 def market_data_collection_status(moment: datetime | None = None) -> dict:

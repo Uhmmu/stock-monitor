@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     translation_max_attempts: int = 3
     market_timezone: str = "America/New_York"
     price_poll_minutes: int = 5
+    mood_eod_start_hour: int = 18
+    mood_eod_finalize_hour: int = 23
     price_snapshot_provider_order: str = "alpaca,tiingo,finnhub,yfinance"
     price_snapshot_stale_seconds: int = 900
     # Industry/Sector Pulse is an independent, low-frequency daily pipeline.

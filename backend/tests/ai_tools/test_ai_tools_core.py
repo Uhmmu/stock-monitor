@@ -54,8 +54,8 @@ def context(**updates):
 
 def test_builtin_registry_is_explicit_complete_and_serializable():
     definitions=tool_registry.list(enabled_only=False)
-    assert len(definitions)==81
-    assert len({item.name for item in definitions})==81
+    assert len(definitions)==84
+    assert len({item.name for item in definitions})==84
     assert all(item.read_only and item.version=="1.0.0" for item in definitions)
     assert all(item.input_schema.get("additionalProperties") is False for item in definitions)
     assert all(item.output_schema and item.output_schema.get("title")=="ToolExecutionResult" for item in definitions)

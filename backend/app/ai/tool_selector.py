@@ -26,6 +26,7 @@ DOMAIN_RULES = {
     "discovery": ("机会发现", "候选股", "资金流", "discovery", "candidate", "flow"),
     "market": ("价格", "股价", "涨跌", "price", "market"),
     "options": ("期权", "隐含波动率", "put/call", "put call", "skew", "options", "option activity", "iv rank"),
+    "mood": ("情绪台", "市场情绪", "板块状态", "状态迁移", "拥挤", "分歧", "扩散", "验证", "校准", "持续多久", "反转", "mood", "regime", "divergence", "crowded", "calibration"),
     "company": ("公司", "业务", "概况", "company", "profile"),
     "memory": (
         "记忆",
@@ -55,6 +56,7 @@ PREFERRED = {
     "discovery": ["get_discovery_runs", "get_discovery_run", "get_discovery_candidates"],
     "market": ["get_realtime_quote", "get_intraday_summary", "get_intraday_bars", "get_latest_price", "get_price_history", "get_market_context"],
     "options": ["get_options_overview", "get_symbol_options_summary"],
+    "mood": ["get_mood_overview", "get_mood_history", "get_mood_validation"],
     "company": ["get_company_snapshot", "get_company_profile", "get_company_peers"],
     "memory": [
         "get_relevant_user_memories",
@@ -116,6 +118,8 @@ class ToolSelector:
             domains.insert(0, "portfolio")
         if page_context in PREFERRED and page_context not in domains:
             domains.append(page_context)
+        if "mood" in domains:
+            domains.insert(0, domains.pop(domains.index("mood")))
         if not domains:
             domains = ["company", "market"]
         for domain in domains:

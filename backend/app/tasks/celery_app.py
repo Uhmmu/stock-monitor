@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from celery import Celery
 from celery.schedules import crontab
 from sqlalchemy import and_, case, delete, func, or_, select
+from sqlalchemy.exc import OperationalError
 
 import hashlib
 import asyncio
@@ -60,7 +61,7 @@ from app.services.financials import quarters_from_yf
 from app.services.sec_edgar import fetch_filings
 from app.services.llm import curate_daily_news, curate_weekly_news, generate_analysis, summarize_news
 from app.services.llm import explain_cross_model
-from app.services.market_calendar import market_data_collection_status, market_status
+from app.services.market_calendar import expected_latest_market_session, market_data_collection_status, market_status
 from app.services.market_data import fetch_earnings_events, fetch_yf_financial_statements, fetch_yf_quarterly
 from app.services.price_snapshots import (
     collect_price_snapshot,
@@ -176,6 +177,14 @@ celery_app.conf.beat_schedule = {
     },
     "sync-options-due": {
         "task": "app.tasks.celery_app.ensure_options_fresh",
+        "schedule": 1800,
+    },
+    "sync-mood-due": {
+        "task": "app.tasks.celery_app.ensure_mood_fresh",
+        "schedule": 1800,
+    },
+    "sync-mood-eod-due": {
+        "task": "app.tasks.celery_app.ensure_mood_daily",
         "schedule": 1800,
     },
 }
@@ -558,6 +567,12 @@ def _save_report(db, key: str, ticker: str, title: str, evidence: str, sources: 
         evidence += "\n\n# 已持久化期权分析（无 provider 实时调用）\n" + json.dumps(options, ensure_ascii=False, default=str)
     except Exception:
         logger.debug("options_report_context_unavailable ticker=%s", ticker, exc_info=True)
+    try:
+        from app.services.mood import latest_mood_payload
+        mood = latest_mood_payload(db, scope_type="watchlist", scope_key=ticker)
+        evidence += "\n\n# 已持久化 AI Mood 状态（确定性引擎，无 provider/LLM 实时调用）\n" + json.dumps(mood, ensure_ascii=False, default=str)
+    except Exception:
+        logger.debug("mood_report_context_unavailable ticker=%s", ticker, exc_info=True)
     content, model = generate_analysis(title, evidence, "important", ReportType.movement.value)
     db.add(Report(idempotency_key=key, ticker=ticker, report_type=ReportType.movement, title=title, content=content, model=model, sources=sources, period_start=start, period_end=end))
 
@@ -2498,3 +2513,101 @@ def ensure_options_fresh(force: bool = False):
         return {"status": "not_due", "run_id": latest.id if latest else None}
     queued = sync_options.delay()
     return {"status": "queued", "task_id": queued.id}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_mood")
+def sync_mood():
+    """Materialize Mood only from stored inputs; no provider or model calls."""
+    from app.services.mood import sync_mood as materialize_mood
+
+    with SessionLocal() as db:
+        if db.get_bind().dialect.name == "postgresql" and not db.scalar(select(func.pg_try_advisory_xact_lock(81730159))):
+            return {"status": "running"}
+        result = materialize_mood(db)
+        db.commit()
+        return result
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_mood_fresh")
+def ensure_mood_fresh(force: bool = False):
+    """Cheap independent due check; late stored inputs converge on the next run."""
+    from app.models import MoodSnapshot
+
+    now = datetime.now(ZoneInfo(settings.market_timezone))
+    if not force and not 10 <= now.hour <= 23:
+        return {"status": "outside_refresh_window"}
+    with SessionLocal() as db:
+        latest = db.scalar(select(func.max(MoodSnapshot.calculated_at)).where(MoodSnapshot.snapshot_type == "INTRADAY"))
+        if not force and latest and latest >= datetime.now(UTC) - timedelta(minutes=45):
+            return {"status": "not_due", "calculated_at": latest.isoformat()}
+    queued = sync_mood.delay()
+    return {"status": "queued", "task_id": queued.id}
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.celery_app.sync_daily_mood",
+    max_retries=2,
+)
+def sync_daily_mood(self, trading_date: str, finalize: bool = False):
+    """Persist one NYSE-session EOD batch from stored inputs only."""
+    from app.services.mood_history import run_daily_mood
+
+    with SessionLocal() as db:
+        try:
+            if db.get_bind().dialect.name == "postgresql" and not db.scalar(select(func.pg_try_advisory_xact_lock(81730160))):
+                return {"status": "RUNNING", "trading_date": trading_date}
+            result = run_daily_mood(db, date.fromisoformat(trading_date), finalize=finalize)
+            db.commit()
+            if result.get("failed_scopes") and self.request.retries < self.max_retries:
+                raise self.retry(countdown=60)
+            return result
+        except OperationalError as exc:
+            db.rollback()
+            raise self.retry(exc=exc, countdown=60)
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_mood_daily")
+def ensure_mood_daily(force: bool = False):
+    """Queue the latest closed NYSE session after the configurable EOD grace."""
+    from app.models import MoodDailyRun
+
+    now = datetime.now(ZoneInfo(settings.market_timezone))
+    trading_date = expected_latest_market_session(now)
+    if trading_date is None:
+        return {"status": "NO_CLOSED_SESSION"}
+    if not force and trading_date == now.date() and now.hour < settings.mood_eod_start_hour:
+        return {"status": "GRACE", "trading_date": trading_date.isoformat()}
+    with SessionLocal() as db:
+        run = db.scalar(select(MoodDailyRun).where(
+            MoodDailyRun.trading_date == trading_date,
+            MoodDailyRun.calculation_version == "mood_v1",
+        ).limit(1))
+        if run is not None and run.status in {"COMPLETED", "PARTIAL", "FAILED"} and not force:
+            return {"status": "NOT_DUE", "trading_date": trading_date.isoformat(), "run_id": run.id}
+        if run is not None and run.status == "RUNNING":
+            return {"status": "RUNNING", "trading_date": trading_date.isoformat(), "run_id": run.id}
+    finalize = force or trading_date < now.date() or now.hour >= settings.mood_eod_finalize_hour
+    queued = sync_daily_mood.delay(trading_date.isoformat(), finalize)
+    return {"status": "QUEUED", "trading_date": trading_date.isoformat(), "finalize": finalize, "task_id": queued.id}
+
+
+@celery_app.task(name="app.tasks.celery_app.run_mood_validation")
+def run_mood_validation(run_id: int):
+    """Execute one offline, append-only Mood research run."""
+    from app.models import MoodValidationRun
+    from app.services.mood_validation import execute_run
+
+    with SessionLocal() as db:
+        try:
+            run = execute_run(db, run_id)
+            db.commit()
+            return {"run_id": run.id, "status": run.status}
+        except Exception as exc:
+            db.rollback()
+            run = db.get(MoodValidationRun, run_id)
+            if run is not None:
+                run.status = "failed"; run.completed_at = datetime.now(UTC); run.error_message = str(exc)[:2000]
+                run.warnings = list(run.warnings or []) + ["VALIDATION_FAILED"]
+                db.commit()
+            return {"run_id": run_id, "status": "failed", "error": str(exc)[:500]}

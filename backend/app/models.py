@@ -2475,6 +2475,157 @@ class OptionsSyncRun(Base):
     error_summary_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class MoodSnapshot(Base):
+    """Deterministic, persisted AI Mood state for one scope and trading day.
+
+    The JSON columns intentionally retain the evidence contract while the
+    scalar columns make the latest state cheap to query and index.  A
+    calculation version is part of the identity so history can be rebuilt
+    without destroying older methodology results.
+    """
+
+    __tablename__ = "mood_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_type", "scope_key", "trading_date", "calculation_version", "snapshot_type",
+            name="uq_mood_snapshots_scope_date_version_type",
+        ),
+        Index("ix_mood_snapshots_scope_date", "scope_type", "scope_key", "trading_date"),
+        Index("ix_mood_snapshots_trading_date", "trading_date"),
+        Index("ix_mood_snapshots_state", "state"),
+        Index("ix_mood_snapshots_input_hash", "input_hash"),
+        CheckConstraint("mood_score IS NULL OR (mood_score >= 0 AND mood_score <= 100)", name="ck_mood_snapshots_score"),
+        CheckConstraint("agreement_score IS NULL OR (agreement_score >= 0 AND agreement_score <= 1)", name="ck_mood_snapshots_agreement"),
+        CheckConstraint("confidence IS NULL OR (confidence >= 0 AND confidence <= 1)", name="ck_mood_snapshots_confidence"),
+        CheckConstraint("quality IS NULL OR (quality >= 0 AND quality <= 1)", name="ck_mood_snapshots_quality"),
+        CheckConstraint("coverage IS NULL OR (coverage >= 0 AND coverage <= 1)", name="ck_mood_snapshots_coverage"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope_type: Mapped[str] = mapped_column(String(24))
+    scope_key: Mapped[str] = mapped_column(String(192))
+    trading_date: Mapped[date] = mapped_column(Date)
+    snapshot_type: Mapped[str] = mapped_column(String(16), default="INTRADAY")
+    state: Mapped[str] = mapped_column(String(32))
+    candidate_state: Mapped[str | None] = mapped_column(String(32))
+    previous_state: Mapped[str | None] = mapped_column(String(32))
+    direction: Mapped[str | None] = mapped_column(String(16))
+    phase: Mapped[str | None] = mapped_column(String(32))
+    regime: Mapped[str | None] = mapped_column(String(32))
+    mood_score: Mapped[float | None] = mapped_column(Float)
+    agreement_score: Mapped[float | None] = mapped_column(Float)
+    agreement_level: Mapped[str | None] = mapped_column(String(16))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    quality: Mapped[float | None] = mapped_column(Float)
+    coverage: Mapped[float | None] = mapped_column(Float)
+    freshness_status: Mapped[str | None] = mapped_column(String(24))
+    state_started_on: Mapped[date | None] = mapped_column(Date)
+    duration_sessions: Mapped[int | None] = mapped_column(Integer)
+    calculation_version: Mapped[str] = mapped_column(String(32), default="mood_v1")
+    input_hash: Mapped[str] = mapped_column(String(64))
+    source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    input_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    signals: Mapped[list] = mapped_column(JSON, default=list)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    divergences: Mapped[list] = mapped_column(JSON, default=list)
+    transition: Mapped[dict] = mapped_column(JSON, default=dict)
+    missing_sources: Mapped[list] = mapped_column(JSON, default=list)
+    stale_sources: Mapped[list] = mapped_column(JSON, default=list)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    input_manifest: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class MoodDailyRun(Base):
+    """Durable daily Mood materialization run and coverage summary."""
+
+    __tablename__ = "mood_daily_runs"
+    __table_args__ = (
+        UniqueConstraint("trading_date", "calculation_version", name="uq_mood_daily_runs_date_version"),
+        Index("ix_mood_daily_runs_trading_date", "trading_date"),
+        Index("ix_mood_daily_runs_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trading_date: Mapped[date] = mapped_column(Date)
+    calculation_version: Mapped[str] = mapped_column(String(32), default="mood_v1")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16), default="PENDING")
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    expected_scopes: Mapped[list] = mapped_column(JSON, default=list)
+    completed_scopes: Mapped[list] = mapped_column(JSON, default=list)
+    insufficient_scopes: Mapped[list] = mapped_column(JSON, default=list)
+    failed_scopes: Mapped[list] = mapped_column(JSON, default=list)
+    readiness: Mapped[dict] = mapped_column(JSON, default=dict)
+    health: Mapped[dict] = mapped_column(JSON, default=dict)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class MoodValidationRun(Base):
+    """Reproducible, append-only validation of persisted Mood history."""
+
+    __tablename__ = "mood_validation_runs"
+    __table_args__ = (
+        Index("ix_mood_validation_runs_created", "created_at"),
+        Index("ix_mood_validation_runs_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    engine_version: Mapped[str] = mapped_column(String(64))
+    calculation_version: Mapped[str] = mapped_column(String(32))
+    validation_version: Mapped[str] = mapped_column(String(64))
+    parameter_set: Mapped[dict] = mapped_column(JSON, default=dict)
+    date_from: Mapped[date] = mapped_column(Date)
+    date_to: Mapped[date] = mapped_column(Date)
+    scope_filter: Mapped[list] = mapped_column(JSON, default=list)
+    benchmark_config: Mapped[dict] = mapped_column(JSON, default=dict)
+    forward_horizons: Mapped[list] = mapped_column(JSON, default=list)
+    data_cutoff: Mapped[date] = mapped_column(Date)
+    coverage: Mapped[dict] = mapped_column(JSON, default=dict)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class MoodValidationResult(Base):
+    """One generic aggregate or drill-down index produced by a validation run."""
+
+    __tablename__ = "mood_validation_results"
+    __table_args__ = (
+        UniqueConstraint("run_id", "result_key", name="uq_mood_validation_results_run_key"),
+        Index("ix_mood_validation_results_run_study", "run_id", "study_type"),
+        Index("ix_mood_validation_results_scope", "run_id", "scope_type", "scope_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("mood_validation_runs.id", ondelete="CASCADE"), index=True)
+    result_key: Mapped[str] = mapped_column(String(64))
+    study_type: Mapped[str] = mapped_column(String(40), index=True)
+    scope_type: Mapped[str | None] = mapped_column(String(24))
+    scope_key: Mapped[str | None] = mapped_column(String(192))
+    state: Mapped[str | None] = mapped_column(String(32))
+    transition_from: Mapped[str | None] = mapped_column(String(32))
+    transition_to: Mapped[str | None] = mapped_column(String(32))
+    divergence_type: Mapped[str | None] = mapped_column(String(32))
+    bucket: Mapped[str | None] = mapped_column(String(32))
+    horizon: Mapped[int | None] = mapped_column(Integer)
+    sample_mode: Mapped[str] = mapped_column(String(24), default="daily")
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    confidence_interval: Mapped[dict] = mapped_column(JSON, default=dict)
+    quality: Mapped[str] = mapped_column(String(24), default="INSUFFICIENT_SAMPLE")
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    event_refs: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 # Register integration-owned tables in the same metadata whenever core models
 # are imported (tests, application runtime, and Alembic must see one graph).
 from app.integrations.ibkr import db_models as _ibkr_db_models  # noqa: E402,F401

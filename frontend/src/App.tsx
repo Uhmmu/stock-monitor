@@ -21,6 +21,8 @@ import { MacroDataSourcePanel, MacroFundamentals } from './MacroFundamentals'
 import { StockCompare } from './StockCompare'
 import { IndustryPulse } from './IndustryPulse'
 import { OptionsPage } from './Options'
+import { AIMoodConsole, MoodReportSection } from './AIMoodConsole'
+import { MoodValidationLab } from './MoodValidationLab'
 import { ThemeToggle } from './ThemeToggle'
 import { providerValuesDiffer } from './financialComparison'
 import { subscribeTheme, getResolvedTheme, type ThemeMode } from './theme'
@@ -201,6 +203,8 @@ function NavIcon({name}:{name:string}) {
     fundamentals:<><path d="m3 17 5-5 4 3 8-9"/><path d="M15 6h5v5"/></>,
     macro:<><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/><path d="M7 8h10M7 16h10"/></>,
     industry:<><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/></>,
+    mood:<><path d="M3 17c3-7 5 2 8-5s5 2 10-5"/><path d="M3 21h18M6 7V3M12 8V4M18 6V2"/></>,
+    'mood-lab':<><path d="M4 20h16M7 20V9l5-5 5 5v11"/><path d="M9 13h6M9 16h6"/><circle cx="12" cy="8" r="1"/></>,
     calendar:<><path d="M6 2v4M18 2v4M3 9h18"/><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 13h2M14 13h2M8 17h2M14 17h2"/></>,
     financials:<><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h3M13 12h3M8 16h3M13 16h3"/></>,
     crossmodel:<><path d="M4 18V7M10 18V4M16 18v-8M22 18H2"/><path d="m5 11 5-3 4 4 6-6"/></>,
@@ -470,16 +474,16 @@ export default function App() {
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const mobileTabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析'],['reports','报告中心'],['journal','交易日志'],['settings','管理设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
+  const mobileTabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['mood','AI 情绪台'],['mood-lab','Mood Lab'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析'],['reports','报告中心'],['journal','交易日志'],['settings','管理设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
   const desktopNavGroups = [
     {title:'概览与资产',items:[['overview','总览'],['watchlist','自选股'],['holdings','持仓']]},
     {title:'研究与决策',items:[['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究']]},
-    {title:'市场情报',items:[['news','新闻中心'],['macro','美国宏观'],['industry','行业板块']]},
+    {title:'市场情报',items:[['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['news','新闻中心'],['macro','美国宏观'],['industry','行业板块']]},
     {title:'公司分析',items:[['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析']]},
     {title:'记录与系统',items:[['reports','报告中心'],['journal','交易日志'],['settings','管理设置']]},
     {title:'IBKR',items:[['ibkr','IBKR'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]},
   ]
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['industry','行业板块检测'],['financials','财务报表'],['crossmodel','估值'],['compare','个股横向对比'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['industry','行业板块检测'],['financials','财务报表'],['crossmodel','估值'],['compare','个股横向对比'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
   const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ibkr-test')window.history.pushState({},'','/admin/integrations/ibkr');else if(key==='ibkr')window.history.pushState({},'','/ibkr');else if(key==='ai'){if(!window.location.pathname.startsWith('/ai'))window.history.pushState({},'', '/ai/new')}else if(key==='decisions')window.history.pushState({},'','/investment-decisions');else if(window.location.pathname.startsWith('/ai')||window.location.pathname.startsWith('/investment-decisions')||window.location.pathname.startsWith('/admin/integrations/ibkr')||window.location.pathname==='/ibkr')window.history.pushState({},'',`/?tab=${key}`)}
   const askAI=(symbol:string)=>{setSelectedProfileSymbol(null);setActiveTicker(symbol);setTab('ai');window.history.pushState({},'',`/ai/new?symbol=${encodeURIComponent(symbol)}&context=company`);window.dispatchEvent(new PopStateEvent('popstate'))}
   const compareStock=(symbol:string)=>{const peer=watchlist.data?.find(item=>item.ticker!==symbol)?.ticker;setSelectedProfileSymbol(null);setTab('compare');window.history.pushState({},'',`/?tab=compare&symbols=${[symbol,peer].filter(Boolean).join(',')}`)}
@@ -520,8 +524,10 @@ export default function App() {
       {tab==='calendar'&&<InvestmentCalendar/>}
       {tab==='discovery'&&<OpportunityDiscovery/>}
       {tab==='options'&&<OptionsPage enabled={!demoMode}/>}
+      {tab==='mood'&&<AIMoodConsole enabled={!demoMode} onAskAI={()=>{setTab('ai');window.history.pushState({},'','/ai/new?context=mood');window.dispatchEvent(new PopStateEvent('popstate'))}}/>}
+      {tab==='mood-lab'&&<MoodValidationLab enabled={!demoMode} isAdmin={authUser.role==='admin'}/>}
       {tab==='alerts'&&<div className="investigations">{groupInvestigations(investigations.data).map(group=><article key={group.key}><div><span className={`status ${group.status}`}>{group.status}</span><h2>{group.ticker} 异动调查{group.items.length>1&&<em className="group-count"> ×{group.items.length}</em>}</h2><p>{formatDate(group.started_at)} — {formatDate(group.ends_at)}</p></div><strong>{group.news_count}<small> 条新闻线索</small></strong>{group.last_error&&<p className="error">{group.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}
-      {tab==='reports'&&<div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span className="report-tag">{typeNames[r.report_type]||r.report_type}{r.confidence&&<><span className="report-tag-sep">|</span><span className={`report-conf conf-${r.confidence==='高'?'high':r.confidence==='中'?'mid':'low'}`}>置信度{r.confidence}</span></>}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div>}
+      {tab==='reports'&&<><MoodReportSection enabled={!demoMode}/><div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span className="report-tag">{typeNames[r.report_type]||r.report_type}{r.confidence&&<><span className="report-tag-sep">|</span><span className={`report-conf conf-${r.confidence==='高'?'high':r.confidence==='中'?'mid':'low'}`}>置信度{r.confidence}</span></>}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div></>}
       {tab==='news'&&<NewsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='fundamentals'&&<FundamentalsCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker} onOpenSec={()=>selectTab('sec')}/>}
       {tab==='macro'&&<MacroFundamentals isAdmin={authUser.role==='admin'}/>}

@@ -10,7 +10,7 @@ from app.external_search.enums import WebAccessMode
 from app.research.exceptions import ResearchError
 from app.research.security import normalize_symbol
 
-PAGE_CONTEXTS = {"portfolio", "company", "news", "valuation", "technical", "calendar", "discovery"}
+PAGE_CONTEXTS = {"portfolio", "company", "news", "valuation", "technical", "calendar", "discovery", "mood"}
 
 
 class StrictModel(BaseModel):
