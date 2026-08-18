@@ -1,0 +1,22 @@
+module StockMonitor
+singleton Theme 1.0 theme/Theme.qml
+singleton Type 1.0 theme/Type.qml
+singleton Space 1.0 theme/Space.qml
+singleton Radius 1.0 theme/Radius.qml
+singleton Elevation 1.0 theme/Elevation.qml
+singleton Motion 1.0 motion/Motion.qml
+AppButton 1.0 controls/AppButton.qml
+AppCard 1.0 controls/AppCard.qml
+AppMenu 1.0 controls/AppMenu.qml
+AppMenuItem 1.0 controls/AppMenuItem.qml
+AppNavButton 1.0 controls/AppNavButton.qml
+AppSheet 1.0 controls/AppSheet.qml
+AppStateView 1.0 controls/AppStateView.qml
+AppSwitch 1.0 controls/AppSwitch.qml
+AppTableRow 1.0 controls/AppTableRow.qml
+AppTextField 1.0 controls/AppTextField.qml
+AppToolTip 1.0 controls/AppToolTip.qml
+GlassSurface 1.0 controls/GlassSurface.qml
+AppSegmentedControl 1.0 controls/AppSegmentedControl.qml
+AppSearchField 1.0 controls/AppSearchField.qml
+WindowChrome 1.0 controls/WindowChrome.qml

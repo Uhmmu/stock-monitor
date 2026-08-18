@@ -41,6 +41,8 @@ Stock Monitor 把行情、自选股、新闻、SEC 披露、基本面、估值�
 | 网关 | nginx、Caddy |
 | 部署 | Docker Compose |
 
+原生桌面客户端 Phase 1 位于 `desktop/`，使用 Qt Quick、C++20 和现有 FastAPI API；它不嵌入 WebView，也不复制服务端业务逻辑。
+
 ## 架构
 
 ```mermaid
@@ -182,6 +184,28 @@ npm test
 npm run build
 ```
 
+原生 Qt 桌面端（Qt 6.8+、CMake、Ninja）：
+
+```bash
+cmake -S desktop -B desktop/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build desktop/build
+ctest --test-dir desktop/build --output-on-failure
+cmake --install desktop/build --prefix "$HOME/.local"
+QT_QPA_PLATFORM=wayland desktop/build/stock-monitor-desktop
+```
+
+默认开发地址为 `http://127.0.0.1:8080`，可在登录页切换为 HTTPS 生产地址；非本机 HTTP 地址会被拒绝。Phase 1 令牌只保存在进程内存，关闭应用后需要重新登录。
+
+Phase 2 的原生设计系统 Playground 可直接运行，主题、对比度、减少动态和减少透明度设置会保存到本机：
+
+```bash
+stock-monitor-desktop --playground
+stock-monitor-desktop --showcase
+stock-monitor-desktop --showcase --custom-chrome # experimental; native decoration remains the default
+stock-monitor-desktop --showcase --frame-benchmark
+sh desktop/tests/visual/capture.sh desktop/build/stock-monitor-desktop desktop/build/visual-output
+```
+
 ## 项目结构
 
 ```text
@@ -197,6 +221,7 @@ stock-monitor/
 ├── frontend/                    # 桌面 React 应用
 ├── frontend-ios/                # iPhone PWA
 ├── packages/shared/             # 两端共享 API、类型与格式化
+├── desktop/                     # 原生 Qt Quick 桌面客户端
 ├── finnhub-mcp/                 # Finnhub MCP sidecar
 ├── docs/                        # 架构与集成文档
 ├── compose.yaml                 # 生产服务拓扑

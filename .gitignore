@@ -1,6 +1,7 @@
 node_modules/
 __pycache__/
 dist/
+desktop/build/
 .venv/
 venv/
 *.pyc
