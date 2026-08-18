@@ -130,6 +130,23 @@
 .ai-mood-card-heading { align-items: flex-start; }
 .ai-mood-card-heading > div { min-width: 0; }
 
+.ai-mood-market-hero { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr) minmax(190px, 0.34fr); }
+.ai-mood-market-primary { min-width: 0; }
+.ai-mood-market-summary { color: var(--ink-3, #6d7481); line-height: 1.55; margin: 14px 0 18px; max-width: 680px; }
+.ai-mood-score-lockup { align-items: center; display: flex; gap: 12px; }
+.ai-mood-score-lockup strong { font-size: clamp(2.4rem, 7vw, 4.5rem); font-variant-numeric: tabular-nums; letter-spacing: -0.07em; line-height: 0.9; }
+.ai-mood-score-lockup span { color: var(--ink-3, #6d7481); font-size: 0.72rem; line-height: 1.45; }
+.ai-mood-vix { align-content: center; background: color-mix(in srgb, var(--warn, #c9892d) 9%, var(--solid, #fff)); border: 1px solid color-mix(in srgb, var(--warn, #c9892d) 24%, var(--line, #e3e6eb)); border-radius: 14px; display: grid; gap: 7px; padding: 16px; }
+.ai-mood-vix > span,
+.ai-mood-vix small { color: var(--ink-4, #949aa5); font-size: 0.7rem; }
+.ai-mood-vix > div { align-items: baseline; display: flex; gap: 9px; }
+.ai-mood-vix strong { font-size: clamp(1.8rem, 4vw, 2.7rem); font-variant-numeric: tabular-nums; letter-spacing: -0.055em; }
+.ai-mood-vix em { font-size: 0.74rem; font-style: normal; font-weight: 750; }
+.ai-mood-vix em.positive { color: var(--up, #1d9b67); }
+.ai-mood-vix em.negative { color: var(--down, #d25454); }
+.ai-mood-vix em.neutral { color: var(--ink-3, #6d7481); }
+.ai-mood-vix b { font-size: 0.8rem; }
+
 .ai-mood-pill {
   align-items: center;
   border-radius: 999px;
@@ -157,6 +174,7 @@
 }
 
 .ai-mood-report-highlights { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.ai-mood-window-metrics { border-top: 1px solid var(--line, #e3e6eb); display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 20px 0 0; padding-top: 16px; }
 .ai-mood-metric { min-width: 0; }
 .ai-mood-metric dt { color: var(--ink-4, #949aa5); font-size: 0.72rem; margin-bottom: 4px; }
 .ai-mood-metric dd { font-size: 1rem; font-weight: 750; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -176,6 +194,10 @@
 .ai-mood-signal strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-mood-signal span { color: var(--ink-4, #949aa5); font-size: 0.67rem; }
 .ai-mood-signal strong { font-size: 0.83rem; margin-top: 4px; }
+
+.ai-mood-participation { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.ai-mood-participation span { background: color-mix(in srgb, var(--line, #e3e6eb) 52%, transparent); border-radius: 999px; color: var(--ink-3, #6d7481); font-size: 0.7rem; padding: 6px 9px; }
+.ai-mood-participation b { color: var(--ink, #10131a); }
 
 .ai-mood-board-controls { align-items: center; flex-wrap: wrap; }
 .ai-mood-tabs { background: color-mix(in srgb, var(--line, #e3e6eb) 56%, transparent); border-radius: 10px; display: inline-flex; padding: 3px; }
@@ -313,7 +335,9 @@
   .ai-mood-head-actions,
   .ai-mood-filter-row { justify-content: space-between; }
   .ai-mood-metric-grid,
+  .ai-mood-window-metrics,
   .ai-mood-detail-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ai-mood-market-hero { grid-template-columns: 1fr; }
   .ai-mood-board-grid,
   .ai-mood-analysis-grid,
   .ai-mood-evidence-groups,
@@ -333,6 +357,8 @@
   .ai-mood-detail-content { border-radius: 12px; padding: 14px; }
   .ai-mood-head-actions { align-items: stretch; flex-direction: column; }
   .ai-mood-head-actions label { justify-content: space-between; }
+  .ai-mood-vix { grid-template-columns: 1fr auto; }
+  .ai-mood-vix > div { grid-column: 1 / -1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -343,11 +369,13 @@
 @media (prefers-reduced-transparency: reduce) {
   .ai-mood-console,
   .ai-mood-report-content { --ai-mood-card: var(--solid, #fff); }
+  .ai-mood-vix { background: var(--solid, #fff); }
 }
 
 @media (forced-colors: active) {
   .ai-mood-pill,
   .ai-mood-tabs,
+  .ai-mood-vix,
   .ai-mood-row-card,
   .ai-mood-state { border: 1px solid CanvasText; }
   .ai-mood-chart-line,

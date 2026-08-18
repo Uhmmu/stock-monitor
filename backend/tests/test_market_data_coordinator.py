@@ -61,6 +61,8 @@ def test_global_universe_deduplicates_by_current_provider_symbol_and_promotes_pr
         assert len(aaa) == 1
         assert aaa[0].priority == "P0"
         assert {"industry_seed", "ai_theme", "watchlist", "portfolio"} <= aaa[0].reasons
+        vix = next(row for row in rows if row.symbol == "^VIX")
+        assert vix.priority == "P0" and vix.reasons == {"volatility_benchmark"}
 
 
 def test_freshness_guard_skips_second_fetch_and_persists_adjusted_close():

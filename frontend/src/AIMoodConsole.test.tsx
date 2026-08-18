@@ -43,9 +43,12 @@ describe('AIMoodConsole normalization', () => {
     const normalized = normalizeOverview({
       sectors: [{ scope_type: 'sector', scope_key: 'a', name: 'A' }],
       industries: [{ scope_type: 'industry', scope_key: 'b', name: 'B' }],
+      market_window: { vix: { value: 18.4, change_percent: -3.2, regime: 'NORMAL', as_of: '2026-08-17' }, participation: { improving: 7, deteriorating: 3, tracked: 10 } },
     })
     expect(normalized.industries).toHaveLength(1)
     expect(normalized.sectors.map(item => item.scope_key)).toEqual(['a', 'b'])
+    expect(normalized.market_window.vix.value).toBe(18.4)
+    expect(normalized.market_window.participation.improving).toBe(7)
   })
 
   it('normalizes grouped snapshot and object divergence evidence', () => {
@@ -97,6 +100,18 @@ describe('AIMoodConsole static states and history', () => {
     expect(stale).toContain('数据待更新')
     expect(stale).toContain('12%')
     expect(board).toContain('一个非常长但不应破坏布局的行业板块名称')
+  })
+
+  it('renders one market overview window with VIX and participation', () => {
+    const overview = normalizeOverview({
+      market: { ...row({ scope_type: 'market', scope_key: 'US', name_zh: '美国市场', state: 'risk_on' }), evidence: { category_scores: { breadth: 66, options: 48, news: 57 } } },
+      market_window: { coverage: 0.82, category_scores: { breadth: 66, options: 48, news: 57 }, vix: { value: 18.4, change_percent: -3.2, regime: 'NORMAL', as_of: '2026-08-17' }, participation: { improving: 7, deteriorating: 3, tracked: 10 }, active_divergences: 2 },
+    })
+    const markup = renderToStaticMarkup(<MarketMoodCard row={overview.market} />)
+    expect(markup).toContain('VIX 恐慌指数')
+    expect(markup).toContain('18.4')
+    expect(markup).toContain('7</b> 行业改善')
+    expect(markup).toContain('市场广度')
   })
 
   it('renders explicit empty and insufficient-history states', () => {

@@ -79,6 +79,7 @@ def collect_market_data_universe(db: Session) -> list[MarketDataTarget]:
             add(symbol, "P0", "focus_hot", mapping.security_id)
     for symbol in ETF_SYMBOLS:
         add(symbol, "P0" if symbol in {"SPY", "QQQ", "DIA"} else "P1", "benchmark" if symbol in {"SPY", "QQQ", "DIA"} else "etf_registry")
+    add("^VIX", "P0", "volatility_benchmark")
     for row in db.scalars(select(WatchlistItem).where(WatchlistItem.enabled.is_(True))).all():
         security = securities.get(row.security_id)
         add(security.yahoo_symbol if security and security.yahoo_symbol else row.ticker, "P0", "watchlist", row.security_id)

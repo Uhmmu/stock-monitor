@@ -1349,6 +1349,28 @@ def mood_history_payload(db: Session, scope_type: str, scope_key: str, days: int
     return {"scope_type": scope_type, "scope_key": scope_key, "as_of": rows[-1].trading_date if rows else None, "status": "ready" if rows else "unavailable", "calculation_version": CALCULATION_VERSION, "item": latest, "history": [_snapshot_out(row, db) for row in rows]}
 
 
+def _vix_payload(db: Session, as_of: date | None) -> dict[str, Any]:
+    query = select(HistoricalPrice).where(HistoricalPrice.symbol == "^VIX")
+    if as_of:
+        query = query.where(HistoricalPrice.date <= as_of)
+    rows = list(db.scalars(query.order_by(HistoricalPrice.date.desc()).limit(2)).all())
+    if not rows:
+        return {"value": None, "change_percent": None, "as_of": None, "status": "UNAVAILABLE", "regime": None}
+    value = _num(rows[0].adjusted_close if rows[0].adjusted_close is not None else rows[0].close)
+    previous = _num(rows[1].adjusted_close if len(rows) > 1 and rows[1].adjusted_close is not None else rows[1].close) if len(rows) > 1 else None
+    change_percent = (value / previous - 1) * 100 if value is not None and previous and previous > 0 else None
+    status = _freshness(as_of or rows[0].date, rows[0].date)[1]
+    regime = "LOW" if value is not None and value < 15 else "NORMAL" if value is not None and value < 20 else "ELEVATED" if value is not None and value < 30 else "HIGH" if value is not None else None
+    return _safe({
+        "value": round(value, 2) if value is not None else None,
+        "change_percent": round(change_percent, 2) if change_percent is not None else None,
+        "previous_close": previous,
+        "as_of": rows[0].date,
+        "status": status,
+        "regime": regime,
+    })
+
+
 def mood_report_payload(db: Session) -> dict[str, Any]:
     rows = _latest_rows(db)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1393,12 +1415,28 @@ def mood_report_payload(db: Session) -> dict[str, Any]:
         "limitations": limitations,
         "sections": report_sections,
     }
+    category_scores = market.get("evidence", {}).get("category_scores", {}) if market else {}
+    market_window = {
+        "state": market.get("state") if market else None,
+        "score": market.get("mood_score") if market else None,
+        "confidence": market.get("confidence") if market else None,
+        "coverage": market.get("coverage") if market else None,
+        "category_scores": category_scores,
+        "vix": _vix_payload(db, as_of),
+        "participation": {
+            "improving": sum(item.get("direction") == "up" for item in sectors),
+            "deteriorating": sum(item.get("direction") == "down" for item in sectors),
+            "tracked": len(sectors),
+        },
+        "active_divergences": sum(bool(item.get("active")) for item in divergences),
+    }
     return {
         "as_of": as_of, "status": status, "calculation_version": CALCULATION_VERSION,
         "market": market, "sectors": sectors, "industries": industries, "ai_chain": ai_chain, "watchlist": watchlist,
         "movers": movers, "divergences": divergences, "transitions": transitions, "limitations": limitations,
         "report": report,
         "report_sections": report_sections,
+        "market_window": market_window,
     }
 
 

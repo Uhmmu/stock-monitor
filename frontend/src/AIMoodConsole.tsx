@@ -93,6 +93,23 @@ export type MoodReport = {
   raw: JsonRecord
 }
 
+export type MarketWindow = {
+  state: string | null
+  score: number | string | null
+  confidence: number | string | null
+  coverage: number | string | null
+  category_scores: JsonRecord
+  vix: {
+    value: number | string | null
+    change_percent: number | string | null
+    as_of: string | null
+    status: string | null
+    regime: string | null
+  }
+  participation: { improving: number; deteriorating: number; tracked: number }
+  active_divergences: number
+}
+
 export type MoodOverview = {
   status: string | null
   as_of: string | null
@@ -106,6 +123,7 @@ export type MoodOverview = {
   divergences: unknown[]
   transitions: unknown[]
   report: MoodReport
+  market_window: MarketWindow
   limitations: string[]
   raw: JsonRecord
 }
@@ -373,8 +391,29 @@ export function normalizeMoodReport(value: unknown): MoodReport {
   }
 }
 
+const normalizeMarketWindow = (value: unknown): MarketWindow => {
+  const window = asRecord(value)
+  const vix = asRecord(window.vix)
+  const participation = asRecord(window.participation)
+  return {
+    state: firstText(window.state), score: firstNumber(window.score), confidence: firstNumber(window.confidence),
+    coverage: firstNumber(window.coverage), category_scores: asRecord(window.category_scores),
+    vix: {
+      value: firstNumber(vix.value), change_percent: firstNumber(vix.change_percent),
+      as_of: firstText(vix.as_of), status: firstText(vix.status), regime: firstText(vix.regime),
+    },
+    participation: {
+      improving: asNumber(participation.improving) || 0,
+      deteriorating: asNumber(participation.deteriorating) || 0,
+      tracked: asNumber(participation.tracked) || 0,
+    },
+    active_divergences: asNumber(window.active_divergences) || 0,
+  }
+}
+
 export function normalizeOverview(value: unknown): MoodOverview {
   const raw = asRecord(value)
+  const marketValue = first(raw.market, raw.market_mood)
   const rows = (...keys: string[]) => keys.flatMap(key => asArray(raw[key])).map(normalizeMoodRow)
   const moversRaw = asRecord(raw.movers)
   const movers = Object.fromEntries(Object.entries(moversRaw).map(([key, items]) => [key, asArray(items)])) as Record<string, unknown[]>
@@ -383,7 +422,7 @@ export function normalizeOverview(value: unknown): MoodOverview {
     status: firstText(raw.status),
     as_of: firstText(raw.as_of, raw.asOf, raw.calculated_at),
     calculation_version: firstText(raw.calculation_version, raw.calculationVersion, raw.version),
-    market: first(raw.market, raw.market_mood) ? normalizeMoodRow(first(raw.market, raw.market_mood)) : null,
+    market: marketValue ? normalizeMoodRow({ ...asRecord(marketValue), market_window: raw.market_window }) : null,
     sectors: [...rows('sectors'), ...rows('industries')],
     industries: rows('industries'),
     ai_chain: rows('ai_chain', 'aiChain'),
@@ -392,6 +431,7 @@ export function normalizeOverview(value: unknown): MoodOverview {
     divergences: [...normalizeObjectList(raw.divergences), ...moverDivergences],
     transitions: [...normalizeObjectList(raw.transitions), ...moverDivergences],
     report: normalizeMoodReport(raw.report),
+    market_window: normalizeMarketWindow(raw.market_window),
     limitations: [...asStringList(raw.limitations), ...normalizeMoodReport(raw.report).limitations],
     raw,
   }
@@ -529,17 +569,18 @@ function OverviewMetric({ label, value, detail }: { label: string; value: string
   return <div className="ai-mood-metric"><dt>{label}</dt><dd>{value}</dd>{detail && <small>{detail}</small>}</div>
 }
 
-export function MarketMoodCard({ row }: { row: MoodRow | null }) {
+const VIX_LABELS: Record<string, string> = { low: '低波动', normal: '常态', elevated: '偏高', high: '高压' }
+
+export function MarketMoodCard({ row, window }: { row: MoodRow | null; window?: MarketWindow }) {
   if (!row) return <article className="ai-mood-market-card ai-mood-muted-card"><p className="ai-mood-eyebrow">MARKET MOOD</p><h2>市场状态暂缺</h2><p>当前范围没有足够来源形成确定结论。</p></article>
+  window ||= normalizeMarketWindow(row.raw.market_window)
+  const vixRegime = window?.vix.regime ? VIX_LABELS[window.vix.regime.toLowerCase()] || window.vix.regime : '数据不足'
+  const vixChange = asNumber(window?.vix.change_percent)
+  const categories = window?.category_scores || {}
   return <article className="ai-mood-market-card">
-    <div className="ai-mood-card-heading"><div><p className="ai-mood-eyebrow">MARKET MOOD</p><h2>{row.name_zh || row.name}</h2><p>{row.regime || row.phase || '状态快照'}</p></div><DataStatus row={row} /></div>
-    <dl className="ai-mood-metric-grid">
-      <OverviewMetric label="情绪分数" value={formatMoodValue(row.mood_score)} />
-      <OverviewMetric label="置信度" value={formatPercentValue(row.confidence)} />
-      <OverviewMetric label="共识" value={row.agreement_level || formatPercentValue(row.agreement_score)} />
-      <OverviewMetric label="阶段" value={row.phase ? stateLabel(row.phase) : '数据不足'} detail={row.direction ? directionLabel(row.direction) : null} />
-    </dl>
-    <SignalStrip row={row} />
+    <div className="ai-mood-market-hero"><div className="ai-mood-market-primary"><div className="ai-mood-card-heading"><div><p className="ai-mood-eyebrow">MARKET OVERVIEW</p><h2>美股市场总览</h2></div><DataStatus row={row} /></div><p className="ai-mood-market-summary">市场处于「{stateLabel(row.state)}」，VIX 为{vixRegime}；{window?.participation.tracked ? `${window.participation.improving} 个行业改善、${window.participation.deteriorating} 个走弱。` : '行业参与度暂不足。'}</p><div className="ai-mood-score-lockup"><strong>{formatMoodValue(row.mood_score)}</strong><span>情绪分数<br />置信 {formatPercentValue(row.confidence)}</span></div></div><div className="ai-mood-vix"><span>VIX 恐慌指数</span><div><strong>{formatMoodValue(window?.vix.value)}</strong>{vixChange != null && <em className={vixChange > 0 ? 'negative' : vixChange < 0 ? 'positive' : 'neutral'}>{vixChange > 0 ? '+' : ''}{vixChange.toFixed(1)}%</em>}</div><b>{vixRegime}</b><small>{window?.vix.as_of ? `截至 ${window.vix.as_of}` : '更新时间暂缺'}</small></div></div>
+    <dl className="ai-mood-window-metrics"><OverviewMetric label="市场广度" value={formatMoodValue(firstNumber(categories.breadth))} /><OverviewMetric label="期权定价" value={formatMoodValue(firstNumber(categories.options))} /><OverviewMetric label="新闻情绪" value={formatMoodValue(firstNumber(categories.news))} /><OverviewMetric label="数据覆盖" value={formatPercentValue(window?.coverage ?? row.coverage)} /></dl>
+    <div className="ai-mood-participation"><span><b>{window?.participation.improving || 0}</b> 行业改善</span><span><b>{window?.participation.deteriorating || 0}</b> 行业走弱</span><span><b>{window?.active_divergences || 0}</b> 个有效分歧</span><span><b>{row.agreement_level || formatPercentValue(row.agreement_score)}</b> 市场共识</span></div>
   </article>
 }
 

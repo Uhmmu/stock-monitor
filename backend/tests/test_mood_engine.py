@@ -178,13 +178,15 @@ def test_news_dedup_prefers_quality_and_fingerprint_chain():
 
 
 def test_sync_persists_versioned_snapshot_and_payload_shapes(db):
-    db.add_all(_bars("SPY")); db.add(WatchlistItem(ticker="SPY", enabled=True)); db.commit()
+    db.add_all(_bars("SPY")); db.add_all(_bars("^VIX", count=2, start=date(2025, 10, 6), slope=2)); db.add(WatchlistItem(ticker="SPY", enabled=True)); db.commit()
     result = sync_mood(db, as_of=date(2025, 10, 7), scopes={"market", "watchlist"})
     assert result["created"] == 2
     row = db.query(MoodSnapshot).filter_by(scope_type="market", scope_key="US").one()
     assert row.input_manifest["evidence_type"] == "DIRECT"
     report = mood_report_payload(db)
-    assert {"market", "sectors", "industries", "ai_chain", "watchlist", "movers", "divergences", "transitions", "report"} <= set(report)
+    assert {"market", "sectors", "industries", "ai_chain", "watchlist", "movers", "divergences", "transitions", "report", "market_window"} <= set(report)
+    assert report["market_window"]["vix"]["value"] == pytest.approx(102)
+    assert report["market_window"]["vix"]["regime"] == "HIGH"
     history = mood_history_payload(db, "market", "US", days=20)
     assert history["item"]["scope_key"] == "US"
 
