@@ -8,6 +8,7 @@ ApplicationWindow {
     id: window
     required property var environment
     required property var session
+    required property var dashboard
     width: 1120
     height: 720
     minimumWidth: 760
@@ -32,6 +33,7 @@ ApplicationWindow {
         id: shellComponent
         AppShell {
             session: window.session
+            dashboard: window.dashboard
         }
     }
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QObject>
 
 #include "app/TokenVault.h"
@@ -40,6 +41,7 @@ public:
     QString error() const { return m_error; }
     QString username() const { return m_username; }
     QString role() const { return m_role; }
+    QByteArray accessToken() const { return m_accessToken.toUtf8(); }
 
     Q_INVOKABLE void testConnection();
     Q_INVOKABLE void login(const QString &username, const QString &password, bool remember);

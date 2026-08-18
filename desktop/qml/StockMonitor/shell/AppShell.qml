@@ -7,6 +7,7 @@ import QtQuick.Layouts
 Item {
     id: shell
     required property var session
+    required property var dashboard
 
     Rectangle {
         id: backdrop
@@ -84,7 +85,7 @@ Item {
                             required property string modelData
                             width: navColumn.width
                             text: modelData
-                            checked: false
+                            checked: pages.currentIndex === index
                             focus: index === 0
                             Accessible.name: modelData
                             onClicked: pages.currentIndex = index
@@ -156,9 +157,12 @@ Item {
             anchors.bottom: parent.bottom
             currentIndex: 0
 
+            DashboardPage {
+                dashboard: shell.dashboard
+            }
+
             Repeater {
                 model: [
-                    { title: "总览", note: "Phase 4 接入真实 Dashboard。" },
                     { title: "自选股", note: "Phase 5 接入现有 watchlist API。" },
                     { title: "研究", note: "后续复用 research/v1 数据边界。" }
                 ]

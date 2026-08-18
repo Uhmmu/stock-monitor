@@ -26,6 +26,10 @@ qt_add_library(stock-monitor-core STATIC
     src/app/TokenVault.h
     src/cache/CacheStore.cpp
     src/cache/CacheStore.h
+    src/dashboard/DashboardStore.cpp
+    src/dashboard/DashboardStore.h
+    src/models/WatchlistQuoteModel.cpp
+    src/models/WatchlistQuoteModel.h
     src/network/ApiClient.cpp
     src/network/ApiClient.h
     src/network/ApiError.cpp
@@ -68,6 +72,7 @@ qt_add_qml_module(stock-monitor-desktop
         qml/StockMonitor/Showcase.qml
         qml/StockMonitor/shell/AppShell.qml
         qml/StockMonitor/pages/ConnectionPage.qml
+        qml/StockMonitor/pages/DashboardPage.qml
         qml/StockMonitor/theme/Theme.qml
         qml/StockMonitor/theme/Type.qml
         qml/StockMonitor/theme/Space.qml

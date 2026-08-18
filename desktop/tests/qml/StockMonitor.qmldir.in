@@ -20,3 +20,4 @@ GlassSurface 1.0 controls/GlassSurface.qml
 AppSegmentedControl 1.0 controls/AppSegmentedControl.qml
 AppSearchField 1.0 controls/AppSearchField.qml
 WindowChrome 1.0 controls/WindowChrome.qml
+DashboardPage 1.0 pages/DashboardPage.qml

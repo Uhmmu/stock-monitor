@@ -2,6 +2,7 @@
 #include "app/SessionStore.h"
 #include "app/TokenVault.h"
 #include "cache/CacheStore.h"
+#include "dashboard/DashboardStore.h"
 #include "network/ApiClient.h"
 
 #include <QGuiApplication>
@@ -28,6 +29,7 @@ int main(int argc, char *argv[])
     TokenVault vault(TokenVault::Backend::Keychain);
     CacheStore cache;
     SessionStore session(&environment, &api, &vault, &cache);
+    DashboardStore dashboard(&environment, &api, &cache, [&session] { return session.accessToken(); });
 
     QQmlApplicationEngine engine;
     const QStringList arguments = app.arguments();
@@ -37,6 +39,7 @@ int main(int argc, char *argv[])
         engine.setInitialProperties({
             {QStringLiteral("environment"), QVariant::fromValue(&environment)},
             {QStringLiteral("session"), QVariant::fromValue(&session)},
+            {QStringLiteral("dashboard"), QVariant::fromValue(&dashboard)},
         });
         // Resume a remembered session once the shell is on screen.
         QTimer::singleShot(0, &session, &SessionStore::restoreSession);
