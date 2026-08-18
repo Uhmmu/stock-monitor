@@ -139,7 +139,7 @@ export function Sheet({ open, onClose, title, children, size = 'default' }: {
   // (那会让 position:fixed 相对该祖先定位,弹窗贴到页面内容底部而非视口底部)。
   return createPortal(
     <div className="sheet-root" role="dialog" aria-modal="true">
-      <div className="sheet-scrim" ref={scrimRef} onClick={() => runTo(height.current, 0, onClose)} />
+      <div className="sheet-scrim" ref={scrimRef} onClick={onClose} />
       <div className={`sheet-panel${size === 'wide' ? ' sheet-panel-wide' : ''}`} ref={panelRef}>
         <div
           className="sheet-grip-zone"
