@@ -57,6 +57,14 @@ type ReportDetail = Report & {content:string;sources:{title:string;url:string}[]
 type Settings = {threshold_20m:number;threshold_1h:number;threshold_day:number;alert_cooldown_minutes:number;investigation_interval_minutes:number;investigation_duration_minutes:number;price_poll_minutes:number}
 type NewsAIAnalysis = {summary_zh:string|null;key_points:string[];companies:string[];tickers:string[];industries:string[];event_type:string|null;sentiment:string|null;market_impact:string|null;importance:number|null;source_quality:string|null;confidence:number|null}
 type NewsRow = {id:number;ticker:string;provider:string;title:string;translated_title:string|null;title_translation_model:string|null;title_translated_at:string|null;url:string;source:string|null;summary:string|null;symbols:string[];news_type:string;scope:'market'|'company';topic:string|null;importance_score:number|null;quality_score:number|null;published_at:string|null;found_at:string;relevance_score:number|null;sentiment_score:number|null;ai_summary:string|null;ai_summary_model:string|null;ai_summary_status:'idle'|'pending'|'queued'|'processing'|'completed'|'degraded'|'failed';ai_summary_requested_at:string|null;ai_summary_error:string|null;article_content?:string|null;content_final_url?:string|null;content_fetch_method?:string|null;content_fetch_status?:string|null;content_fetch_quality?:number|null;ai_analysis?:NewsAIAnalysis|null;ai_event_type?:string|null;ai_sentiment?:string|null;ai_importance?:number|null;ai_market_impact?:string|null;ai_summary_version?:string|null;ai_summary_generated_at?:string|null}
+export function newsSentimentBadge(sentiment:string|null|undefined,score:number|null|undefined,status:string|null|undefined) {
+  const value=(sentiment||'').toLowerCase()||(score==null?'':score>.1?'positive':score<-.1?'negative':'neutral')
+  const badges:Record<string,{label:string;tone:string}>={positive:{label:'利好',tone:'positive'},bullish:{label:'利好',tone:'positive'},neutral:{label:'中性',tone:'neutral'},negative:{label:'利空',tone:'negative'},bearish:{label:'利空',tone:'negative'},mixed:{label:'多空交织',tone:'mixed'}}
+  return badges[value]||(['idle','pending','queued','processing'].includes(status||'')?{label:'判别中',tone:'pending'}:{label:'暂未判别',tone:'pending'})
+}
+export function newsContentIncomplete(contentStatus:string|null|undefined,summaryStatus:string|null|undefined) {
+  return summaryStatus==='degraded'||['degraded','partial','incomplete','insufficient','failed','unavailable'].includes((contentStatus||'').toLowerCase())
+}
 type MarketNewsResponse = {items:NewsRow[];total:number;generated_at:string;last_updated_at:string|null;sources:string[]}
 type NewsArchive = {ticker:string;market_date:string;content:string;model:string;version:number;updated_at:string;included_news_ids:number[]}
 type WeeklyArchive = {ticker:string;iso_year:number;iso_week:number;week_start:string;week_end:string;content:string;included_dates:string[];model:string;version:number;updated_at:string}
@@ -896,8 +904,7 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
   const detailMarketImpact = detailItem?.ai_market_impact || detailAnalysis?.market_impact || null
   const detailImportance = detailItem?.ai_importance ?? detailAnalysis?.importance ?? null
   const detailTickers = detailItem ? Array.from(new Set([...(detailItem.symbols || []), ...(detailAnalysis?.tickers || [])])) : []
-  const contentFlags = [detailItem?.content_fetch_status,detailItem?.content_fetch_quality].filter(Boolean).map(value=>String(value).toLowerCase())
-  const contentDegraded = detailStatus==='degraded'||contentFlags.some(value=>['degraded','partial','incomplete','insufficient','failed','unavailable'].includes(value))
+  const contentDegraded = newsContentIncomplete(detailItem?.content_fetch_status,detailStatus)
   return <div className="news-center">
     <SnapshotTickerBar section="news" tickers={tickers} current={scope==='company'?current:''} onSelect={ticker=>{setActive(ticker);setScope('company')}} leading={<button className={`market-entry ${scope==='market'?'active':''}`} onClick={()=>setScope('market')}>全市场</button>}/>
     {scope==='company'&&!current&&<div className="empty">搜索并选择证券，临时查看新闻。</div>}
@@ -910,9 +917,9 @@ function NewsCenter({tickers,active,setActive}:{tickers:string[];active:string;s
     <div className="section-title"><h2>{scope==='market'?'市场要闻':`${current} 新闻`}</h2><div className="rating-bar"><div className="segmented compact" role="group" aria-label="新闻排序方式">{([['ranked','综合排序'],['latest','最新优先']] as const).map(([key,label])=><button type="button" key={key} className={sortMode===key?'active':''} aria-pressed={sortMode===key} onClick={()=>setSortMode(key)}>{label}</button>)}</div><button onClick={()=>refresh.mutate()} disabled={refresh.isPending}>{refresh.isPending?'刷新中…':'刷新新闻'}</button></div></div>
     {scope==='market'&&marketNews.data?.last_updated_at&&<p className="market-updated">最近更新：{formatDate(marketNews.data.last_updated_at)}</p>}
     {refresh.isSuccess&&<p className="saved">已触发后台采集，稍后刷新查看。</p>}
-    <div className="news-list">{news?.map(item=>{const no=orderNo(item.id);return <article className="news-card" key={item.id}>
+    <div className="news-list">{news?.map(item=>{const no=orderNo(item.id),sentiment=newsSentimentBadge(item.ai_sentiment||item.ai_analysis?.sentiment,item.sentiment_score,item.ai_summary_status),incomplete=newsContentIncomplete(item.content_fetch_status,item.ai_summary_status);return <article className="news-card" key={item.id}>
       <div className="news-body">
-        <div className="news-meta">{no&&<span className="news-no">[{no}]</span>}<span className={`prov ${item.provider}`}>{item.provider==='finnhub'?'Finnhub':item.provider==='tavily'?'Tavily':item.provider==='yfinance'?'Yahoo财经':item.provider==='marketaux'?'Marketaux':item.provider}</span>{item.topic&&<span className="news-topic">{item.topic}</span>}{item.importance_score!==null&&item.importance_score>=.65&&<span className="news-important">重要</span>}{item.source&&<span>{item.source}</span>}<span>{item.published_at?formatDate(item.published_at):formatDate(item.found_at)}</span></div>
+        <div className="news-meta">{no&&<span className="news-no">[{no}]</span>}<span className={`prov ${item.provider}`}>{item.provider==='finnhub'?'Finnhub':item.provider==='tavily'?'Tavily':item.provider==='yfinance'?'Yahoo财经':item.provider==='marketaux'?'Marketaux':item.provider}</span>{item.topic&&<span className="news-topic">{item.topic}</span>}{item.importance_score!==null&&item.importance_score>=.65&&<span className="news-important">重要</span>}<span className={`news-sentiment ${sentiment.tone}`}>{sentiment.label}</span>{incomplete&&<span className="news-incomplete">原文不完整</span>}{item.source&&<span>{item.source}</span>}<span>{item.published_at?formatDate(item.published_at):formatDate(item.found_at)}</span></div>
         <a className="news-title" href={item.url} target="_blank" rel="noreferrer">{item.translated_title||item.title}</a>
         {item.translated_title&&item.translated_title!==item.title&&<p className="news-original-title">{item.title}</p>}
         {item.summary&&<p className="news-summary">{item.summary}</p>}
