@@ -143,7 +143,7 @@ const STATE_LABELS: Record<string, string> = {
   early_reversal: '早期反转',
   reversal: '反转候选',
   unavailable: '数据不足',
-  stale: '数据陈旧',
+  stale: '数据待更新',
   nascent: '萌芽',
   emerging: '形成',
   established: '成熟',
@@ -510,7 +510,7 @@ function toneForState(value: string | null): string {
 function DataStatus({ row }: { row: MoodRow | null }) {
   if (!row) return <span className="ai-mood-pill neutral">数据不足</span>
   const stale = row.freshness_status && includesAny(row.freshness_status, ['stale', 'old', 'expired'])
-  return <span className={`ai-mood-pill ${stale ? 'caution' : toneForState(row.state)}`}>{stale ? '数据陈旧' : stateLabel(row.state)}</span>
+  return <span className={`ai-mood-pill ${stale ? 'caution' : toneForState(row.state)}`}>{stale ? '数据待更新' : stateLabel(row.state)}</span>
 }
 
 export function MoodLoadingState() {
@@ -614,7 +614,7 @@ export function MoodDetailContent({ detail, onAskAI }: { detail: MoodDetail; onA
     <div className="ai-mood-detail-section"><div className="ai-mood-section-heading"><div><p className="ai-mood-eyebrow">HISTORY</p><h3>状态轨迹</h3></div></div><HistoryChart row={row} history={detail.history} /></div>
     <div className="ai-mood-detail-section"><div className="ai-mood-section-heading"><div><p className="ai-mood-eyebrow">EVIDENCE</p><h3>结构化证据</h3></div></div><EvidenceList evidence={row.evidence} /></div>
     <div className="ai-mood-detail-section"><div className="ai-mood-section-heading"><div><p className="ai-mood-eyebrow">DIVERGENCES</p><h3>分歧记录</h3></div></div><DivergenceList divergences={row.divergences} /></div>
-    {(row.missing_sources.length || row.stale_sources.length) ? <p className="ai-mood-detail-limitation">{row.missing_sources.length ? `缺失来源：${row.missing_sources.join('、')}` : ''}{row.missing_sources.length && row.stale_sources.length ? ' · ' : ''}{row.stale_sources.length ? `陈旧来源：${row.stale_sources.join('、')}` : ''}</p> : null}
+    {(row.missing_sources.length || row.stale_sources.length) ? <p className="ai-mood-detail-limitation">{row.missing_sources.length ? `缺失来源：${row.missing_sources.join('、')}` : ''}{row.missing_sources.length && row.stale_sources.length ? ' · ' : ''}{row.stale_sources.length ? `待更新来源：${row.stale_sources.join('、')}` : ''}</p> : null}
   </div>
 }
 

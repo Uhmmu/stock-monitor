@@ -94,7 +94,7 @@ describe('AIMoodConsole static states and history', () => {
     const stale = renderToStaticMarkup(<MarketMoodCard row={row({ name_zh: '一个非常长但不应破坏布局的行业板块名称', freshness_status: 'stale', confidence: 0.12 })} />)
     const board = renderToStaticMarkup(<MoodBoard rows={[row({ name_zh: '一个非常长但不应破坏布局的行业板块名称' })]} />)
     expect(loading).toContain('aria-busy="true"')
-    expect(stale).toContain('数据陈旧')
+    expect(stale).toContain('数据待更新')
     expect(stale).toContain('12%')
     expect(board).toContain('一个非常长但不应破坏布局的行业板块名称')
   })
