@@ -5,7 +5,14 @@
 
 double WatchlistQuoteRow::displayPreviousClose() const
 {
-    return (hasLive && !qIsNaN(livePreviousClose)) ? livePreviousClose : previousClose;
+    return (hasLive && std::isfinite(livePreviousClose)) ? livePreviousClose : previousClose;
+}
+
+double WatchlistQuoteRow::displayMarketValue() const
+{
+    if (hasLive && std::isfinite(livePrice) && std::isfinite(quantity))
+        return quantity * livePrice;
+    return marketValue;
 }
 
 qint64 WatchlistQuoteRow::displayUpdatedAtMs() const
@@ -19,17 +26,21 @@ double WatchlistQuoteRow::change() const
 {
     const double current = displayPrice();
     const double close = displayPreviousClose();
-    if (qIsNaN(current) || qIsNaN(close) || close == 0)
+    if (!std::isfinite(current) || !std::isfinite(close) || close == 0)
         return qQNaN();
     return current - close;
 }
 
 double WatchlistQuoteRow::changePercent() const
 {
-    const double delta = change();
-    if (qIsNaN(delta))
-        return qQNaN();
-    return delta / displayPreviousClose() * 100.0;
+    if (hasLive && std::isfinite(livePrice) && std::isfinite(livePreviousClose)
+        && livePreviousClose != 0)
+        return (livePrice - livePreviousClose) / livePreviousClose * 100.0;
+    const double current = displayPrice();
+    const double close = displayPreviousClose();
+    if (std::isfinite(current) && std::isfinite(close) && close != 0)
+        return (current - close) / close * 100.0;
+    return baselineChangePercent;
 }
 
 WatchlistQuoteModel::WatchlistQuoteModel(QObject *parent)
@@ -56,10 +67,15 @@ QVariant WatchlistQuoteModel::data(const QModelIndex &index, int role) const
     switch (role) {
     case TickerRole: return row.ticker;
     case CompanyRole: return row.companyName;
+    case QuantityRole: return number(row.quantity);
+    case CurrencyRole: return row.currency;
     case PriceRole: return number(row.displayPrice());
     case PreviousCloseRole: return number(row.displayPreviousClose());
     case ChangeRole: return number(row.change());
     case ChangePercentRole: return number(row.changePercent());
+    case MarketValueRole: return number(row.displayMarketValue());
+    case PortfolioWeightRole: return number(row.portfolioWeight);
+    case ValuationAvailableRole: return row.valuationAvailable;
     case VolumeRole: return number(row.displayVolume());
     case VolumeRatioRole: return number(row.volumeRatio);
     case VolumeLabelRole: return row.volumeLabel;
@@ -76,10 +92,15 @@ QHash<int, QByteArray> WatchlistQuoteModel::roleNames() const
     return {
         {TickerRole, "ticker"},
         {CompanyRole, "company"},
+        {QuantityRole, "quantity"},
+        {CurrencyRole, "currency"},
         {PriceRole, "price"},
         {PreviousCloseRole, "previousClose"},
         {ChangeRole, "change"},
         {ChangePercentRole, "changePercent"},
+        {MarketValueRole, "marketValue"},
+        {PortfolioWeightRole, "portfolioWeight"},
+        {ValuationAvailableRole, "valuationAvailable"},
         {VolumeRole, "volume"},
         {VolumeRatioRole, "volumeRatio"},
         {VolumeLabelRole, "volumeLabel"},

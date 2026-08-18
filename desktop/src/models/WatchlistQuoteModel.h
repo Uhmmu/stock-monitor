@@ -7,15 +7,21 @@
 #include <QVector>
 #include <cmath>
 
-// One watchlist quote row as presented by the Dashboard. Base values come
-// from GET /api/dashboard; live values overlay them from the market SSE
-// stream / realtime snapshot. Display always prefers live over base and
-// never fabricates missing numbers (invalid numeric roles mean "数据不足").
+// One dashboard quote/holding row. Base values come from the portfolio
+// summary; live values overlay them from the market SSE stream / realtime
+// snapshot. Display always prefers live over base and never fabricates
+// missing numbers (invalid numeric roles mean "数据不足").
 struct WatchlistQuoteRow {
     QString ticker;
     QString companyName;
+    double quantity = qQNaN();
+    QString currency;
     double price = qQNaN();            // dashboard last-good price
     double previousClose = qQNaN();
+    double baselineChangePercent = qQNaN(); // persisted daily return when close is unavailable
+    double marketValue = qQNaN();
+    double portfolioWeight = qQNaN();
+    bool valuationAvailable = false;
     double volume = qQNaN();
     double volumeRatio = qQNaN();
     QString volumeLabel;               // 放量/缩量/正常 or empty
@@ -32,6 +38,7 @@ struct WatchlistQuoteRow {
 
     double displayPrice() const { return hasLive && std::isfinite(livePrice) ? livePrice : price; }
     double displayPreviousClose() const;
+    double displayMarketValue() const;
     double displayVolume() const { return hasLive && std::isfinite(liveVolume) ? liveVolume : volume; }
     QString displaySource() const { return hasLive && std::isfinite(livePrice) ? liveSource : priceSource; }
     qint64 displayUpdatedAtMs() const;
@@ -53,10 +60,15 @@ public:
     enum Roles {
         TickerRole = Qt::UserRole + 1,
         CompanyRole,
+        QuantityRole,
+        CurrencyRole,
         PriceRole,
         PreviousCloseRole,
         ChangeRole,
         ChangePercentRole,
+        MarketValueRole,
+        PortfolioWeightRole,
+        ValuationAvailableRole,
         VolumeRole,
         VolumeRatioRole,
         VolumeLabelRole,

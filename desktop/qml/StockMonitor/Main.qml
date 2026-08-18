@@ -9,6 +9,7 @@ ApplicationWindow {
     required property var environment
     required property var session
     required property var dashboard
+    required property var watchlist
     width: 1120
     height: 720
     minimumWidth: 760
@@ -34,6 +35,7 @@ ApplicationWindow {
         AppShell {
             session: window.session
             dashboard: window.dashboard
+            watchlist: window.watchlist
         }
     }
 }

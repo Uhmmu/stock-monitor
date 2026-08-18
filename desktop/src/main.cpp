@@ -4,6 +4,7 @@
 #include "cache/CacheStore.h"
 #include "dashboard/DashboardStore.h"
 #include "network/ApiClient.h"
+#include "watchlist/WatchlistStore.h"
 
 #include <QGuiApplication>
 #include <QElapsedTimer>
@@ -30,6 +31,7 @@ int main(int argc, char *argv[])
     CacheStore cache;
     SessionStore session(&environment, &api, &vault, &cache);
     DashboardStore dashboard(&environment, &api, &cache, [&session] { return session.accessToken(); });
+    WatchlistStore watchlist(&environment, &api, [&session] { return session.accessToken(); });
 
     QQmlApplicationEngine engine;
     const QStringList arguments = app.arguments();
@@ -40,6 +42,7 @@ int main(int argc, char *argv[])
             {QStringLiteral("environment"), QVariant::fromValue(&environment)},
             {QStringLiteral("session"), QVariant::fromValue(&session)},
             {QStringLiteral("dashboard"), QVariant::fromValue(&dashboard)},
+            {QStringLiteral("watchlist"), QVariant::fromValue(&watchlist)},
         });
         // Resume a remembered session once the shell is on screen.
         QTimer::singleShot(0, &session, &SessionStore::restoreSession);

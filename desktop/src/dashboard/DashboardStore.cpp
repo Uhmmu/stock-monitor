@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QUrlQuery>
 #include <QtMath>
+#include <cmath>
 
 #include "app/AppEnvironment.h"
 #include "cache/CacheStore.h"
@@ -11,7 +12,7 @@
 #include "network/SseStream.h"
 
 namespace {
-constexpr auto kCacheKey = "dashboard:v1";
+constexpr auto kCacheKey = "portfolio-summary:v1";
 constexpr qint64 kStaleAfterSeconds = 10 * 60;
 
 double numberOrNan(const QJsonValue &value)
@@ -90,7 +91,7 @@ void DashboardStore::refresh()
     m_error.clear();
     ++m_requestCount;
     emit changed();
-    m_request = m_api->get(QStringLiteral("dashboard"),
+    m_request = m_api->get(QStringLiteral("portfolio/summary"),
         [this](const ApiError &error, const QJsonObject &json) {
             m_busy = false;
             if (!error.message.isEmpty() || error.httpStatus != 0) {
@@ -100,9 +101,9 @@ void DashboardStore::refresh()
                 return;
             }
             const qint64 now = QDateTime::currentMSecsSinceEpoch();
-            applyDashboard(json, now, false);
+            applySummary(json, now, false);
             if (m_fetchedAtMs != now) {
-                m_error = tr("Dashboard 响应缺少必要字段。");
+                m_error = tr("持仓摘要响应缺少必要字段。");
                 m_failedSinceLastGood = hasData();
                 emit changed();
                 return;
@@ -110,7 +111,7 @@ void DashboardStore::refresh()
             m_cache->insert(QString::fromLatin1(kCacheKey),
                             QJsonDocument(json).toJson(QJsonDocument::Compact), {}, 0);
         },
-        {.name = QStringLiteral("dashboard"), .retryable = true});
+        {.name = QStringLiteral("portfolio/summary"), .retryable = true});
 }
 
 void DashboardStore::loadLastGood()
@@ -122,19 +123,16 @@ void DashboardStore::loadLastGood()
         return;
     const QJsonDocument document = QJsonDocument::fromJson(entry->payload);
     if (document.isObject())
-        applyDashboard(document.object(), entry->fetchedAtMs, true);
+        applySummary(document.object(), entry->fetchedAtMs, true);
 }
 
-void DashboardStore::applyDashboard(const QJsonObject &json, qint64 fetchedAtMs, bool fromCache)
+void DashboardStore::applySummary(const QJsonObject &json, qint64 fetchedAtMs, bool fromCache)
 {
-    bool marketOpen = false;
-    QDateTime checkedAt;
-    QVector<WatchlistQuoteRow> rows;
-    if (!parseDashboard(json, &marketOpen, &checkedAt, &rows))
+    PortfolioSummaryData summary;
+    if (!parsePortfolioSummary(json, &summary))
         return;
-    m_marketOpen = marketOpen;
-    m_marketCheckedAt = checkedAt;
-    m_quotes.replaceRows(rows);
+    m_summary = summary;
+    m_quotes.replaceRows(m_summary.rows);
     m_fetchedAtMs = fetchedAtMs;
     m_failedSinceLastGood = fromCache;
     m_error.clear();
@@ -143,42 +141,50 @@ void DashboardStore::applyDashboard(const QJsonObject &json, qint64 fetchedAtMs,
     emit changed();
 }
 
-bool DashboardStore::parseDashboard(const QJsonObject &json, bool *marketOpen,
-                                    QDateTime *marketCheckedAt, QVector<WatchlistQuoteRow> *rows)
+bool DashboardStore::parsePortfolioSummary(const QJsonObject &json, PortfolioSummaryData *summary)
 {
-    if (!json.value(QStringLiteral("market")).isObject()
-        || !json.value(QStringLiteral("stocks")).isArray())
+    if (!summary || !json.value(QStringLiteral("positions")).isArray())
         return false;
-    const QJsonObject market = json.value(QStringLiteral("market")).toObject();
-    const QDateTime checked = QDateTime::fromString(
-        market.value(QStringLiteral("checked_at")).toString(), Qt::ISODate);
-    if (!market.value(QStringLiteral("is_open")).isBool() || !checked.isValid())
+    const QString baseCurrency = json.value(QStringLiteral("base_currency")).toString().trimmed().toUpper();
+    if (baseCurrency.isEmpty())
         return false;
 
     QVector<WatchlistQuoteRow> parsed;
-    const QJsonArray stocks = json.value(QStringLiteral("stocks")).toArray();
-    parsed.reserve(stocks.size());
-    for (const QJsonValue &value : stocks) {
+    const QJsonArray positions = json.value(QStringLiteral("positions")).toArray();
+    parsed.reserve(positions.size());
+    for (const QJsonValue &value : positions) {
         if (!value.isObject())
             continue;
         const QJsonObject stock = value.toObject();
         WatchlistQuoteRow row;
-        row.ticker = stock.value(QStringLiteral("ticker")).toString().trimmed().toUpper();
+        row.ticker = stock.value(QStringLiteral("symbol")).toString().trimmed().toUpper();
         if (row.ticker.isEmpty())
             continue;
-        row.companyName = stock.value(QStringLiteral("company_name")).toString();
-        row.price = numberOrNan(stock.value(QStringLiteral("price")));
+        row.quantity = numberOrNan(stock.value(QStringLiteral("total_quantity")));
+        row.currency = stock.value(QStringLiteral("currency")).toString().trimmed().toUpper();
+        row.price = numberOrNan(stock.value(QStringLiteral("current_price")));
         row.previousClose = numberOrNan(stock.value(QStringLiteral("previous_close")));
-        row.volume = numberOrNan(stock.value(QStringLiteral("volume")));
-        row.volumeRatio = numberOrNan(stock.value(QStringLiteral("volume_ratio")));
-        row.volumeLabel = stock.value(QStringLiteral("volume_label")).toString();
+        row.baselineChangePercent = numberOrNan(stock.value(QStringLiteral("daily_change_percent")));
+        row.marketValue = numberOrNan(stock.value(QStringLiteral("market_value")));
+        row.portfolioWeight = numberOrNan(stock.value(QStringLiteral("portfolio_weight")));
+        row.valuationAvailable = stock.value(QStringLiteral("valuation_available")).toBool();
+        row.volume = numberOrNan(stock.value(QStringLiteral("day_volume")));
         row.priceSource = stock.value(QStringLiteral("price_source")).toString();
-        row.baseUpdatedAtMs = timestampMs(stock.value(QStringLiteral("updated_at")));
+        row.baseUpdatedAtMs = timestampMs(stock.value(QStringLiteral("price_as_of")));
         parsed.append(std::move(row));
     }
-    *marketOpen = market.value(QStringLiteral("is_open")).toBool();
-    *marketCheckedAt = checked;
-    *rows = std::move(parsed);
+    summary->baseCurrency = baseCurrency;
+    summary->positionCount = json.value(QStringLiteral("position_count")).toInt(parsed.size());
+    summary->pricedCount = json.value(QStringLiteral("priced_count")).toInt();
+    summary->totalMarketValue = numberOrNan(json.value(QStringLiteral("total_market_value")));
+    summary->netAssetValue = numberOrNan(json.value(QStringLiteral("net_asset_value")));
+    summary->cash = numberOrNan(json.value(QStringLiteral("cash")));
+    if (!std::isfinite(summary->cash))
+        summary->cash = numberOrNan(json.value(QStringLiteral("cash_balance")));
+    summary->totalUnrealizedPnl = numberOrNan(json.value(QStringLiteral("total_unrealized_pnl")));
+    summary->hasUnpricedPositions = json.value(QStringLiteral("has_unpriced_positions")).toBool();
+    summary->hasUnconvertedPositions = json.value(QStringLiteral("has_unconverted_positions")).toBool();
+    summary->rows = std::move(parsed);
     return true;
 }
 

@@ -203,6 +203,81 @@ private slots:
         QCOMPARE(attempts, 1);
     }
 
+    void sendsEncodedQueryPatchAndDeleteWithoutReplayingMutations()
+    {
+        int patchCalls = 0;
+        int deleteCalls = 0;
+        MockHttpServer server;
+        QVERIFY(server.start([&](const QByteArray &request) -> MockHttpServer::Response {
+            if (request.startsWith("GET /api/securities/search?q=A%26B&limit=8 "))
+                return {200, R"({"items":[]})"};
+            if (request.startsWith("PATCH /api/watchlist/7 ")) {
+                ++patchCalls;
+                return {200, R"({"id":7})"};
+            }
+            if (request.startsWith("DELETE /api/watchlist/7 ")) {
+                ++deleteCalls;
+                return {204, {}};
+            }
+            return {404, R"({"detail":"unexpected"})"};
+        }));
+
+        AppEnvironment environment;
+        QVERIFY(environment.setBaseUrl(server.baseUrl()));
+        ApiClient api;
+        api.setEnvironment(&environment);
+        int completed = 0;
+        QUrlQuery query;
+        query.addQueryItem(QStringLiteral("q"), QStringLiteral("A&B"));
+        query.addQueryItem(QStringLiteral("limit"), QStringLiteral("8"));
+        api.get(QStringLiteral("securities/search"),
+                [&](const ApiError &error, const QJsonObject &) {
+                    QCOMPARE(error.code, ApiErrorCode::Unknown);
+                    ++completed;
+                },
+                {.name = QStringLiteral("search"), .authenticated = false,
+                 .retryable = true, .maxAttempts = 3, .query = query});
+        api.patch(QStringLiteral("watchlist/7"), {{QStringLiteral("alert_enabled"), true}},
+                  [&](const ApiError &error, const QJsonObject &json) {
+                      QCOMPARE(error.code, ApiErrorCode::Unknown);
+                      QCOMPARE(json.value(QStringLiteral("id")).toInt(), 7);
+                      ++completed;
+                  }, {.name = QStringLiteral("patch"), .authenticated = false});
+        api.remove(QStringLiteral("watchlist/7"),
+                   [&](const ApiError &error, const QJsonObject &json) {
+                       QCOMPARE(error.code, ApiErrorCode::Unknown);
+                       QVERIFY(json.isEmpty());
+                       ++completed;
+                   }, {.name = QStringLiteral("delete"), .authenticated = false});
+        QTRY_COMPARE(completed, 3);
+        QCOMPARE(patchCalls, 1);
+        QCOMPARE(deleteCalls, 1);
+    }
+
+    void neverRetriesPatchEvenWhenMarkedRetryable()
+    {
+        int attempts = 0;
+        MockHttpServer server;
+        QVERIFY(server.start([&](const QByteArray &) -> MockHttpServer::Response {
+            ++attempts;
+            return {500, R"({"detail":"boom"})"};
+        }));
+        AppEnvironment environment;
+        QVERIFY(environment.setBaseUrl(server.baseUrl()));
+        ApiClient api;
+        api.setEnvironment(&environment);
+        api.setRetryDelays({0, 0});
+        int completed = 0;
+        api.patch(QStringLiteral("watchlist/7"), {},
+                  [&](const ApiError &error, const QJsonObject &) {
+                      QCOMPARE(error.code, ApiErrorCode::ServerError);
+                      ++completed;
+                  }, {.name = QStringLiteral("patch"), .authenticated = false,
+                      .retryable = true});
+        QTRY_COMPARE(completed, 1);
+        QCOMPARE(attempts, 1);
+    }
+
     void unauthorizedTriggersSingleFlightRefreshAndReplay()
     {
         QString currentAccess = "A1";

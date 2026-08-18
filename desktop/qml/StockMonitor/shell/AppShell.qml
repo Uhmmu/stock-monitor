@@ -8,6 +8,7 @@ Item {
     id: shell
     required property var session
     required property var dashboard
+    required property var watchlist
 
     Rectangle {
         id: backdrop
@@ -161,9 +162,12 @@ Item {
                 dashboard: shell.dashboard
             }
 
+            WatchlistPage {
+                watchlist: shell.watchlist
+            }
+
             Repeater {
                 model: [
-                    { title: "自选股", note: "Phase 5 接入现有 watchlist API。" },
                     { title: "研究", note: "后续复用 research/v1 数据边界。" }
                 ]
                 delegate: Pane {

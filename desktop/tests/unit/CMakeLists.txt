@@ -21,3 +21,7 @@ add_test(NAME stock-monitor-contract-tests COMMAND stock-monitor-contract-tests)
 qt_add_executable(stock-monitor-dashboard-tests tst_dashboard.cpp)
 target_link_libraries(stock-monitor-dashboard-tests PRIVATE stock-monitor-core Qt6::Test)
 add_test(NAME stock-monitor-dashboard-tests COMMAND stock-monitor-dashboard-tests)
+
+qt_add_executable(stock-monitor-watchlist-tests tst_watchlist.cpp)
+target_link_libraries(stock-monitor-watchlist-tests PRIVATE stock-monitor-core Qt6::Test)
+add_test(NAME stock-monitor-watchlist-tests COMMAND stock-monitor-watchlist-tests)

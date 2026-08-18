@@ -40,6 +40,8 @@ qt_add_library(stock-monitor-core STATIC
     src/network/SseParser.h
     src/network/SseStream.cpp
     src/network/SseStream.h
+    src/watchlist/WatchlistStore.cpp
+    src/watchlist/WatchlistStore.h
 )
 target_include_directories(stock-monitor-core PUBLIC src)
 target_link_libraries(stock-monitor-core PUBLIC Qt6::Core Qt6::Network Qt6::Sql)
@@ -73,6 +75,7 @@ qt_add_qml_module(stock-monitor-desktop
         qml/StockMonitor/shell/AppShell.qml
         qml/StockMonitor/pages/ConnectionPage.qml
         qml/StockMonitor/pages/DashboardPage.qml
+        qml/StockMonitor/pages/WatchlistPage.qml
         qml/StockMonitor/theme/Theme.qml
         qml/StockMonitor/theme/Type.qml
         qml/StockMonitor/theme/Space.qml

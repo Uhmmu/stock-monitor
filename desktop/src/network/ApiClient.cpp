@@ -60,7 +60,6 @@ RequestHandle ApiClient::get(const QString &path, const JsonCallback &callback,
     PendingRequest request;
     request.id = m_nextId++;
     request.path = path;
-    request.isPost = false;
     request.options = options;
     request.callback = callback;
     sendRequest(std::move(request));
@@ -80,23 +79,64 @@ RequestHandle ApiClient::post(const QString &path, const QJsonObject &body,
     request.id = m_nextId++;
     request.path = path;
     request.body = body;
-    request.isPost = true;
+    request.method = "POST";
     request.options = options;
     request.callback = callback;
     sendRequest(std::move(request));
     return RequestHandle(m_pending.value(request.id).reply, request.id, this);
 }
 
+RequestHandle ApiClient::patch(const QString &path, const QJsonObject &body,
+                               const JsonCallback &callback)
+{
+    return patch(path, body, callback, RequestOptions{});
+}
+
+RequestHandle ApiClient::patch(const QString &path, const QJsonObject &body,
+                               const JsonCallback &callback, const RequestOptions &options)
+{
+    PendingRequest request;
+    request.id = m_nextId++;
+    request.path = path;
+    request.body = body;
+    request.method = "PATCH";
+    request.options = options;
+    request.callback = callback;
+    sendRequest(std::move(request));
+    return RequestHandle(m_pending.value(request.id).reply, request.id, this);
+}
+
+RequestHandle ApiClient::remove(const QString &path, const JsonCallback &callback,
+                                const RequestOptions &options)
+{
+    PendingRequest request;
+    request.id = m_nextId++;
+    request.path = path;
+    request.method = "DELETE";
+    request.options = options;
+    request.callback = callback;
+    sendRequest(std::move(request));
+    return RequestHandle(m_pending.value(request.id).reply, request.id, this);
+}
+
+RequestHandle ApiClient::remove(const QString &path, const JsonCallback &callback)
+{
+    return remove(path, callback, RequestOptions{});
+}
+
 void ApiClient::sendRequest(PendingRequest request)
 {
     const quint64 id = request.id;
-    const QByteArray payload = request.isPost
+    const bool hasBody = request.method == "POST" || request.method == "PATCH";
+    const QByteArray payload = hasBody
         ? QJsonDocument(request.body).toJson(QJsonDocument::Compact) : QByteArray();
 
-    QNetworkRequest networkRequest(m_environment->apiUrl(request.path));
+    QUrl url = m_environment->apiUrl(request.path);
+    url.setQuery(request.options.query);
+    QNetworkRequest networkRequest(url);
     networkRequest.setRawHeader("Accept", "application/json");
     networkRequest.setTransferTimeout(kRequestTimeoutMs);
-    if (request.isPost)
+    if (hasBody)
         networkRequest.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     if (request.options.authenticated && m_accessTokenProvider) {
         const QString token = m_accessTokenProvider();
@@ -104,8 +144,9 @@ void ApiClient::sendRequest(PendingRequest request)
             networkRequest.setRawHeader("Authorization", "Bearer " + token.toUtf8());
     }
 
-    QNetworkReply *reply = request.isPost ? m_network.post(networkRequest, payload)
-                                          : m_network.get(networkRequest);
+    QNetworkReply *reply = request.method == "GET"
+        ? m_network.get(networkRequest)
+        : m_network.sendCustomRequest(networkRequest, request.method, payload);
     request.reply = reply;
     m_pending.insert(id, std::move(request));
     connect(reply, &QNetworkReply::finished, this, [this, id] { onRequestFinished(id); });
@@ -132,12 +173,14 @@ void ApiClient::onRequestFinished(quint64 id)
         static_cast<int>(reply->error()), httpStatus, body, request.options.name);
 
     // 401 with a refresh token available: try the single-flight refresh first.
-    if (error.code == ApiErrorCode::Unauthorized && request.options.authenticated && !request.refreshed) {
+    if (error.code == ApiErrorCode::Unauthorized && request.method == "GET"
+        && request.options.authenticated && !request.refreshed) {
         handleUnauthorized(id);
         return;
     }
 
-    const bool retryableFailure = error.isRetryable() && request.options.retryable
+    const bool retryableFailure = request.method == "GET" && error.isRetryable()
+        && request.options.retryable
         && request.attempt + 1 < request.options.maxAttempts;
     if (retryableFailure) {
         scheduleRetry(id);
@@ -146,6 +189,11 @@ void ApiClient::onRequestFinished(quint64 id)
 
     if (httpStatus == 0 || httpStatus < 200 || httpStatus >= 300) {
         finishRequest(id, error, {});
+        return;
+    }
+
+    if (body.trimmed().isEmpty()) {
+        finishRequest(id, ApiError{}, {});
         return;
     }
 

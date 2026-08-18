@@ -15,54 +15,77 @@ class DashboardTest final : public QObject
     Q_OBJECT
 
 private slots:
-    void parsesPartialDashboard()
+    void parsesPartialPortfolioSummary()
     {
         const QJsonObject json{
-            {"market", QJsonObject{{"is_open", true}, {"checked_at", "2026-08-19T02:00:00+00:00"}}},
-            {"stocks", QJsonArray{
-                QJsonObject{{"ticker", " aapl "}, {"price", 230.5}, {"previous_close", 228.0},
-                            {"price_source", "alpaca:iex"}, {"updated_at", "2026-08-19T01:59:00Z"}},
-                QJsonObject{{"ticker", "MSFT"}, {"price", QJsonValue::Null}},
+            {"base_currency", "usd"},
+            {"position_count", 2},
+            {"priced_count", 1},
+            {"total_market_value", 1500.0},
+            {"net_asset_value", 1700.0},
+            {"cash", 200.0},
+            {"total_unrealized_pnl", 100.0},
+            {"has_unpriced_positions", true},
+            {"has_unconverted_positions", false},
+            {"positions", QJsonArray{
+                QJsonObject{{"symbol", " aapl "}, {"total_quantity", 10.0}, {"currency", "usd"},
+                            {"current_price", 150.0}, {"previous_close", 148.0},
+                            {"daily_change_percent", 1.35}, {"market_value", 1500.0},
+                            {"portfolio_weight", 100.0}, {"valuation_available", true},
+                            {"day_volume", 2500.0}, {"price_source", "snapshot"},
+                            {"price_as_of", "2026-08-19T01:59:00Z"}},
+                QJsonObject{{"symbol", "MSFT"}, {"total_quantity", 5.0}, {"currency", "USD"},
+                            {"current_price", QJsonValue::Null}, {"previous_close", QJsonValue::Null},
+                            {"daily_change_percent", -0.5}, {"market_value", QJsonValue::Null},
+                            {"portfolio_weight", QJsonValue::Null}, {"valuation_available", false}},
                 QJsonObject{{"price", 1.0}},
             }},
         };
-        bool open = false;
-        QDateTime checked;
-        QVector<WatchlistQuoteRow> rows;
-        QVERIFY(DashboardStore::parseDashboard(json, &open, &checked, &rows));
-        QVERIFY(open);
-        QCOMPARE(rows.size(), 2);
-        QCOMPARE(rows.first().ticker, QString("AAPL"));
-        QVERIFY(qIsNaN(rows.at(1).price));
+        PortfolioSummaryData summary;
+        QVERIFY(DashboardStore::parsePortfolioSummary(json, &summary));
+        QCOMPARE(summary.baseCurrency, QString("USD"));
+        QCOMPARE(summary.positionCount, 2);
+        QCOMPARE(summary.pricedCount, 1);
+        QCOMPARE(summary.totalMarketValue, 1500.0);
+        QCOMPARE(summary.netAssetValue, 1700.0);
+        QCOMPARE(summary.cash, 200.0);
+        QVERIFY(summary.hasUnpricedPositions);
+        QVERIFY(!summary.hasUnconvertedPositions);
+        QCOMPARE(summary.rows.size(), 2);
+        QCOMPARE(summary.rows.first().ticker, QString("AAPL"));
+        QCOMPARE(summary.rows.first().currency, QString("USD"));
+        QCOMPARE(summary.rows.first().quantity, 10.0);
+        QCOMPARE(summary.rows.first().marketValue, 1500.0);
+        QCOMPARE(summary.rows.first().baselineChangePercent, 1.35);
+        QVERIFY(qIsNaN(summary.rows.at(1).price));
+        QCOMPARE(summary.rows.at(1).baselineChangePercent, -0.5);
     }
 
-    void rejectsInvalidDashboard()
+    void rejectsInvalidPortfolioSummary()
     {
-        bool open = false;
-        QDateTime checked;
-        QVector<WatchlistQuoteRow> rows;
-        QVERIFY(!DashboardStore::parseDashboard(QJsonObject{{"stocks", QJsonArray{}}},
-                                                &open, &checked, &rows));
+        PortfolioSummaryData summary;
+        QVERIFY(!DashboardStore::parsePortfolioSummary(QJsonObject{{"positions", QJsonArray{}}},
+                                                       &summary));
     }
 
-    void acceptsEmptyDashboard()
+    void acceptsEmptyPortfolioSummary()
     {
-        bool open = true;
-        QDateTime checked;
-        QVector<WatchlistQuoteRow> rows;
+        PortfolioSummaryData summary;
         const QJsonObject json{
-            {"market", QJsonObject{{"is_open", false}, {"checked_at", "2026-08-19T02:00:00Z"}}},
-            {"stocks", QJsonArray{}},
+            {"base_currency", "USD"},
+            {"positions", QJsonArray{}},
         };
-        QVERIFY(DashboardStore::parseDashboard(json, &open, &checked, &rows));
-        QVERIFY(!open);
-        QVERIFY(rows.isEmpty());
+        QVERIFY(DashboardStore::parsePortfolioSummary(json, &summary));
+        QCOMPARE(summary.positionCount, 0);
+        QVERIFY(summary.rows.isEmpty());
     }
 
     void keepsStaleLastGoodOnRefreshError()
     {
         MockHttpServer server;
-        QVERIFY(server.start([](const QByteArray &) -> MockHttpServer::Response {
+        QByteArray request;
+        QVERIFY(server.start([&request](const QByteArray &received) -> MockHttpServer::Response {
+            request = received;
             return {500, R"({"detail":"offline"})"};
         }));
         AppEnvironment environment;
@@ -75,10 +98,12 @@ private slots:
         CacheStore cache;
         cache.setCacheDirectory(directory.path());
         const QJsonObject cached{
-            {"market", QJsonObject{{"is_open", false}, {"checked_at", "2026-08-19T02:00:00Z"}}},
-            {"stocks", QJsonArray{QJsonObject{{"ticker", "AAPL"}, {"price", 230.0}}}},
+            {"base_currency", "USD"},
+            {"position_count", 1},
+            {"priced_count", 1},
+            {"positions", QJsonArray{QJsonObject{{"symbol", "AAPL"}, {"current_price", 230.0}}}},
         };
-        cache.insert("dashboard:v1", QJsonDocument(cached).toJson(QJsonDocument::Compact), {}, 0);
+        cache.insert("portfolio-summary:v1", QJsonDocument(cached).toJson(QJsonDocument::Compact), {}, 0);
 
         DashboardStore store(&environment, &api, &cache, [] { return QByteArray("token"); });
         store.setActive(true);
@@ -88,6 +113,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!store.busy(), 3000);
         QVERIFY(!store.error().isEmpty());
         QVERIFY(store.hasData());
+        QVERIFY(request.startsWith("GET /api/portfolio/summary "));
         store.setActive(false);
     }
 
@@ -133,6 +159,25 @@ private slots:
         row.baseUpdatedAtMs = 2000;
         model.replaceRows({row});
         QCOMPARE(model.data(model.index(0), WatchlistQuoteModel::PriceRole).toDouble(), 105.0);
+    }
+
+    void usesBaselineChangeAndLiveMarketValue()
+    {
+        WatchlistQuoteModel model;
+        model.setCoalesceIntervalMs(0);
+        WatchlistQuoteRow row;
+        row.ticker = "AAPL";
+        row.quantity = 2;
+        row.price = 100;
+        row.baselineChangePercent = 3.5;
+        row.marketValue = 200;
+        model.replaceRows({row});
+        QCOMPARE(model.data(model.index(0), WatchlistQuoteModel::ChangePercentRole).toDouble(), 3.5);
+        QCOMPARE(model.data(model.index(0), WatchlistQuoteModel::MarketValueRole).toDouble(), 200.0);
+        model.applyRealtimeQuote("AAPL", 110, 105, qQNaN(), "live", 2000);
+        QCOMPARE(model.data(model.index(0), WatchlistQuoteModel::ChangePercentRole).toDouble(),
+                 (110.0 - 105.0) / 105.0 * 100.0);
+        QCOMPARE(model.data(model.index(0), WatchlistQuoteModel::MarketValueRole).toDouble(), 220.0);
     }
 };
 

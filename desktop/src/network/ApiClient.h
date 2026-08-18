@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QObject>
+#include <QUrlQuery>
 #include <functional>
 #include <optional>
 #include <QVector>
@@ -29,7 +30,7 @@ struct UserDto {
 // Generic HTTPS JSON transport for the FastAPI backend.
 //
 // - GET requests declared retryable get bounded exponential backoff with
-//   jitter; POST mutations are never auto-replayed (no idempotency keys).
+//   jitter; mutations are never auto-replayed (no idempotency keys).
 // - A 401 triggers a single-flight refresh-token POST; waiting GETs are
 //   replayed exactly once with the new access token. A definite refresh
 //   failure emits authSessionExpired() and fails the waiters.
@@ -47,6 +48,7 @@ public:
         bool authenticated = true;  // attach Bearer access token
         bool retryable = false;     // only for idempotent GETs
         int maxAttempts = 3;
+        QUrlQuery query;
     };
 
     explicit ApiClient(QObject *parent = nullptr);
@@ -65,6 +67,13 @@ public:
     RequestHandle post(const QString &path, const QJsonObject &body, const JsonCallback &callback);
     RequestHandle post(const QString &path, const QJsonObject &body,
                        const JsonCallback &callback, const RequestOptions &options);
+    RequestHandle patch(const QString &path, const QJsonObject &body,
+                        const JsonCallback &callback);
+    RequestHandle patch(const QString &path, const QJsonObject &body,
+                        const JsonCallback &callback, const RequestOptions &options);
+    RequestHandle remove(const QString &path, const JsonCallback &callback);
+    RequestHandle remove(const QString &path, const JsonCallback &callback,
+                         const RequestOptions &options);
 
     // Test hooks.
     void setRetryDelays(QVector<int> delaysMs);
@@ -82,7 +91,7 @@ private:
         quint64 id = 0;
         QString path;
         QJsonObject body;
-        bool isPost = false;
+        QByteArray method = "GET";
         RequestOptions options;
         JsonCallback callback;
         int attempt = 0;

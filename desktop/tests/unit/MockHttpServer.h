@@ -64,6 +64,7 @@ private:
         QByteArray statusText;
         switch (response.status) {
         case 200: statusText = "OK"; break;
+        case 204: statusText = "No Content"; break;
         case 400: statusText = "Bad Request"; break;
         case 401: statusText = "Unauthorized"; break;
         case 403: statusText = "Forbidden"; break;
