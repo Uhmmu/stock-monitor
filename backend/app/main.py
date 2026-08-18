@@ -40,6 +40,7 @@ from app.integrations.ibkr.client_portal_client import close_client_portal_clien
 from app.integrations.ibkr.flex_client import close_flex_client
 from app.services.industry_pulse.service import ensure_seed_data
 from app.services.market_calendar import expected_latest_market_session
+from app.auth import resolve_jwt_secret
 from app.research import router as research_router
 from app.research.exceptions import ResearchError
 from app.research.router import research_audit_middleware, research_error_handler
@@ -48,8 +49,30 @@ from app.research.router import research_audit_middleware, research_error_handle
 logger = logging.getLogger(__name__)
 
 
+def ensure_admin_user(db) -> None:
+    """Bootstrap the initial admin if none exists; fail closed without a password."""
+    if db.scalar(select(User).where(User.role == 'admin')):
+        return
+    init_password = os.getenv('ADMIN_INIT_PASSWORD', '').strip()
+    if not init_password:
+        raise RuntimeError(
+            '数据库中不存在管理员，且未设置 ADMIN_INIT_PASSWORD；'
+            '必须在环境变量中提供初始管理员密码后才能启动'
+        )
+    db.add(User(
+        username=os.getenv('ADMIN_USERNAME', 'admin'),
+        password_hash=hash_password(init_password),
+        role='admin',
+        status='active',
+    ))
+    db.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail closed: refuse to serve with the historical default/empty JWT secret
+    # unless APP_ENV explicitly marks a development/test environment.
+    resolve_jwt_secret()
     # Validate explicit provider registration without requiring credentials or
     # making a paid/network health-check request.
     if get_settings().ai_enabled:
@@ -66,14 +89,7 @@ async def lifespan(app: FastAPI):
             MoodDailyRun.status == "COMPLETED",
         ).limit(1)):
             logger.warning("mood_eod_history_missing trading_date=%s", latest_session)
-        if not db.scalar(select(User).where(User.role == 'admin')):
-            db.add(User(
-                username=os.getenv('ADMIN_USERNAME', 'admin'),
-                password_hash=hash_password(os.getenv('ADMIN_INIT_PASSWORD', 'zzjjll20050418')),
-                role='admin',
-                status='active',
-            ))
-            db.commit()
+        ensure_admin_user(db)
         if get_settings().exa_enabled and get_settings().exa_api_key:
             await DeepSearchService(db).recover_stale_runs(limit=100)
     try:

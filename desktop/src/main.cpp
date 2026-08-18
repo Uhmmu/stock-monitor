@@ -1,5 +1,7 @@
 #include "app/AppEnvironment.h"
 #include "app/SessionStore.h"
+#include "app/TokenVault.h"
+#include "cache/CacheStore.h"
 #include "network/ApiClient.h"
 
 #include <QGuiApplication>
@@ -23,7 +25,9 @@ int main(int argc, char *argv[])
 
     AppEnvironment environment;
     ApiClient api;
-    SessionStore session(&environment, &api);
+    TokenVault vault(TokenVault::Backend::Keychain);
+    CacheStore cache;
+    SessionStore session(&environment, &api, &vault, &cache);
 
     QQmlApplicationEngine engine;
     const QStringList arguments = app.arguments();
@@ -34,6 +38,8 @@ int main(int argc, char *argv[])
             {QStringLiteral("environment"), QVariant::fromValue(&environment)},
             {QStringLiteral("session"), QVariant::fromValue(&session)},
         });
+        // Resume a remembered session once the shell is on screen.
+        QTimer::singleShot(0, &session, &SessionStore::restoreSession);
     }
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
                      [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);

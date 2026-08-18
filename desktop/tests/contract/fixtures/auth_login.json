@@ -1,0 +1,8 @@
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example.signature",
+  "refresh_token": "48-byte-urlsafe-refresh-token-example",
+  "expires_at": "2026-08-25T12:00:00.123456+00:00",
+  "role": "user",
+  "username": "alice",
+  "future_additive_field": {"tolerated": true}
+}

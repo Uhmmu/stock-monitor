@@ -1003,6 +1003,24 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AuthSession(Base):
+    """Server-side refresh-token session; only the sha256 hash is stored."""
+    __tablename__ = 'auth_sessions'
+    __table_args__ = (
+        Index('ix_auth_sessions_user_revoked', 'user_id', 'revoked_at'),
+        Index('ix_auth_sessions_family', 'family_id'),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    family_id: Mapped[str] = mapped_column(String(36))
+    remember: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class AIConversation(Base):
     """User-owned conversation metadata; model execution remains stateless."""
     __tablename__ = "ai_conversations"

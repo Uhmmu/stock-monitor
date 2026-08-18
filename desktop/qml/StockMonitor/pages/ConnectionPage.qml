@@ -101,15 +101,23 @@ Pane {
             }
             AppSwitch {
                 id: remember
-                text: "服务端延长会话（令牌仍仅保存在内存）"
+                text: "记住此设备（刷新令牌存入系统钥匙串）"
                 enabled: !page.session.busy
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: page.session.sessionOnly
+                text: "未检测到可用的系统钥匙串：令牌仅保存在内存中，退出后需重新登录。"
+                color: Theme.warning
+                font.pixelSize: Type.caption
+                wrapMode: Text.Wrap
             }
             AppButton {
                 id: loginButton
                 Layout.fillWidth: true
                 kind: "primary"
-                text: page.session.busy ? "登录中…" : "登录"
-                enabled: !page.session.busy
+                text: page.session.busy ? "登录中…" : (page.session.restoring ? "正在恢复会话…" : "登录")
+                enabled: !page.session.busy && !page.session.restoring
                 Accessible.name: text
                 onClicked: {
                     if (page.environment.setBaseUrl(baseUrl.text))

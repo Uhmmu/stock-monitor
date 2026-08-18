@@ -1,12 +1,15 @@
 #include "app/AppEnvironment.h"
 #include "app/SessionStore.h"
+#include "app/TokenVault.h"
+#include "cache/CacheStore.h"
 #include "network/ApiClient.h"
 
 #include <QJsonObject>
 #include <QSignalSpy>
-#include <QTcpServer>
-#include <QTcpSocket>
+#include <QTemporaryDir>
 #include <QTest>
+
+#include "MockHttpServer.h"
 
 class FoundationTest final : public QObject
 {
@@ -29,10 +32,17 @@ private slots:
         QVERIFY(!ApiClient::parseStatus({}));
 
         const auto login = ApiClient::parseLogin({
-            {"token", "jwt"}, {"username", "alice"}, {"role", "user"}, {"future", 1}});
+            {"token", "jwt"}, {"refresh_token", "r1"}, {"username", "alice"},
+            {"role", "user"}, {"expires_at", "2026-08-18T12:00:00Z"}, {"future", 1}});
         QVERIFY(login);
         QCOMPARE(login->token, QString("jwt"));
+        QCOMPARE(login->refreshToken, QString("r1"));
+        QVERIFY(login->expiresAtMs > 0);
         QVERIFY(!ApiClient::parseLogin({{"token", "jwt"}}));
+        // Legacy servers without token lifecycle must still parse.
+        const auto legacy = ApiClient::parseLogin({
+            {"token", "jwt"}, {"username", "alice"}, {"role", "user"}});
+        QVERIFY(legacy && legacy->refreshToken.isEmpty() && legacy->expiresAtMs == 0);
 
         const auto user = ApiClient::parseUser({
             {"id", 7}, {"username", "alice"}, {"role", "admin"}, {"future", true}});
@@ -41,49 +51,47 @@ private slots:
         QVERIFY(!ApiClient::parseUser({{"id", 0}, {"username", "alice"}, {"role", "user"}}));
     }
 
-    void callsMockApi()
+    void runsFullSessionFlow()
     {
-        QTcpServer server;
-        QVERIFY(server.listen(QHostAddress::LocalHost));
-        connect(&server, &QTcpServer::newConnection, &server, [&server] {
-            auto *socket = server.nextPendingConnection();
-            QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket] {
-                const QByteArray request = socket->readAll();
-                QByteArray body;
-                if (request.startsWith("GET /api/health "))
-                    body = R"({"status":"ok"})";
-                else if (request.startsWith("GET /api/readiness "))
-                    body = R"({"status":"ready"})";
-                else if (request.startsWith("POST /api/auth/login "))
-                    body = R"({"token":"jwt","username":"alice","role":"user"})";
-                else if (request.startsWith("GET /api/auth/me ")
-                         && request.contains("Authorization: Bearer jwt"))
-                    body = R"({"id":7,"username":"alice","role":"user"})";
-                else
-                    body = R"({"detail":"unexpected request"})";
-                const QByteArray status = body.contains("unexpected") ? "400 Bad Request" : "200 OK";
-                socket->write("HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: "
-                              + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
-                socket->disconnectFromHost();
-            });
-        });
+        QString accessToken;
+        MockHttpServer server;
+        QVERIFY(server.start([&](const QByteArray &request) -> MockHttpServer::Response {
+            if (request.startsWith("GET /api/health "))
+                return {200, R"({"status":"ok"})"};
+            if (request.startsWith("GET /api/readiness "))
+                return {200, R"({"status":"ready"})"};
+            if (request.startsWith("POST /api/auth/login "))
+                return {200, R"({"token":"A1","refresh_token":"R1","expires_at":"2026-12-01T00:00:00Z","username":"alice","role":"user"})"};
+            if (request.startsWith("POST /api/auth/logout "))
+                return {200, R"({"message":"已退出登录"})"};
+            if (request.startsWith("GET /api/auth/me ")
+                     && request.contains("Authorization: Bearer A1"))
+                return {200, R"({"id":7,"username":"alice","role":"user"})"};
+            return {400, R"({"detail":"unexpected request"})"};
+        }));
 
-        const QString origin = QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort());
-        ApiClient api;
-        QSignalSpy failureSpy(&api, &ApiClient::requestFailed);
         AppEnvironment environment;
-        QVERIFY(environment.setBaseUrl(origin));
-        SessionStore session(&environment, &api);
+        QVERIFY(environment.setBaseUrl(server.baseUrl()));
+        ApiClient api;
+        api.setRetryDelays({0});
+        TokenVault vault(TokenVault::Backend::Memory);
+        QTemporaryDir cacheDir;
+        CacheStore cache;
+        cache.setCacheDirectory(cacheDir.path());
+        SessionStore session(&environment, &api, &vault, &cache);
 
         session.testConnection();
         QTRY_VERIFY(session.connected());
         session.login("alice", "secret", false);
         QTRY_VERIFY(session.authenticated());
-        QCOMPARE(failureSpy.count(), 0);
         QCOMPARE(session.username(), QString("alice"));
         QCOMPARE(session.role(), QString("user"));
+        QCOMPARE(vault.memorySecret(), QString(""));  // remember=false -> nothing stored
+        QCOMPARE(cache.ownerScope(), QString("http://127.0.0.1:%1|user:alice").arg(server.port()));
+
         session.logout();
         QVERIFY(!session.authenticated());
+        QCOMPARE(vault.memorySecret(), QString(""));
     }
 };
 

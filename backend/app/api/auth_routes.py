@@ -3,12 +3,22 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.auth import create_token, get_admin_user, get_current_user, hash_password, verify_password
+from app.auth import (
+    access_token_expiry,
+    as_utc,
+    create_auth_session,
+    create_token,
+    get_admin_user,
+    get_current_user,
+    hash_password,
+    hash_refresh_token,
+    verify_password,
+)
 from app.database import get_db
-from app.models import User
+from app.models import AuthSession, User
 
 router = APIRouter(prefix='/api/auth')
 
@@ -100,6 +110,18 @@ class RegisterReq(BaseModel):
     password: str
 
 
+class RefreshReq(BaseModel):
+    refresh_token: str
+
+
+def _revoke_family(db: Session, family_id: str) -> None:
+    db.execute(
+        update(AuthSession)
+        .where(AuthSession.family_id == family_id, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+
+
 @router.get('/reddit/callback', response_class=HTMLResponse)
 def reddit_oauth_callback():
     return HTMLResponse(
@@ -117,7 +139,69 @@ def login(req: LoginReq, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_403_FORBIDDEN, '账号审核中，请等待管理员激活')
     if user.status != 'active':
         raise HTTPException(status.HTTP_403_FORBIDDEN, '账号已被禁用')
-    return {'token': create_token(user.id, req.remember), 'role': user.role, 'username': user.username}
+    refresh_token, _ = create_auth_session(db, user.id, req.remember)
+    db.commit()
+    # token/role/username 保持不变保证 Web 兼容；refresh_token/expires_at 为增量字段。
+    return {
+        'token': create_token(user.id, req.remember),
+        'refresh_token': refresh_token,
+        'expires_at': access_token_expiry(req.remember).isoformat(),
+        'role': user.role,
+        'username': user.username,
+    }
+
+
+@router.post('/refresh')
+def refresh(req: RefreshReq, db: Session = Depends(get_db)):
+    token_hash = hash_refresh_token(req.refresh_token)
+    session = db.scalar(select(AuthSession).where(AuthSession.token_hash == token_hash))
+    now = datetime.now(UTC)
+    if not session:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, '无效的刷新令牌')
+    if session.revoked_at is not None:
+        # Rotation reuse detected: revoke the whole family so a stolen old
+        # token cannot keep minting sessions.
+        _revoke_family(db, session.family_id)
+        db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, '刷新令牌已被撤销')
+    if as_utc(session.expires_at) <= now:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, '刷新令牌已过期')
+    user = db.get(User, session.user_id)
+    if not user or user.status != 'active':
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, '用户不存在或未激活')
+
+    session.revoked_at = now
+    session.last_used_at = now
+    new_refresh_token, _ = create_auth_session(db, user.id, session.remember, family_id=session.family_id)
+    db.commit()
+    return {
+        'token': create_token(user.id, session.remember),
+        'refresh_token': new_refresh_token,
+        'expires_at': access_token_expiry(session.remember).isoformat(),
+        'role': user.role,
+        'username': user.username,
+    }
+
+
+@router.post('/logout')
+def logout(req: RefreshReq, db: Session = Depends(get_db)):
+    token_hash = hash_refresh_token(req.refresh_token)
+    session = db.scalar(select(AuthSession).where(AuthSession.token_hash == token_hash))
+    if session and session.revoked_at is None:
+        session.revoked_at = datetime.now(UTC)
+        db.commit()
+    return {'message': '已退出登录'}
+
+
+@router.post('/sessions/revoke-all')
+def revoke_all_sessions(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    db.execute(
+        update(AuthSession)
+        .where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    db.commit()
+    return {'message': '已撤销全部刷新会话'}
 
 
 @router.post('/register', status_code=201)

@@ -1,0 +1,8 @@
+{
+  "token": "rotated-access-jwt",
+  "refresh_token": "rotated-refresh-token",
+  "expires_at": "2026-08-25T13:00:00.000000+00:00",
+  "role": "user",
+  "username": "alice",
+  "future_additive_field": null
+}
