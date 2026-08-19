@@ -1371,6 +1371,54 @@ def _vix_payload(db: Session, as_of: date | None) -> dict[str, Any]:
     })
 
 
+PRICE_HISTORY_SOURCES = ("fmp", "yahoo")
+
+
+def price_history_payload(db: Session, symbol: str, days: int = 180) -> dict[str, Any]:
+    """Database-only daily OHLC read model for mood-console charts (VIX and related symbols).
+
+    Preferred source (FMP) wins per date; the fallback source only fills missing dates,
+    so partial coverage on either side never drops days.
+    """
+    value = symbol.strip().upper()
+    if not value or len(value) > 32:
+        return {"symbol": value or symbol, "status": "invalid_symbol", "source": None, "candles": [], "as_of": None}
+    limit = max(30, min(int(days), 365))
+    by_date: dict[date, HistoricalPrice] = {}
+    source_used: str | None = None
+    for source in PRICE_HISTORY_SOURCES:
+        try:
+            rows = list(db.scalars(
+                select(HistoricalPrice)
+                .where(HistoricalPrice.symbol == value, HistoricalPrice.source == source)
+                .order_by(HistoricalPrice.date.desc())
+                .limit(limit)
+            ).all())
+        except Exception:
+            rows = []
+        for row in rows:
+            day = _date(row.date)
+            if day is not None and day not in by_date:
+                by_date[day] = row
+                source_used = source_used or source
+    candles = []
+    for day in sorted(by_date):
+        row = by_date[day]
+        open_, high, low = _num(row.open), _num(row.high), _num(row.low)
+        close = _num(row.close if row.close is not None else row.adjusted_close)
+        if None in (open_, high, low, close):
+            continue
+        candles.append({
+            "time": day.isoformat(), "open": open_, "high": high, "low": low,
+            "close": close, "volume": _num(row.volume),
+        })
+    return _safe({
+        "symbol": value, "status": "ready" if candles else "unavailable",
+        "source": source_used, "as_of": candles[-1]["time"] if candles else None,
+        "candles": candles,
+    })
+
+
 def mood_report_payload(db: Session) -> dict[str, Any]:
     rows = _latest_rows(db)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1444,4 +1492,5 @@ __all__ = [
     "CALCULATION_VERSION", "MOOD_CALCULATION_VERSION", "MOOD_STATES", "STATES", "SCOPE_TYPES", "DIVERGENCE_TYPES",
     "MoodSignal", "Signal", "aggregate_signals", "classify_mood_state", "classify_state", "calculate_divergences",
     "dedupe_news_rows", "sync_mood", "rebuild_mood_history", "latest_mood_payload", "mood_history_payload", "mood_report_payload",
+    "price_history_payload",
 ]

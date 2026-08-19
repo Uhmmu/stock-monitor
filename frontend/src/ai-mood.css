@@ -1,6 +1,7 @@
 .ai-mood-console,
 .ai-mood-report-content {
-  --ai-mood-card: color-mix(in srgb, var(--solid, #fff) 94%, var(--accent, #5967d9));
+  /* 与其他板块一致的灰色卡片底色（var(--solid)），不再混入 accent 蓝色。 */
+  --ai-mood-card: var(--solid, #fff);
   color: var(--ink, #10131a);
   display: grid;
   gap: 16px;
@@ -136,7 +137,11 @@
 .ai-mood-score-lockup { align-items: center; display: flex; gap: 12px; }
 .ai-mood-score-lockup strong { font-size: clamp(2.4rem, 7vw, 4.5rem); font-variant-numeric: tabular-nums; letter-spacing: -0.07em; line-height: 0.9; }
 .ai-mood-score-lockup span { color: var(--ink-3, #6d7481); font-size: 0.72rem; line-height: 1.45; }
-.ai-mood-vix { align-content: center; background: color-mix(in srgb, var(--warn, #c9892d) 9%, var(--solid, #fff)); border: 1px solid color-mix(in srgb, var(--warn, #c9892d) 24%, var(--line, #e3e6eb)); border-radius: 14px; display: grid; gap: 7px; padding: 16px; }
+.ai-mood-vix {
+  align-content: center; background: color-mix(in srgb, var(--warn, #c9892d) 9%, var(--solid, #fff)); border: 1px solid color-mix(in srgb, var(--warn, #c9892d) 24%, var(--line, #e3e6eb)); border-radius: 14px; color: inherit; cursor: pointer; display: grid; font: inherit; gap: 7px; padding: 16px; text-align: left; transition: border-color 160ms ease, transform 160ms ease;
+}
+.ai-mood-vix:hover,
+.ai-mood-vix:focus-visible { border-color: color-mix(in srgb, var(--warn, #c9892d) 48%, var(--line, #e3e6eb)); transform: translateY(-1px); }
 .ai-mood-vix > span,
 .ai-mood-vix small { color: var(--ink-4, #949aa5); font-size: 0.7rem; }
 .ai-mood-vix > div { align-items: baseline; display: flex; gap: 9px; }
@@ -146,6 +151,18 @@
 .ai-mood-vix em.negative { color: var(--down, #d25454); }
 .ai-mood-vix em.neutral { color: var(--ink-3, #6d7481); }
 .ai-mood-vix b { font-size: 0.8rem; }
+.ai-mood-vix-hint { color: var(--ink-3, #6d7481); font-weight: 650; }
+
+.ai-mood-score-change { border-radius: 8px; font-size: 0.88rem; font-style: normal; font-weight: 750; padding: 5px 8px; }
+.ai-mood-score-change.positive { background: color-mix(in srgb, var(--up, #1d9b67) 12%, transparent); color: var(--up, #1d9b67); }
+.ai-mood-score-change.negative { background: color-mix(in srgb, var(--down, #d25454) 11%, transparent); color: var(--down, #d25454); }
+.ai-mood-score-change.neutral { background: color-mix(in srgb, var(--ink-4, #949aa5) 12%, transparent); color: var(--ink-3, #6d7481); }
+
+.ai-mood-score-trend { border-top: 1px solid var(--line, #e3e6eb); margin-top: 18px; padding-top: 14px; }
+.ai-mood-score-trend-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: space-between; margin-bottom: 8px; }
+.ai-mood-score-trend-head > span { font-size: 0.8rem; font-weight: 750; }
+.ai-mood-score-trend-head > small { color: var(--ink-4, #949aa5); font-size: 0.7rem; }
+.ai-mood-trend-note { color: var(--ink-4, #949aa5); font-size: 0.69rem; margin: 10px 0 0; }
 
 .ai-mood-pill {
   align-items: center;
@@ -196,8 +213,57 @@
 .ai-mood-signal strong { font-size: 0.83rem; margin-top: 4px; }
 
 .ai-mood-participation { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-.ai-mood-participation span { background: color-mix(in srgb, var(--line, #e3e6eb) 52%, transparent); border-radius: 999px; color: var(--ink-3, #6d7481); font-size: 0.7rem; padding: 6px 9px; }
+.ai-mood-participation span,
+.ai-mood-participation button { background: color-mix(in srgb, var(--line, #e3e6eb) 52%, transparent); border: 1px solid transparent; border-radius: 999px; color: var(--ink-3, #6d7481); cursor: pointer; font: inherit; font-size: 0.7rem; padding: 6px 9px; }
 .ai-mood-participation b { color: var(--ink, #10131a); }
+.ai-mood-participation button:hover,
+.ai-mood-participation button:focus-visible { border-color: color-mix(in srgb, var(--accent, #5967d9) 40%, var(--line, #e3e6eb)); color: var(--ink, #10131a); }
+.ai-mood-participation span { cursor: default; }
+
+.ai-mood-breakdown { display: grid; gap: 10px; }
+.ai-mood-breakdown-list { display: grid; gap: 8px; }
+.ai-mood-breakdown-list button {
+  align-items: center; background: color-mix(in srgb, var(--solid, #fff) 75%, var(--line, #e3e6eb));
+  border: 1px solid transparent; border-radius: 11px; color: inherit; cursor: pointer; display: flex; font: inherit;
+  gap: 12px; justify-content: space-between; min-width: 0; padding: 12px; text-align: left;
+  transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+.ai-mood-breakdown-list button.static { cursor: default; opacity: .78; }
+.ai-mood-breakdown-list button:not(.static):hover,
+.ai-mood-breakdown-list button:not(.static):focus-visible { background: var(--solid, #fff); border-color: color-mix(in srgb, var(--accent, #5967d9) 42%, var(--line, #e3e6eb)); transform: translateY(-1px); }
+.ai-mood-breakdown-main { display: grid; gap: 3px; min-width: 0; }
+.ai-mood-breakdown-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-mood-breakdown-main small { color: var(--ink-4, #949aa5); font-size: 0.7rem; }
+.ai-mood-breakdown-message { color: var(--ink-3, #6d7481); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: normal; }
+.ai-mood-breakdown-side { align-items: flex-end; display: flex; flex-direction: column; gap: 4px; }
+.ai-mood-breakdown-side b { font-size: 0.86rem; }
+.ai-mood-breakdown-side small { color: var(--ink-4, #949aa5); font-size: 0.7rem; }
+.ai-mood-breakdown-note { color: var(--ink-4, #949aa5); font-size: 0.7rem; margin: 4px 0 0; }
+
+.ai-mood-symbol-groups { display: grid; gap: 14px; }
+.ai-mood-symbol-group h4 { align-items: baseline; display: flex; font-size: 0.78rem; gap: 8px; margin: 0 0 8px; }
+.ai-mood-symbol-group h4 small { color: var(--ink-4, #949aa5); font-size: 0.69rem; font-weight: 500; }
+.ai-mood-symbol-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.ai-mood-symbol-chips button {
+  background: color-mix(in srgb, var(--solid, #fff) 75%, var(--line, #e3e6eb)); border: 1px solid var(--line, #e3e6eb);
+  border-radius: 999px; color: var(--ink-2, #4e5663); cursor: pointer; font: inherit; font-size: 0.76rem;
+  font-weight: 700; letter-spacing: 0.02em; padding: 6px 11px;
+  transition: border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+.ai-mood-symbol-chips button:hover,
+.ai-mood-symbol-chips button:focus-visible { border-color: color-mix(in srgb, var(--accent, #5967d9) 42%, var(--line, #e3e6eb)); color: var(--ink, #10131a); transform: translateY(-1px); }
+
+.ai-mood-candle-chart { display: grid; gap: 12px; }
+.ai-mood-candle-meta { align-items: baseline; display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.ai-mood-candle-meta strong { font-size: 1.05rem; }
+.ai-mood-candle-meta span { color: var(--ink-3, #6d7481); font-size: 0.78rem; }
+.ai-mood-candle-meta b { color: var(--ink, #10131a); }
+.ai-mood-candle-meta em { font-size: 0.78rem; font-style: normal; font-weight: 750; }
+.ai-mood-candle-meta em.positive { color: var(--up, #1d9b67); }
+.ai-mood-candle-meta em.negative { color: var(--down, #d25454); }
+.ai-mood-candle-meta em.neutral { color: var(--ink-3, #6d7481); }
+.ai-mood-candle-meta small { color: var(--ink-4, #949aa5); font-size: 0.69rem; }
+.ai-mood-candle-canvas { border: 1px solid var(--line, #e3e6eb); border-radius: 12px; overflow: hidden; }
 
 .ai-mood-board-controls { align-items: center; flex-wrap: wrap; }
 .ai-mood-tabs { background: color-mix(in srgb, var(--line, #e3e6eb) 56%, transparent); border-radius: 10px; display: inline-flex; padding: 3px; }
@@ -363,7 +429,10 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ai-mood-spinner { animation: none; }
-  .ai-mood-row-card { transition: none; }
+  .ai-mood-row-card,
+  .ai-mood-vix,
+  .ai-mood-breakdown-list button,
+  .ai-mood-symbol-chips button { transition: none; }
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -377,6 +446,9 @@
   .ai-mood-tabs,
   .ai-mood-vix,
   .ai-mood-row-card,
+  .ai-mood-participation button,
+  .ai-mood-breakdown-list button,
+  .ai-mood-symbol-chips button,
   .ai-mood-state { border: 1px solid CanvasText; }
   .ai-mood-chart-line,
   .ai-mood-chart-point { stroke: CanvasText; }

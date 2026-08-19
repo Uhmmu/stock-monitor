@@ -199,6 +199,33 @@ def test_rebuild_uses_stored_dates_and_never_future_rows(db):
     assert all(item.trading_date <= date(2026, 1, 10) for item in db.query(MoodSnapshot).all())
 
 
+def test_price_history_prefers_fmp_and_reads_database_only(db):
+    from app.services.mood import price_history_payload
+
+    db.add_all(_bars("SMH", count=4, start=date(2026, 1, 1)))
+    db.add_all(_bars("^VIX", count=2, start=date(2026, 1, 5), slope=2))
+    # Duplicate dates from the fallback source must not shadow the preferred source.
+    db.add(HistoricalPrice(symbol="^VIX", date=date(2026, 1, 5), source="fmp", open=1, high=2, low=.5, close=1.5, adjusted_close=1.5, volume=None))
+    db.commit()
+
+    vix = price_history_payload(db, "^VIX", days=180)
+    assert vix["status"] == "ready"
+    assert vix["symbol"] == "^VIX"
+    assert [item["time"] for item in vix["candles"]] == ["2026-01-05", "2026-01-06"]
+    assert vix["candles"][0]["close"] == pytest.approx(1.5)
+    assert vix["candles"][0]["volume"] is None
+    assert vix["source"] == "fmp"
+
+    smh = price_history_payload(db, "smh")
+    assert smh["status"] == "ready" and smh["source"] == "yahoo" and len(smh["candles"]) == 4
+
+    missing = price_history_payload(db, "NOPE")
+    assert missing["status"] == "unavailable" and missing["candles"] == []
+
+    invalid = price_history_payload(db, " ")
+    assert invalid["status"] == "invalid_symbol"
+
+
 def test_mood_migration_round_trip_on_sqlite():
     path = Path(__file__).parents[1] / "alembic/versions/0059_ai_mood_engine.py"
     spec = importlib.util.spec_from_file_location("mood_migration", path)

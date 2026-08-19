@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.auth import get_admin_user, get_current_user
 from app.database import get_db
 from app.models import User
-from app.services.mood import latest_mood_payload, mood_history_payload, mood_report_payload
+from app.services.mood import latest_mood_payload, mood_history_payload, mood_report_payload, price_history_payload
 
 
 router = APIRouter(prefix="/api/mood", dependencies=[Depends(get_current_user)])
@@ -77,6 +77,18 @@ def mood_history_recovery(
     if result.get("status") == "REJECTED":
         raise HTTPException(409, result.get("reason") or "EOD snapshot already exists")
     return result
+
+
+@router.get("/price-history/{symbol}")
+def mood_price_history(
+    symbol: str,
+    days: int = Query(180, ge=30, le=365),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Database-only daily OHLC for mood-console charts (VIX, sector proxies). Never triggers upstream fetches."""
+
+    return price_history_payload(db, symbol, days=days)
 
 
 @router.get("/{scope_type}/{scope_key}")

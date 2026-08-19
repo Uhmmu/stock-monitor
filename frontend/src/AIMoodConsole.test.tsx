@@ -4,14 +4,18 @@ import {
   HistoryChart,
   MarketMoodCard,
   MoodBoard,
+  MoodDetailContent,
   MoodEmptyState,
   MoodLoadingState,
   MoodReportContent,
   MoodRow,
+  ParticipationBreakdown,
   filterMoodRows,
   formatPercentValue,
+  moodScoreChange,
   normalizeMoodRow,
   normalizeOverview,
+  normalizePriceCandles,
   sortMoodRows,
   stateLabel,
 } from './AIMoodConsole'
@@ -21,7 +25,7 @@ const row = (patch: Partial<MoodRow> = {}): MoodRow => ({
   state: 'strong', candidate_state: null, previous_state: 'neutral', direction: 'improving', phase: 'established', regime: 'risk_on',
   mood_score: 82, confidence: 0.8, quality: 0.9, coverage: 0.75, freshness_status: 'fresh', agreement_score: 0.7, agreement_level: '高共识',
   state_started_on: '2026-08-01', duration_sessions: 5, signals: { trend: 80 }, evidence: [], divergences: [], transition: null,
-  missing_sources: [], stale_sources: [], history: [], raw: {}, ...patch,
+  missing_sources: [], stale_sources: [], proxy_symbols: [], constituent_symbols: [], tracked_symbols: [], history: [], raw: {}, ...patch,
 })
 
 describe('AIMoodConsole normalization', () => {
@@ -112,6 +116,81 @@ describe('AIMoodConsole static states and history', () => {
     expect(markup).toContain('18.4')
     expect(markup).toContain('7</b> 行业改善')
     expect(markup).toContain('市场广度')
+  })
+
+  it('makes VIX and participation chips interactive and renders the daily trend line with change percent', () => {
+    const history = [
+      { date: '2026-08-14', as_of: null, mood_score: 60, state: 'neutral', direction: 'stable', phase: null, transition: null },
+      { date: '2026-08-17', as_of: null, mood_score: 66, state: 'improving', direction: 'up', phase: null, transition: null },
+    ]
+    const marketRow = row({ scope_type: 'market', scope_key: 'US', history })
+    const markup = renderToStaticMarkup(<MarketMoodCard row={marketRow} onOpenVix={() => {}} onParticipation={() => {}} />)
+    expect(markup).toContain('打开 VIX 恐慌指数日线图')
+    expect(markup).toContain('查看日线')
+    expect(markup).toContain('情绪分数日线')
+    expect(markup).toContain('+10.0%')
+    expect(markup).toContain('昨日 60 → 今日 66')
+    expect(markup).toContain('情绪分数历史趋势')
+    const buttons = markup.match(/<button/g) || []
+    expect(buttons.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('computes the day-over-day mood change only from real history', () => {
+    expect(moodScoreChange(row({ mood_score: 50 }), [{ date: '2026-08-14', as_of: null, mood_score: 50, state: null, direction: null, phase: null, transition: null }, { date: '2026-08-17', as_of: null, mood_score: 40, state: null, direction: null, phase: null, transition: null }])?.changePercent).toBeCloseTo(-20)
+    expect(moodScoreChange(row())).toBeNull()
+    expect(moodScoreChange(row({ history: [{ date: '2026-08-14', as_of: null, mood_score: 0, state: null, direction: null, phase: null, transition: null }, { date: '2026-08-17', as_of: null, mood_score: 5, state: null, direction: null, phase: null, transition: null }] }))).toBeNull()
+  })
+
+  it('normalizes related symbols from the input manifest', () => {
+    const normalized = normalizeMoodRow({
+      scope_type: 'sector', scope_key: 'chips', input_manifest: { proxy_symbols: ['SMH', 'SOXX'], constituent_symbols: ['NVDA', 'AMD'], symbols: ['SMH'] },
+    })
+    expect(normalized.proxy_symbols).toEqual(['SMH', 'SOXX'])
+    expect(normalized.constituent_symbols).toEqual(['NVDA', 'AMD'])
+    expect(normalized.tracked_symbols).toEqual(['SMH'])
+  })
+
+  it('renders ETF and constituent chips inside the detail sheet', () => {
+    const detailRow = row({ proxy_symbols: ['SMH'], constituent_symbols: ['NVDA', 'AMD'] })
+    const markup = renderToStaticMarkup(<MoodDetailContent detail={{ item: detailRow, history: [], status: 'ready', raw: {} }} onOpenSymbol={() => {}} />)
+    expect(markup).toContain('关联标的')
+    expect(markup).toContain('ETF 代理')
+    expect(markup).toContain('成分股')
+    expect(markup).toContain('>NVDA<')
+    expect(markup).toContain('查看 NVDA 日线')
+  })
+
+  it('surfaces an explicit gap when an industry has no mapped symbols', () => {
+    const markup = renderToStaticMarkup(<MoodDetailContent detail={{ item: row(), history: [], status: 'ready', raw: {} }} />)
+    expect(markup).toContain('数据不足：该对象暂无关联的个股或 ETF 映射')
+  })
+
+  it('lists concrete improving sectors and divergences in the participation breakdown', () => {
+    const improving = row({ scope_key: 'chips', name_zh: '半导体', direction: 'up', mood_score: 71 })
+    const flat = row({ scope_key: 'energy', name_zh: '能源', direction: 'flat', mood_score: 50 })
+    const improvingMarkup = renderToStaticMarkup(<ParticipationBreakdown kind="improving" sectors={[improving, flat]} divergences={[]} rowsByKey={new Map()} onSelect={() => {}} />)
+    expect(improvingMarkup).toContain('半导体')
+    expect(improvingMarkup).not.toContain('能源')
+    expect(improvingMarkup).toContain('行业方向由最新已存快照判定')
+    const rowsByKey = new Map([[`sector:chips`, improving]])
+    const divergenceMarkup = renderToStaticMarkup(<ParticipationBreakdown kind="divergences" sectors={[]} divergences={[{ scope_type: 'sector', scope_key: 'chips', type: 'PRICE_BREADTH', active: true, message: '价格与广度出现分歧。' }]} rowsByKey={rowsByKey} onSelect={() => {}} />)
+    expect(divergenceMarkup).toContain('半导体')
+    expect(divergenceMarkup).toContain('价格与广度出现分歧')
+    expect(divergenceMarkup).toContain('进行中')
+    const empty = renderToStaticMarkup(<ParticipationBreakdown kind="deteriorating" sectors={[improving, flat]} divergences={[]} rowsByKey={new Map()} onSelect={() => {}} />)
+    expect(empty).toContain('当前没有方向为走弱的行业')
+  })
+
+  it('normalizes price-history candles defensively', () => {
+    const candles = normalizePriceCandles([
+      { time: '2026-08-17', open: 18, high: 19, low: 17.5, close: 18.4, volume: null },
+      { time: '2026-08-14', open: 19, high: 19.5, low: 18, close: 19, volume: 120 },
+      { time: 'broken', open: 'x', high: 1, low: 1, close: 1 },
+      null,
+    ])
+    expect(candles.map(item => item.time)).toEqual(['2026-08-14', '2026-08-17'])
+    expect(candles[0].volume).toBe(120)
+    expect(candles[1].volume).toBeNull()
   })
 
   it('renders explicit empty and insufficient-history states', () => {
