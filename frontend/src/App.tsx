@@ -11,6 +11,7 @@ import { DiscoverySettingsPanel, OpportunityDiscovery } from './OpportunityDisco
 import { AdanosQuotaPanel, SentimentModule } from './Sentiment'
 import { InvestmentCalendar } from './InvestmentCalendar'
 import { OwnershipSection } from './Ownership'
+import { HistoricalPeSheet } from './HistoricalPeSheet'
 import { AIChatPage } from './features/ai-chat'
 import { InvestmentDecisionsPage } from './features/ai-memory'
 import { MarketSnapshot } from './MarketSnapshot'
@@ -755,6 +756,7 @@ const statementMetricInfo:Record<string,StatementMetric> = {
 
 function FundamentalsCenter({tickers,active,setActive,onOpenSec}:{tickers:string[];active:string;setActive:(ticker:string)=>void;onOpenSec:()=>void}) {
   const current = active||tickers[0]||''
+  const [peTicker,setPeTicker] = useState<string|null>(null)
   const fundamentals = useQuery({queryKey:['fundamentals',current],queryFn:()=>api<Fundamentals>(`/fundamentals?ticker=${current}`),enabled:!!current,staleTime:60_000})
   const financials = useQuery({queryKey:['financials',current],queryFn:()=>api<Financial[]>(`/financials?ticker=${current}`),enabled:!!current,staleTime:5*60_000})
   const secFinancials = useQuery({queryKey:['sec-financials',current],queryFn:()=>api<SecFin[]>(`/sec-financials?ticker=${current}`),enabled:!!current,staleTime:5*60_000})
@@ -784,13 +786,21 @@ function FundamentalsCenter({tickers,active,setActive,onOpenSec}:{tickers:string
     {!current&&<div className="empty">搜索并选择证券，临时查看基本面数据。</div>}
     {fundamentals.data&&<div className={`source-notice ${fundamentals.data.source_support.yahoo?'source-ok':'source-error'}`}><span><i aria-hidden="true"/>{fundamentals.data.source_support.yahoo?'Yahoo 实时基本面已连接':'Yahoo 基本面暂不可用'}</span><time>{formatDate(fundamentals.data.as_of)}</time>{!fundamentals.data.source_support.finnhub&&<small>Finnhub 仅作可选补充，不影响下方 Yahoo 数据。</small>}</div>}
     <div className="section-title"><h2>{current} 基本面指标</h2></div>
-    <div className="metric-grid">{fundamentals.data?.metrics.map(m=><div className="metric-card" key={m.label}><span>{m.label}</span><strong>{fmtMetric(m.value)}</strong>{m.source&&<em>{m.source==='yahoo'?'Yahoo':'Finnhub'}</em>}</div>)}{fundamentals.isError&&<div className="empty">基本面数据暂不可用。</div>}</div>
+    <div className="metric-grid">{fundamentals.data?.metrics.map(m=>m.label==='P/E'?(
+      <button type="button" className="metric-card metric-card-link" key={m.label} onClick={()=>setPeTicker(current)} title="查看历史市盈率" aria-label={`${current} 历史市盈率`}>
+        <span className="metric-label">P/E<svg className="metric-link-icon" viewBox="0 0 16 10" aria-hidden="true"><path d="M1 8.5 5 4l3 2.5L15 1" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
+        <strong>{fmtMetric(m.value)}</strong>{m.source&&<em>{m.source==='yahoo'?'Yahoo':'Finnhub'}</em>}
+      </button>
+    ):(
+      <div className="metric-card" key={m.label}><span>{m.label}</span><strong>{fmtMetric(m.value)}</strong>{m.source&&<em>{m.source==='yahoo'?'Yahoo':'Finnhub'}</em>}</div>
+    ))}{fundamentals.isError&&<div className="empty">基本面数据暂不可用。</div>}</div>
     <section className="fundamental-sec-preview"><div className="section-title"><div><p>SEC DISCLOSURES</p><h2>重要 SEC 公告</h2></div><button onClick={onOpenSec}>进入公告详情 <span>→</span></button></div>{secEvents.isLoading?<div className="empty">正在读取 SEC 公告…</div>:priorityEvents.length?<div className="priority-sec-list">{priorityEvents.map(event=><article className={`sec-${event.priority}`} key={event.id}><div><span className={`sec-prio ${event.priority}`}>{event.priority==='urgent'?'紧急':'重要'}</span><b>{event.item_label}</b><small>{event.form} · Item {event.item_code} · {event.filing_date||'日期未披露'}</small></div><em>来源：SEC EDGAR</em></article>)}</div>:<div className="empty">暂无紧急或重要 SEC 公告。</div>}</section>
     {!!current&&<OwnershipSection symbol={current}/>}
     <div className="section-title"><h2>分析师评级</h2></div>
     {r?<RatingGauge r={r}/>:<div className="empty">暂无分析师评级。</div>}
     <div className="section-title"><div><h2>近四季度财务数据</h2><small>Yahoo 与 SEC 同期数据并列；黄色表示两来源差异超过 1%。</small></div></div>
     <div className="table"><div className="table-head fin"><span>季度 / 来源</span><span>报告期</span><span>营收</span><span>净利润</span><span>营业利润</span><span>EPS</span><span>净利率</span><span>经营现金流</span></div>{compared.flatMap(([period,pair])=>{const sec=pair.sec&&secAsFinancial(pair.sec);return [pair.yahoo&&<div className="table-row fin" key={`${period}-yahoo`}><b>{period}<small className="source-badge">Yahoo</small></b><span>{pair.yahoo.period_end}</span>{financialCells(pair.yahoo,sec||undefined)}</div>,sec&&<div className="table-row fin" key={`${period}-sec`}><b>{period}<small className="source-badge sec">SEC EDGAR</small></b><span>{sec.period_end||'—'}</span>{financialCells(sec,pair.yahoo)}</div>]})}{!compared.length&&<div className="empty">暂无 Yahoo 或 SEC 财务数据。</div>}</div>
+    <HistoricalPeSheet ticker={peTicker} onClose={()=>setPeTicker(null)}/>
   </div>
 }
 

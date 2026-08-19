@@ -152,6 +152,8 @@ celery_app.conf.beat_schedule = {
     "sync-sec-events": {"task": "app.tasks.celery_app.sync_sec_events", "schedule": 21600},
     "sync-sec-insider": {"task": "app.tasks.celery_app.sync_sec_insider", "schedule": 21600},
     "sync-sec-financials": {"task": "app.tasks.celery_app.sync_sec_financials", "schedule": 43200},
+    # 历史估值（P/E）：SEC EPS facts 每季才新增，拆股偶发；每天一次足够，读取端永远只打数据库。
+    "sync-valuation-history": {"task": "app.tasks.celery_app.sync_valuation_history", "schedule": crontab(hour=5, minute=23)},
     # 13F 每季度才发布一次，每天跑一次即可（任务内部靠数据集内容判重，无新数据则空转）
     "sync-sec-13f": {"task": "app.tasks.celery_app.sync_sec_13f", "schedule": 86400},
     # 政客交易：按自选股拉相关交易（6h）；追踪名人全量交易+持仓叠加（12h）
@@ -1897,6 +1899,24 @@ def sync_sec_financials():
             total += _sync_ticker_sec_financials(db, ticker)
             db.commit()
         return {"tickers": len(tickers), "periods": total}
+
+
+@celery_app.task(name="app.tasks.celery_app.sync_valuation_history")
+def sync_valuation_history(tickers: list[str] | None = None):
+    """历史估值数据采集：SEC companyconcept EPS facts + yfinance 拆股 + FMP 深回填。
+
+    轻量 HTTP 任务（非 edgartools XBRL 解析），跑默认 worker 队列即可。
+    """
+    from app.services.valuation_history import sync_ticker_valuation_history
+
+    with SessionLocal() as db:
+        symbols = [t.upper() for t in (tickers or [])] or list(
+            db.scalars(select(WatchlistItem.ticker).where(WatchlistItem.enabled.is_(True))).all()
+        )
+        results = {}
+        for ticker in symbols:
+            results[ticker] = sync_ticker_valuation_history(db, ticker)
+        return {"tickers": len(symbols), "results": results}
 
 
 def _known_cusip_map(db) -> dict[str, str]:

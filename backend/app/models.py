@@ -845,6 +845,46 @@ class SecFinancialPeriod(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SecEpsFact(Base):
+    """SEC XBRL companyconcept 的 diluted EPS 事实（point-in-time）。
+
+    同一 (period_start, period_end) 会在多份 filing 里重复出现（原始 + 后续比较期），
+    这里只保留「首次公开」的那一条：eps 为首次披露值，first_filed 是其生效日期，
+    用于历史估值的 as-of join，杜绝 look-ahead bias。
+    """
+    __tablename__ = "sec_eps_facts"
+    __table_args__ = (
+        UniqueConstraint("ticker", "period_start", "period_end"),
+        Index("ix_sec_eps_facts_ticker_filed", "ticker", "first_filed"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    cik: Mapped[str] = mapped_column(String(10))
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date, index=True)
+    duration_days: Mapped[int] = mapped_column(Integer)
+    fiscal_year: Mapped[int | None] = mapped_column(Integer)
+    fiscal_period: Mapped[str | None] = mapped_column(String(16))
+    form: Mapped[str] = mapped_column(String(16))
+    accession_number: Mapped[str | None] = mapped_column(String(32))
+    first_filed: Mapped[date] = mapped_column(Date)
+    eps: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(32), default="sec_xbrl_companyconcept")
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class StockSplit(Base):
+    """拆股历史（yfinance 采集；FMP EOD 价格已是复权口径，用于把 as-reported EPS 换算到当前股本）。"""
+    __tablename__ = "stock_splits"
+    __table_args__ = (UniqueConstraint("symbol", "ex_date"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    ex_date: Mapped[date] = mapped_column(Date)
+    ratio: Mapped[float] = mapped_column(Float)  # 1 旧股 = ratio 新股
+    source: Mapped[str] = mapped_column(String(16), default="yfinance")
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SecInsiderTrade(Base):
     """Form 4 内部人交易（edgartools 抽取，一份 Form 4 多笔交易各一行）。"""
     __tablename__ = "sec_insider_trades"

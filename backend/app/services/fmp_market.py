@@ -216,12 +216,12 @@ def _decimal(value: Any) -> Decimal | None:
 
 
 def parse_history(
-    payload: Any, symbol: str, *, today: date | None = None
+    payload: Any, symbol: str, *, today: date | None = None, min_date: date | None = None
 ) -> list[dict]:
     rows = payload.get("historical") if isinstance(payload, dict) else payload
     if not isinstance(rows, list):
         raise FmpMalformedResponse("historical response is not a list")
-    cutoff = (today or datetime.now(UTC).date()) - timedelta(days=5 * 366 + 10)
+    cutoff = min_date or (today or datetime.now(UTC).date()) - timedelta(days=5 * 366 + 10)
     unique: dict[date, dict] = {}
     for raw in rows:
         if not isinstance(raw, dict):
@@ -433,6 +433,7 @@ def sync_history(
     config: Settings | None = None,
     now: datetime | None = None,
     http_get: Callable[..., Any] = httpx.get,
+    min_from: date | None = None,
 ) -> dict:
     config, now = config or get_settings(), now or datetime.now(UTC)
     latest = db.scalar(
@@ -444,7 +445,11 @@ def sync_history(
         .limit(1)
     )
     params = {}
-    if latest:
+    if min_from is not None and (latest is None or min_from < latest - timedelta(days=14)):
+        # 深回填：库内历史不够早时，显式从更早日期整段重拉。
+        params["from"] = min_from.isoformat()
+        params["to"] = now.date().isoformat()
+    elif latest:
         params["from"] = (latest - timedelta(days=14)).isoformat()
         params["to"] = now.date().isoformat()
     payload = request_json(
@@ -456,7 +461,7 @@ def sync_history(
         now=now,
         http_get=http_get,
     )
-    rows = parse_history(payload, symbol, today=now.date())
+    rows = parse_history(payload, symbol, today=now.date(), min_date=min_from)
     total, changed = upsert_history(db, rows)
     newest = rows[-1]["date"] if rows else latest
     db.commit()

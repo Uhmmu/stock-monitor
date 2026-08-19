@@ -1201,6 +1201,46 @@ def fundamentals(ticker: str = Query(...), db: Session = Depends(get_db)):
             "source_support": {"yahoo": yahoo_available, "finnhub": finnhub_available}}
 
 
+@router.get("/valuation/history")
+def valuation_history(
+    ticker: str = Query(...),
+    range: str = Query("5y"),
+    metric: str = Query("pe"),
+    db: Session = Depends(get_db),
+):
+    """Historical P/E：库内日收盘 × point-in-time TTM diluted EPS（SEC XBRL）。
+
+    读取端纯打数据库；首次遇到无 EPS facts 的股票时排队一次采集并返回 syncing。
+    """
+    if metric != "pe":
+        raise HTTPException(422, "目前仅支持 metric=pe")
+    value = _require_watched_ticker(db, ticker, "fundamentals")
+    if range not in ("3y", "5y", "10y", "max"):
+        raise HTTPException(422, "range 必须是 3y/5y/10y/max")
+
+    from app.services.valuation_history import pe_history_payload
+
+    try:
+        payload = pe_history_payload(db, value, range)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    if payload.get("status") == "no_eps_data":
+        payload["status"] = "syncing"
+        # Redis 去重：同一股票一小时内只排队一次采集；Redis 不可用时仍然排队（任务幂等）。
+        try:
+            import redis
+
+            client = redis.Redis.from_url(get_settings().redis_url)
+            first_request = bool(client.set(f"valuation-history:requested:{value}", "1", nx=True, ex=3600))
+        except Exception:
+            first_request = True
+        if first_request:
+            from app.tasks.celery_app import sync_valuation_history
+
+            sync_valuation_history.delay([value])
+    return payload
+
+
 @router.get("/sec-filings")
 def sec_filings(ticker: str = Query(...), db: Session = Depends(get_db)):
     value = _require_watched_ticker(db, ticker, "sec|fundamentals")
