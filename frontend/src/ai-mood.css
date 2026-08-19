@@ -158,11 +158,20 @@
 .ai-mood-score-change.negative { background: color-mix(in srgb, var(--down, #d25454) 11%, transparent); color: var(--down, #d25454); }
 .ai-mood-score-change.neutral { background: color-mix(in srgb, var(--ink-4, #949aa5) 12%, transparent); color: var(--ink-3, #6d7481); }
 
-.ai-mood-score-trend { border-top: 1px solid var(--line, #e3e6eb); margin-top: 18px; padding-top: 14px; }
-.ai-mood-score-trend-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: space-between; margin-bottom: 8px; }
-.ai-mood-score-trend-head > span { font-size: 0.8rem; font-weight: 750; }
-.ai-mood-score-trend-head > small { color: var(--ink-4, #949aa5); font-size: 0.7rem; }
-.ai-mood-trend-note { color: var(--ink-4, #949aa5); font-size: 0.69rem; margin: 10px 0 0; }
+.ai-mood-sparkline {
+  align-items: center; background: color-mix(in srgb, var(--line, #e3e6eb) 40%, transparent); border: 1px solid transparent;
+  border-radius: 10px; cursor: pointer; display: inline-flex; flex: 0 0 auto; gap: 8px; justify-content: center;
+  padding: 5px 8px; transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+.ai-mood-sparkline:hover,
+.ai-mood-sparkline:focus-visible { background: color-mix(in srgb, var(--solid, #fff) 70%, var(--line, #e3e6eb)); border-color: color-mix(in srgb, var(--accent, #5967d9) 42%, var(--line, #e3e6eb)); transform: translateY(-1px); }
+.ai-mood-sparkline svg { display: block; height: 44px; overflow: visible; width: 132px; }
+.ai-mood-sparkline-line { fill: none; stroke: var(--accent, #5967d9); stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
+.ai-mood-sparkline-baseline { stroke: var(--line, #e3e6eb); stroke-dasharray: 3 4; stroke-width: 1.5; }
+.ai-mood-sparkline-dot { fill: var(--solid, #fff); stroke: var(--accent, #5967d9); stroke-width: 2; }
+.ai-mood-sparkline-dot.positive { stroke: var(--up, #1d9b67); }
+.ai-mood-sparkline-dot.negative { stroke: var(--down, #d25454); }
+.ai-mood-sparkline.empty small { color: var(--ink-4, #949aa5); font-size: 0.66rem; }
 
 .ai-mood-pill {
   align-items: center;
@@ -404,6 +413,7 @@
   .ai-mood-window-metrics,
   .ai-mood-detail-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ai-mood-market-hero { grid-template-columns: 1fr; }
+  .ai-mood-score-lockup { flex-wrap: wrap; }
   .ai-mood-board-grid,
   .ai-mood-analysis-grid,
   .ai-mood-evidence-groups,
@@ -431,6 +441,7 @@
   .ai-mood-spinner { animation: none; }
   .ai-mood-row-card,
   .ai-mood-vix,
+  .ai-mood-sparkline,
   .ai-mood-breakdown-list button,
   .ai-mood-symbol-chips button { transition: none; }
 }
@@ -449,7 +460,10 @@
   .ai-mood-participation button,
   .ai-mood-breakdown-list button,
   .ai-mood-symbol-chips button,
+  .ai-mood-sparkline,
   .ai-mood-state { border: 1px solid CanvasText; }
   .ai-mood-chart-line,
-  .ai-mood-chart-point { stroke: CanvasText; }
+  .ai-mood-chart-point,
+  .ai-mood-sparkline-line,
+  .ai-mood-sparkline-dot { stroke: CanvasText; }
 }

@@ -4,6 +4,7 @@ import {
   CandlestickSeries,
   ColorType,
   HistogramSeries,
+  LineSeries,
   createChart,
   type CandlestickData,
   type IChartApi,
@@ -574,6 +575,118 @@ export function moodScoreChange(row: MoodRow | null, history: MoodHistoryPoint[]
   return { latest, previous, changePercent: ((latest - previous) / Math.abs(previous)) * 100 }
 }
 
+export type MoodLinePoint = { time: string; value: number }
+
+/** Deduplicated, date-sorted (date, score) pairs for sparklines and line charts. */
+export function normalizeMoodLineData(history: MoodHistoryPoint[]): MoodLinePoint[] {
+  const seen = new Map<string, number>()
+  history.forEach(point => {
+    const time = point.date || point.as_of
+    const value = asNumber(point.mood_score)
+    if (time && value != null) seen.set(time, value)
+  })
+  return [...seen.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([time, value]) => ({ time, value }))
+}
+
+/** Compact static sparkline beside the mood score; click opens the full TradingView line chart. */
+export function MoodSparkline({ row, history = [], change, onOpen }: {
+  row: MoodRow | null
+  history?: MoodHistoryPoint[]
+  change?: MoodScoreChange | null
+  onOpen?: () => void
+}) {
+  const points = normalizeMoodLineData(historyPoints(row, history))
+  const width = 132
+  const height = 44
+  const pad = 5
+  const summary = change
+    ? `昨日 ${formatMoodValue(change.previous)} → 今日 ${formatMoodValue(change.latest)}（${change.changePercent > 0 ? '+' : ''}${change.changePercent.toFixed(1)}%）· 点击查看情绪分数日线`
+    : '点击查看情绪分数日线'
+  if (points.length < 2) {
+    return <button className="ai-mood-sparkline empty" type="button" onClick={onOpen} title={summary} aria-label={summary}>
+      <svg viewBox={`0 0 ${width} ${height}`} aria-hidden="true" focusable="false"><path className="ai-mood-sparkline-baseline" d={`M ${pad} ${height / 2} H ${width - pad}`} /></svg>
+      <small>历史不足</small>
+    </button>
+  }
+  const values = points.map(point => point.value)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const span = max - min || 1
+  const x = (index: number) => pad + (index / (points.length - 1)) * (width - pad * 2)
+  const y = (value: number) => height - pad - ((value - min) / span) * (height - pad * 2)
+  const path = points.map((point, index) => `${index ? 'L' : 'M'} ${x(index).toFixed(1)} ${y(point.value).toFixed(1)}`).join(' ')
+  const last = points.at(-1)!
+  const tone = change ? change.changePercent > 0 ? 'positive' : change.changePercent < 0 ? 'negative' : 'neutral' : 'neutral'
+  return <button className="ai-mood-sparkline" type="button" onClick={onOpen} title={summary} aria-label={summary}>
+    <svg viewBox={`0 0 ${width} ${height}`} aria-hidden="true" focusable="false">
+      <path className="ai-mood-sparkline-line" d={path} />
+      <circle className={`ai-mood-sparkline-dot ${tone}`} cx={x(points.length - 1)} cy={y(last.value)} r="3.2" />
+    </svg>
+  </button>
+}
+
+/** TradingView Lightweight Charts line chart for the mood-score daily series. */
+export function MoodLineChart({ history, label = '美股市场情绪分数', height = 380 }: { history: MoodHistoryPoint[]; label?: string; height?: number }) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => getResolvedTheme())
+  useEffect(() => subscribeTheme(setThemeMode), [])
+  const data = useMemo(() => normalizeMoodLineData(history), [history])
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host || data.length < 2) return
+    let chart: IChartApi | null = null
+    try {
+      const tokens = chartThemeTokens()
+      chart = createChart(host, {
+        width: host.clientWidth,
+        height,
+        layout: {
+          background: { type: ColorType.Solid, color: tokens.background },
+          textColor: tokens.text,
+          fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Text','Noto Sans SC',sans-serif",
+        },
+        grid: { vertLines: { color: tokens.grid }, horzLines: { color: tokens.grid } },
+        rightPriceScale: { borderColor: tokens.border, scaleMargins: { top: .14, bottom: .08 } },
+        timeScale: { borderColor: tokens.border, rightOffset: 3, barSpacing: 8, minBarSpacing: 3, timeVisible: false },
+        localization: { locale: 'zh-CN' },
+      })
+      const line = chart.addSeries(LineSeries, {
+        color: tokens.accent, lineWidth: 2, priceLineVisible: true, priceLineColor: tokens.priceLine,
+        crosshairMarkerVisible: true,
+      })
+      line.setData(data.map(point => ({ time: point.time, value: point.value })))
+      chart.timeScale().fitContent()
+      const observer = new ResizeObserver(entries => {
+        const width = entries[0]?.contentRect.width
+        if (width) chart?.applyOptions({ width })
+      })
+      observer.observe(host)
+      return () => {
+        observer.disconnect()
+        chart?.remove()
+      }
+    } catch {
+      chart?.remove()
+    }
+  }, [data, height, themeMode])
+  const latest = data.at(-1)
+  const previous = data.at(-2)
+  const changePercent = latest && previous && previous.value !== 0 ? ((latest.value - previous.value) / Math.abs(previous.value)) * 100 : null
+  return <section className="ai-mood-candle-chart" aria-label="情绪分数日线图">
+    <div className="ai-mood-candle-meta">
+      <strong>{label}</strong>
+      {latest && <span>{latest.time} 分数 <b>{formatMoodValue(latest.value)}</b></span>}
+      {changePercent != null && <em className={changePercent > 0 ? 'positive' : changePercent < 0 ? 'negative' : 'neutral'}>{changePercent > 0 ? '+' : ''}{changePercent.toFixed(1)}%</em>}
+      <small>{data.length ? `${data.length} 个交易日 · 来自已存情绪快照` : null}</small>
+    </div>
+    {data.length < 2
+      ? <div className="ai-mood-history-empty">历史分数不足两个交易日，暂不能形成日线。</div>
+      : <div className="ai-mood-candle-canvas" ref={hostRef} role="img" aria-label="情绪分数日线" style={{ height }} />}
+  </section>
+}
+
 function toneForState(value: string | null): string {
   if (includesAny(value, ['risk_off', 'panic', 'weak', 'deterior', 'breakdown', 'distribution', 'trending_down', 'falling', 'cooling'])) return 'negative'
   if (includesAny(value, ['risk_on', 'strong', 'lead', 'expansion', 'accumulation', 'trending_up', 'improv', 'rising', 'heating', 'constructive'])) return 'positive'
@@ -607,11 +720,12 @@ const VIX_LABELS: Record<string, string> = { low: '低波动', normal: '常态',
 
 export type ParticipationKind = 'improving' | 'deteriorating' | 'divergences'
 
-export function MarketMoodCard({ row, window, onOpenVix, onParticipation }: {
+export function MarketMoodCard({ row, window, onOpenVix, onParticipation, onOpenTrend }: {
   row: MoodRow | null
   window?: MarketWindow
   onOpenVix?: () => void
   onParticipation?: (kind: ParticipationKind) => void
+  onOpenTrend?: () => void
 }) {
   if (!row) return <article className="ai-mood-market-card ai-mood-muted-card"><p className="ai-mood-eyebrow">MARKET MOOD</p><h2>市场状态暂缺</h2><p>当前范围没有足够来源形成确定结论。</p></article>
   window ||= normalizeMarketWindow(row.raw.market_window)
@@ -619,14 +733,11 @@ export function MarketMoodCard({ row, window, onOpenVix, onParticipation }: {
   const vixChange = asNumber(window?.vix.change_percent)
   const categories = window?.category_scores || {}
   const change = moodScoreChange(row)
-  const trendPoints = historyPoints(row)
   const changeTone = change ? change.changePercent > 0 ? 'positive' : change.changePercent < 0 ? 'negative' : 'neutral' : 'neutral'
   return <article className="ai-mood-market-card">
-    <div className="ai-mood-market-hero"><div className="ai-mood-market-primary"><div className="ai-mood-card-heading"><div><p className="ai-mood-eyebrow">MARKET OVERVIEW</p><h2>美股市场总览</h2></div><DataStatus row={row} /></div><p className="ai-mood-market-summary">市场处于「{stateLabel(row.state)}」，VIX 为{vixRegime}；{window?.participation.tracked ? `${window.participation.improving} 个行业改善、${window.participation.deteriorating} 个走弱。` : '行业参与度暂不足。'}</p><div className="ai-mood-score-lockup"><strong>{formatMoodValue(row.mood_score)}</strong>{change && <em className={`ai-mood-score-change ${changeTone}`} title="情绪分数较上一交易日的百分比变化">{change.changePercent > 0 ? '+' : ''}{change.changePercent.toFixed(1)}%</em>}<span>情绪分数<br />置信 {formatPercentValue(row.confidence)}</span></div></div><button className="ai-mood-vix" type="button" onClick={() => onOpenVix?.()} aria-label="打开 VIX 恐慌指数日线图"><span>VIX 恐慌指数</span><div><strong>{formatMoodValue(window?.vix.value)}</strong>{vixChange != null && <em className={vixChange > 0 ? 'negative' : vixChange < 0 ? 'positive' : 'neutral'}>{vixChange > 0 ? '+' : ''}{vixChange.toFixed(1)}%</em>}</div><b>{vixRegime}</b><small>{window?.vix.as_of ? `截至 ${window.vix.as_of}` : '更新时间暂缺'}</small><small className="ai-mood-vix-hint">查看日线 ›</small></button></div>
-    <div className="ai-mood-score-trend"><div className="ai-mood-score-trend-head"><span>情绪分数日线</span>{change && <small>昨日 {formatMoodValue(change.previous)} → 今日 {formatMoodValue(change.latest)} · 较上一交易日 {change.changePercent > 0 ? '+' : ''}{change.changePercent.toFixed(1)}%</small>}{!change && <small>需要至少两个交易日才能计算变化</small>}</div><HistoryChart row={row} /></div>
+    <div className="ai-mood-market-hero"><div className="ai-mood-market-primary"><div className="ai-mood-card-heading"><div><p className="ai-mood-eyebrow">MARKET OVERVIEW</p><h2>美股市场总览</h2></div><DataStatus row={row} /></div><p className="ai-mood-market-summary">市场处于「{stateLabel(row.state)}」，VIX 为{vixRegime}；{window?.participation.tracked ? `${window.participation.improving} 个行业改善、${window.participation.deteriorating} 个走弱。` : '行业参与度暂不足。'}</p><div className="ai-mood-score-lockup"><strong>{formatMoodValue(row.mood_score)}</strong>{change && <em className={`ai-mood-score-change ${changeTone}`} title="情绪分数较上一交易日的百分比变化">{change.changePercent > 0 ? '+' : ''}{change.changePercent.toFixed(1)}%</em>}<span>情绪分数<br />置信 {formatPercentValue(row.confidence)}</span><MoodSparkline row={row} change={change} onOpen={onOpenTrend} /></div></div><button className="ai-mood-vix" type="button" onClick={() => onOpenVix?.()} aria-label="打开 VIX 恐慌指数日线图"><span>VIX 恐慌指数</span><div><strong>{formatMoodValue(window?.vix.value)}</strong>{vixChange != null && <em className={vixChange > 0 ? 'negative' : vixChange < 0 ? 'positive' : 'neutral'}>{vixChange > 0 ? '+' : ''}{vixChange.toFixed(1)}%</em>}</div><b>{vixRegime}</b><small>{window?.vix.as_of ? `截至 ${window.vix.as_of}` : '更新时间暂缺'}</small><small className="ai-mood-vix-hint">查看日线 ›</small></button></div>
     <dl className="ai-mood-window-metrics"><OverviewMetric label="市场广度" value={formatMoodValue(firstNumber(categories.breadth))} /><OverviewMetric label="期权定价" value={formatMoodValue(firstNumber(categories.options))} /><OverviewMetric label="新闻情绪" value={formatMoodValue(firstNumber(categories.news))} /><OverviewMetric label="数据覆盖" value={formatPercentValue(window?.coverage ?? row.coverage)} /></dl>
     <div className="ai-mood-participation"><button type="button" onClick={() => onParticipation?.('improving')}><b>{window?.participation.improving || 0}</b> 行业改善</button><button type="button" onClick={() => onParticipation?.('deteriorating')}><b>{window?.participation.deteriorating || 0}</b> 行业走弱</button><button type="button" onClick={() => onParticipation?.('divergences')}><b>{window?.active_divergences || 0}</b> 个有效分歧</button><span><b>{row.agreement_level || formatPercentValue(row.agreement_score)}</b> 市场共识</span></div>
-    {trendPoints.length > 0 && <p className="ai-mood-trend-note">走势覆盖 {trendPoints.length} 个交易日，数据来自已存情绪快照，不在打开页面时重新计算。</p>}
   </article>
 }
 
@@ -905,6 +1016,7 @@ export function AIMoodConsole({ enabled = true, onAskAI }: { enabled?: boolean; 
   const [sort, setSort] = useState<MoodSort>('strongest')
   const [selected, setSelected] = useState<MoodRow | null>(null)
   const [vixOpen, setVixOpen] = useState(false)
+  const [trendOpen, setTrendOpen] = useState(false)
   const [breakdown, setBreakdown] = useState<ParticipationKind | null>(null)
   const [chartSymbol, setChartSymbol] = useState<{ symbol: string; label: string } | null>(null)
   const overviewQuery = useQuery({
@@ -919,6 +1031,14 @@ export function AIMoodConsole({ enabled = true, onAskAI }: { enabled?: boolean; 
     queryKey: ['mood', 'detail', selected?.scope_type, selected?.scope_key, range],
     queryFn: () => api<unknown>(`/mood/${encodeURIComponent(selected!.scope_type)}/${encodeURIComponent(selected!.scope_key)}?range=${range}`),
     enabled: enabled && Boolean(selected?.scope_type && selected?.scope_key),
+    staleTime: 60_000,
+    retry: 1,
+  })
+  const trendScopeKey = overview?.market?.scope_key || 'US'
+  const trendQuery = useQuery({
+    queryKey: ['mood', 'detail', 'market', trendScopeKey, '180'],
+    queryFn: () => api<unknown>(`/mood/market/${encodeURIComponent(trendScopeKey)}?range=180`),
+    enabled: enabled && trendOpen,
     staleTime: 60_000,
     retry: 1,
   })
@@ -940,7 +1060,7 @@ export function AIMoodConsole({ enabled = true, onAskAI }: { enabled?: boolean; 
   if (overviewQuery.isError) return <MoodErrorState />
   if (!overview) return <MoodEmptyState />
   const partial = overview.status !== 'ready' || !overview.market || (!overview.sectors.length && !overview.industries.length)
-  return <section className="ai-mood-console" aria-label="AI 市场情绪控制台"><div className="ai-mood-console-head"><div><p className="ai-mood-eyebrow">AI MOOD CONSOLE</p><h1>市场情绪控制台</h1><p>状态、证据、分歧和变化轨迹集中呈现。</p></div><div className="ai-mood-head-actions"><label><span>观察范围</span><select value={range} onChange={event => setRange(event.target.value as MoodRange)}>{rangeOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><small>{overview.as_of ? `截至 ${overview.as_of}` : '更新时间暂缺'}{overview.calculation_version ? ` · ${overview.calculation_version}` : ''}</small></div></div>{partial && <div className="ai-mood-notice" role="status">部分数据可用{overview.limitations.length ? ` · ${overview.limitations[0]}` : ' · 当前快照覆盖有限'}</div>}<MarketMoodCard row={overview.market} onOpenVix={() => setVixOpen(true)} onParticipation={kind => setBreakdown(kind)} /><div className="ai-mood-board-controls"><div className="ai-mood-tabs" role="tablist" aria-label="情绪对象"><button type="button" className={board === 'sectors' ? 'active' : ''} onClick={() => setBoard('sectors')}>行业</button><button type="button" className={board === 'ai_chain' ? 'active' : ''} onClick={() => setBoard('ai_chain')}>AI 链</button><button type="button" className={board === 'watchlist' ? 'active' : ''} onClick={() => setBoard('watchlist')}>自选股</button></div><div className="ai-mood-filter-row"><label><span>筛选</span><select value={filter} onChange={event => setFilter(event.target.value as MoodFilter)}><option value="all">全部</option><option value="improving">改善</option><option value="deteriorating">走弱</option><option value="confidence">高置信</option><option value="divergent">分歧</option><option value="crowded">拥挤</option></select></label><label><span>排序</span><select value={sort} onChange={event => setSort(event.target.value as MoodSort)}><option value="strongest">最强</option><option value="improving">改善</option><option value="deteriorating">走弱</option><option value="confidence">置信度</option><option value="divergent">分歧</option><option value="crowded">拥挤</option></select></label></div></div><MoodBoard rows={boardRows} onSelect={setSelected} title={board === 'sectors' ? '行业情绪' : board === 'ai_chain' ? 'AI 产业链情绪' : '自选股情绪'} />{(overview.divergences.length || overview.transitions.length) > 0 && <section className="ai-mood-analysis"><div className="ai-mood-section-heading"><div><p className="ai-mood-eyebrow">ANALYSIS</p><h2>分歧与变化</h2></div></div><div className="ai-mood-analysis-grid">{overview.divergences.slice(0, 6).map((item, index) => <article key={`divergence-${index}`}><span>分歧</span><p>{divergenceText(item)}</p></article>)}{overview.transitions.slice(0, 6).map((item, index) => <article key={`transition-${index}`}><span>变化</span><p>{objectLabel(item)}</p></article>)}</div></section>}<section className="ai-mood-movers"><div className="ai-mood-section-heading"><div><p className="ai-mood-eyebrow">MOVERS</p><h2>近期变化</h2></div></div><div className="ai-mood-mover-grid"><MoverList title="改善" values={overview.movers.improving || overview.movers.improvers || []} onSelect={setSelected} /><MoverList title="走弱" values={overview.movers.deteriorating || []} onSelect={setSelected} /><MoverList title="新领涨" values={overview.movers.new_leadership || []} onSelect={setSelected} /><MoverList title="新拥挤" values={overview.movers.new_crowded || []} onSelect={setSelected} /></div></section><Sheet open={Boolean(selected)} onClose={() => setSelected(null)} title={selected ? `${selected.name_zh || selected.name} · 情绪详情` : undefined} size="wide">{detailQuery.isLoading ? <MoodLoadingState /> : detailQuery.isError ? <MoodErrorState message="详情暂时无法读取。" /> : detail ? <MoodDetailContent detail={detail} onAskAI={onAskAI} onOpenSymbol={symbol => setChartSymbol({ symbol, label: symbol })} /> : <MoodEmptyState />}</Sheet><Sheet open={vixOpen} onClose={() => setVixOpen(false)} title="VIX 恐慌指数 · 日线" size="wide">{vixOpen && <SymbolCandleChart symbol="^VIX" label="VIX 恐慌指数" invertTone />}</Sheet><Sheet open={Boolean(breakdown)} onClose={() => setBreakdown(null)} title={breakdown ? `${BREAKDOWN_TITLES[breakdown].title} · 具体行业` : undefined} size="wide">{breakdown && overview ? <ParticipationBreakdown kind={breakdown} sectors={overview.sectors} divergences={overview.divergences} rowsByKey={rowsByKey} onSelect={row => { setBreakdown(null); setSelected(row) }} /> : <MoodEmptyState />}</Sheet><Sheet open={Boolean(chartSymbol)} onClose={() => setChartSymbol(null)} title={chartSymbol ? `${chartSymbol.label} · 日线` : undefined} size="wide">{chartSymbol && <SymbolCandleChart symbol={chartSymbol.symbol} label={chartSymbol.label} />}</Sheet></section>
+  return <section className="ai-mood-console" aria-label="AI 市场情绪控制台"><div className="ai-mood-console-head"><div><p className="ai-mood-eyebrow">AI MOOD CONSOLE</p><h1>市场情绪控制台</h1><p>状态、证据、分歧和变化轨迹集中呈现。</p></div><div className="ai-mood-head-actions"><label><span>观察范围</span><select value={range} onChange={event => setRange(event.target.value as MoodRange)}>{rangeOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><small>{overview.as_of ? `截至 ${overview.as_of}` : '更新时间暂缺'}{overview.calculation_version ? ` · ${overview.calculation_version}` : ''}</small></div></div>{partial && <div className="ai-mood-notice" role="status">部分数据可用{overview.limitations.length ? ` · ${overview.limitations[0]}` : ' · 当前快照覆盖有限'}</div>}<MarketMoodCard row={overview.market} onOpenVix={() => setVixOpen(true)} onParticipation={kind => setBreakdown(kind)} onOpenTrend={() => setTrendOpen(true)} /><div className="ai-mood-board-controls"><div className="ai-mood-tabs" role="tablist" aria-label="情绪对象"><button type="button" className={board === 'sectors' ? 'active' : ''} onClick={() => setBoard('sectors')}>行业</button><button type="button" className={board === 'ai_chain' ? 'active' : ''} onClick={() => setBoard('ai_chain')}>AI 链</button><button type="button" className={board === 'watchlist' ? 'active' : ''} onClick={() => setBoard('watchlist')}>自选股</button></div><div className="ai-mood-filter-row"><label><span>筛选</span><select value={filter} onChange={event => setFilter(event.target.value as MoodFilter)}><option value="all">全部</option><option value="improving">改善</option><option value="deteriorating">走弱</option><option value="confidence">高置信</option><option value="divergent">分歧</option><option value="crowded">拥挤</option></select></label><label><span>排序</span><select value={sort} onChange={event => setSort(event.target.value as MoodSort)}><option value="strongest">最强</option><option value="improving">改善</option><option value="deteriorating">走弱</option><option value="confidence">置信度</option><option value="divergent">分歧</option><option value="crowded">拥挤</option></select></label></div></div><MoodBoard rows={boardRows} onSelect={setSelected} title={board === 'sectors' ? '行业情绪' : board === 'ai_chain' ? 'AI 产业链情绪' : '自选股情绪'} />{(overview.divergences.length || overview.transitions.length) > 0 && <section className="ai-mood-analysis"><div className="ai-mood-section-heading"><div><p className="ai-mood-eyebrow">ANALYSIS</p><h2>分歧与变化</h2></div></div><div className="ai-mood-analysis-grid">{overview.divergences.slice(0, 6).map((item, index) => <article key={`divergence-${index}`}><span>分歧</span><p>{divergenceText(item)}</p></article>)}{overview.transitions.slice(0, 6).map((item, index) => <article key={`transition-${index}`}><span>变化</span><p>{objectLabel(item)}</p></article>)}</div></section>}<section className="ai-mood-movers"><div className="ai-mood-section-heading"><div><p className="ai-mood-eyebrow">MOVERS</p><h2>近期变化</h2></div></div><div className="ai-mood-mover-grid"><MoverList title="改善" values={overview.movers.improving || overview.movers.improvers || []} onSelect={setSelected} /><MoverList title="走弱" values={overview.movers.deteriorating || []} onSelect={setSelected} /><MoverList title="新领涨" values={overview.movers.new_leadership || []} onSelect={setSelected} /><MoverList title="新拥挤" values={overview.movers.new_crowded || []} onSelect={setSelected} /></div></section><Sheet open={Boolean(selected)} onClose={() => setSelected(null)} title={selected ? `${selected.name_zh || selected.name} · 情绪详情` : undefined} size="wide">{detailQuery.isLoading ? <MoodLoadingState /> : detailQuery.isError ? <MoodErrorState message="详情暂时无法读取。" /> : detail ? <MoodDetailContent detail={detail} onAskAI={onAskAI} onOpenSymbol={symbol => setChartSymbol({ symbol, label: symbol })} /> : <MoodEmptyState />}</Sheet><Sheet open={vixOpen} onClose={() => setVixOpen(false)} title="VIX 恐慌指数 · 日线" size="wide">{vixOpen && <SymbolCandleChart symbol="^VIX" label="VIX 恐慌指数" invertTone />}</Sheet><Sheet open={trendOpen} onClose={() => setTrendOpen(false)} title="美股市场 · 情绪分数日线" size="wide">{trendQuery.isLoading ? <MoodLoadingState /> : trendQuery.isError ? <MoodErrorState message="情绪分数历史暂时无法读取。" /> : trendQuery.data ? <MoodLineChart history={normalizeDetail(trendQuery.data).history} /> : <MoodEmptyState />}</Sheet><Sheet open={Boolean(breakdown)} onClose={() => setBreakdown(null)} title={breakdown ? `${BREAKDOWN_TITLES[breakdown].title} · 具体行业` : undefined} size="wide">{breakdown && overview ? <ParticipationBreakdown kind={breakdown} sectors={overview.sectors} divergences={overview.divergences} rowsByKey={rowsByKey} onSelect={row => { setBreakdown(null); setSelected(row) }} /> : <MoodEmptyState />}</Sheet><Sheet open={Boolean(chartSymbol)} onClose={() => setChartSymbol(null)} title={chartSymbol ? `${chartSymbol.label} · 日线` : undefined} size="wide">{chartSymbol && <SymbolCandleChart symbol={chartSymbol.symbol} label={chartSymbol.label} />}</Sheet></section>
 }
 
 export default AIMoodConsole

@@ -13,6 +13,7 @@ import {
   filterMoodRows,
   formatPercentValue,
   moodScoreChange,
+  normalizeMoodLineData,
   normalizeMoodRow,
   normalizeOverview,
   normalizePriceCandles,
@@ -118,21 +119,40 @@ describe('AIMoodConsole static states and history', () => {
     expect(markup).toContain('市场广度')
   })
 
-  it('makes VIX and participation chips interactive and renders the daily trend line with change percent', () => {
+  it('makes VIX and participation chips interactive and shows a compact sparkline beside the score', () => {
     const history = [
       { date: '2026-08-14', as_of: null, mood_score: 60, state: 'neutral', direction: 'stable', phase: null, transition: null },
       { date: '2026-08-17', as_of: null, mood_score: 66, state: 'improving', direction: 'up', phase: null, transition: null },
     ]
     const marketRow = row({ scope_type: 'market', scope_key: 'US', history })
-    const markup = renderToStaticMarkup(<MarketMoodCard row={marketRow} onOpenVix={() => {}} onParticipation={() => {}} />)
+    const markup = renderToStaticMarkup(<MarketMoodCard row={marketRow} onOpenVix={() => {}} onParticipation={() => {}} onOpenTrend={() => {}} />)
     expect(markup).toContain('打开 VIX 恐慌指数日线图')
     expect(markup).toContain('查看日线')
-    expect(markup).toContain('情绪分数日线')
-    expect(markup).toContain('+10.0%')
+    expect(markup).toContain('ai-mood-sparkline')
+    expect(markup).toContain('点击查看情绪分数日线')
     expect(markup).toContain('昨日 60 → 今日 66')
-    expect(markup).toContain('情绪分数历史趋势')
+    expect(markup).toContain('+10.0%')
+    expect(markup).toContain('ai-mood-sparkline-line')
+    expect(markup).not.toContain('ai-mood-score-trend')
     const buttons = markup.match(/<button/g) || []
-    expect(buttons.length).toBeGreaterThanOrEqual(4)
+    expect(buttons.length).toBeGreaterThanOrEqual(5)
+  })
+
+  it('renders an explicit insufficient-history sparkline when the series cannot be drawn', () => {
+    const markup = renderToStaticMarkup(<MarketMoodCard row={row({ scope_type: 'market', scope_key: 'US', history: [] })} onOpenTrend={() => {}} />)
+    expect(markup).toContain('ai-mood-sparkline empty')
+    expect(markup).toContain('历史不足')
+  })
+
+  it('deduplicates and sorts line-chart data by trading date', () => {
+    const history = [
+      { date: '2026-08-17', as_of: null, mood_score: 66, state: null, direction: null, phase: null, transition: null },
+      { date: '2026-08-14', as_of: null, mood_score: 60, state: null, direction: null, phase: null, transition: null },
+      { date: '2026-08-17', as_of: null, mood_score: 66, state: null, direction: null, phase: null, transition: null },
+      { date: null, as_of: null, mood_score: 50, state: null, direction: null, phase: null, transition: null },
+    ]
+    const data = normalizeMoodLineData(history)
+    expect(data).toEqual([{ time: '2026-08-14', value: 60 }, { time: '2026-08-17', value: 66 }])
   })
 
   it('computes the day-over-day mood change only from real history', () => {
