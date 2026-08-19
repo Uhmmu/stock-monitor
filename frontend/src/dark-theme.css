@@ -216,6 +216,7 @@
 [data-theme="dark"] .ai-message-content code{background:rgba(255,255,255,.10);color:#e5e5ea}
 [data-theme="dark"] .ai-message-content blockquote{border-left-color:color-mix(in srgb,#0a84ff 40%,transparent);color:var(--ai-muted)}
 [data-theme="dark"] .ai-table-scroll{border-color:var(--ai-line)}
+[data-theme="dark"] .ai-table-scroll{background:rgba(28,28,30,.72);box-shadow:0 8px 24px rgba(0,0,0,.30)}
 [data-theme="dark"] .ai-table-scroll th{background:var(--ai-surface-2)}
 [data-theme="dark"] .ai-table-scroll td{border-bottom-color:var(--ai-line)}
 [data-theme="dark"] .ai-composer{background:var(--ai-surface);border-color:var(--ai-line);box-shadow:0 9px 28px rgba(0,0,0,.32),inset 0 1px rgba(255,255,255,.06)}
@@ -246,6 +247,10 @@
 [data-theme="dark"] .ai-rich-document-warnings{background:rgba(255,159,10,.10);border-color:rgba(255,159,10,.20);color:#ffb340}
 [data-theme="dark"] .ai-rich-block-fallback{background:rgba(44,44,46,.64);border-color:var(--line)}
 [data-theme="dark"] .ai-rich-quote dl div,[data-theme="dark"] .ai-rich-metric-grid>div,[data-theme="dark"] .ai-rich-valuation-scenarios>div,[data-theme="dark"] .ai-rich-allocation-summary>div,[data-theme="dark"] .ai-rich-sec section,[data-theme="dark"] .ai-rich-decision section{background:rgba(255,255,255,.07)}
+[data-theme="dark"] .ai-rich-valuation-summary-head>div,[data-theme="dark"] .ai-rich-valuation-method{background:rgba(255,255,255,.07)}
+[data-theme="dark"] .ai-rich-verdict{background:rgba(255,255,255,.10);color:#c7c7cc}
+[data-theme="dark"] .ai-rich-verdict.positive{background:rgba(48,209,88,.14);color:#30d158}
+[data-theme="dark"] .ai-rich-verdict.negative{background:rgba(255,105,97,.14);color:#ff8a82}
 [data-theme="dark"] .ai-rich-quote-price .positive,[data-theme="dark"] .ai-rich-metric-grid .trend-positive dd{color:#30d158}
 [data-theme="dark"] .ai-rich-quote-price .negative,[data-theme="dark"] .ai-rich-metric-grid .trend-negative dd{color:#ff8a82}
 [data-theme="dark"] .ai-rich-chart-tooltip,[data-theme="dark"] .ai-rich-block-footer>details ul{background:#2c2c2e;color:#f5f5f7;border-color:var(--line);box-shadow:var(--shadow-m)}

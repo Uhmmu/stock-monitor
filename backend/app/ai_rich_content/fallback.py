@@ -84,6 +84,44 @@ def block_fallback_markdown(
             f"- 估值日期：{_text(data.get('valuation_date'))}\n\n"
             "_估值情景不是收益保证。_"
         )
+    if block_type == "valuation_summary":
+        lines = []
+        for item in data.get("methods", []):
+            if item.get("fair_value") is not None:
+                rendered = _number(item.get("fair_value"), data.get("currency"))
+            elif item.get("metric_value") is not None:
+                rendered = _number(item.get("metric_value"))
+                if str(item.get("metric_unit") or "") in {"percent", "%"}:
+                    rendered += "%"
+            else:
+                rendered = "数据不足"
+            weight = (
+                f"（权重 {_number(item.get('weight_percent'))}%）"
+                if item.get("weight_percent") is not None
+                else ""
+            )
+            extras = "".join(
+                f"，{_text(item.get(field))}"
+                for field in ("comparison", "note")
+                if item.get(field)
+            )
+            lines.append(f"- {_text(item.get('label'))}{weight}：{rendered}{extras}")
+        consensus_line = ""
+        if data.get("consensus_value") is not None:
+            consensus_line = (
+                f"\n- {_text(data.get('consensus_label') or '模型估值共识')}："
+                f"{_number(data.get('consensus_value'), data.get('currency'))}"
+            )
+            if data.get("consensus_position_percent") is not None:
+                consensus_line += (
+                    f"（现价较共识 {_number(data.get('consensus_position_percent'))}%）"
+                )
+        return (
+            f"{heading}**{_text(data.get('symbol'))} 估值**\n\n"
+            + "\n".join(lines)
+            + consensus_line
+            + "\n\n_估值用于研究比较，不构成投资建议。_"
+        )
     if block_type == "comparison_table":
         columns = data.get("columns") or []
         headers = ["项目", *[_escape_table(item.get("label")) for item in columns]]

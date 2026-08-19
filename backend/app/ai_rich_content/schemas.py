@@ -17,6 +17,7 @@ BlockType = Literal[
     "metric_grid",
     "mini_line_chart",
     "valuation_range",
+    "valuation_summary",
     "comparison_table",
     "portfolio_allocation",
     "risk_panel",
@@ -127,6 +128,40 @@ class ValuationRangeData(StrictModel):
             )
         ):
             raise ValueError("valuation range requires at least one scenario value")
+        return self
+
+
+class ValuationMethodItem(StrictModel):
+    key: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_:\-]+$")
+    label: str = Field(min_length=1, max_length=120)
+    weight_percent: Decimal | None = None
+    verdict: str | None = Field(None, max_length=32)
+    stars: int | None = Field(None, ge=0, le=5)
+    fair_value: Decimal | None = None
+    scenario_low: Decimal | None = None
+    scenario_high: Decimal | None = None
+    metric_value: Decimal | None = None
+    metric_unit: str | None = Field(None, max_length=16)
+    peer_median: Decimal | None = None
+    comparison: str | None = Field(None, max_length=80)
+    note: str | None = Field(None, max_length=200)
+
+
+class ValuationSummaryData(StrictModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    currency: str = Field("—", min_length=1, max_length=12)
+    current_price: Decimal | None = None
+    methods: list[ValuationMethodItem] = Field(default_factory=list, max_length=3)
+    consensus_value: Decimal | None = None
+    consensus_label: str | None = Field(None, max_length=64)
+    consensus_position_percent: Decimal | None = None
+    model_conflict: bool | None = None
+    valuation_date: datetime | date | None = None
+
+    @model_validator(mode="after")
+    def require_value(self):
+        if not self.methods and self.consensus_value is None:
+            raise ValueError("valuation summary requires methods or a consensus value")
         return self
 
 
@@ -289,6 +324,7 @@ BLOCK_DATA_MODELS: dict[str, type[StrictModel]] = {
     "metric_grid": MetricGridData,
     "mini_line_chart": MiniLineChartData,
     "valuation_range": ValuationRangeData,
+    "valuation_summary": ValuationSummaryData,
     "comparison_table": ComparisonTableData,
     "portfolio_allocation": PortfolioAllocationData,
     "risk_panel": RiskPanelData,

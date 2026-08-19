@@ -53,7 +53,7 @@ _INTENT_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        "valuation_range",
+        "valuation_summary",
         (
             "估值",
             "合理价",

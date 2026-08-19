@@ -194,6 +194,39 @@ class ResearchRepository:
             ).limit(1)
         )
 
+    def price_day_range(self, symbol: str, trading_date: date) -> tuple[float | None, float | None]:
+        """Same-trading-day high/low: prefer any persisted snapshot that carries it, else the daily bar."""
+        row = self.db.scalar(
+            select(m.PriceSnapshot).where(
+                m.PriceSnapshot.symbol == symbol,
+                m.PriceSnapshot.source_type == "price_snapshot",
+                m.PriceSnapshot.trading_date == trading_date,
+                m.PriceSnapshot.day_high > 0,
+            ).order_by(
+                m.PriceSnapshot.market_timestamp.desc().nullslast(),
+                m.PriceSnapshot.fetched_at.desc().nullslast(),
+                m.PriceSnapshot.persisted_at.desc().nullslast(),
+            ).limit(1)
+        )
+        if row is not None:
+            return (
+                float(row.day_high) if row.day_high is not None else None,
+                float(row.day_low) if row.day_low is not None else None,
+            )
+        bar = self.db.scalar(
+            select(m.HistoricalPrice).where(
+                m.HistoricalPrice.symbol == symbol,
+                m.HistoricalPrice.date == trading_date,
+                m.HistoricalPrice.high > 0,
+            ).order_by(m.HistoricalPrice.id.desc()).limit(1)
+        )
+        if bar is not None:
+            return (
+                float(bar.high) if bar.high is not None else None,
+                float(bar.low) if bar.low is not None else None,
+            )
+        return None, None
+
     def price_history(self, symbol: str, start: date | None, end: date | None, limit: int):
         query = select(m.HistoricalPrice).where(m.HistoricalPrice.symbol == symbol)
         if start: query = query.where(m.HistoricalPrice.date >= start)

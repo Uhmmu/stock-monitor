@@ -127,6 +127,34 @@ export type ValuationRangeData = {
   current_position_label?: string | null
 }
 
+export type ValuationMethodItem = {
+  key: string
+  label: string
+  weight_percent?: Numeric | null
+  verdict?: string | null
+  stars?: number | null
+  fair_value?: Numeric | null
+  scenario_low?: Numeric | null
+  scenario_high?: Numeric | null
+  metric_value?: Numeric | null
+  metric_unit?: string | null
+  peer_median?: Numeric | null
+  comparison?: string | null
+  note?: string | null
+}
+
+export type ValuationSummaryData = {
+  symbol: string
+  currency: string
+  current_price?: Numeric | null
+  methods: ValuationMethodItem[]
+  consensus_value?: Numeric | null
+  consensus_label?: string | null
+  consensus_position_percent?: Numeric | null
+  model_conflict?: boolean | null
+  valuation_date?: string | null
+}
+
 export type ComparisonColumn = {
   key: string
   label: string

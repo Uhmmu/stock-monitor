@@ -62,12 +62,13 @@ def _metric_candidate() -> RichBlockCandidate:
 
 def test_registry_is_explicit_and_versioned():
     definitions = rich_block_registry.list_supported()
-    assert len(definitions) == 12
+    assert len(definitions) == 13
     assert {(item.block_type, item.version) for item in definitions} == {
         ("stock_quote", 1),
         ("metric_grid", 1),
         ("mini_line_chart", 1),
         ("valuation_range", 1),
+        ("valuation_summary", 1),
         ("comparison_table", 1),
         ("portfolio_allocation", 1),
         ("risk_panel", 1),
@@ -193,7 +194,22 @@ def test_all_domain_factories_produce_registry_validated_blocks():
                 "valuation": {
                     "currency": "USD",
                     "price": 512.36,
+                    "weights": {"dcf": 0.3, "forward_pe": 0.25, "ev_ebitda": 0.2, "peg": 0.15},
+                    "valuation": [
+                        {"key": "forward_pe", "label": "Forward P/E", "value": 28.4, "unit": "multiple",
+                         "peer_median": 25.1, "comparison": "高于同行 13%"},
+                    ],
                     "dcf_scenarios": {"bear": 420, "base": 510, "bull": 600},
+                    "graham": {
+                        "graham_number": {"value": 402.5, "margin_of_safety": -0.27, "status": "overvalued"},
+                        "overall_status": "overvalued",
+                    },
+                    "consensus": {"items": [{"key": "dcf", "label": "DCF Base", "value": 510}], "value": 498.2, "current": 512.36},
+                    "model_signals": [
+                        {"key": "dcf", "label": "DCF", "verdict": "合理", "stars": 3},
+                        {"key": "forward_pe", "label": "Forward P/E", "verdict": "偏贵", "stars": 2},
+                    ],
+                    "model_conflict": True,
                 },
             },
         ),
@@ -320,7 +336,7 @@ def test_all_domain_factories_produce_registry_validated_blocks():
         "stock_quote",
         "metric_grid",
         "mini_line_chart",
-        "valuation_range",
+        "valuation_summary",
         "comparison_table",
         "portfolio_allocation",
         "risk_panel",
@@ -329,6 +345,63 @@ def test_all_domain_factories_produce_registry_validated_blocks():
         "sec_filing",
         "investment_decision",
     }
+
+
+def test_valuation_summary_selects_top_weighted_methods_and_consensus():
+    now = datetime(2026, 7, 31, 8, 30, tzinfo=UTC)
+    result = ToolExecutionResult(
+        tool_call_id="call-valuation-summary",
+        tool_name="get_latest_valuation",
+        tool_version="1.0.0",
+        status=ToolStatus.success,
+        data={
+            "snapshot_id": 2,
+            "symbol": "MSFT",
+            "snapshot_date": "2026-07-31",
+            "valuation": {
+                "currency": "USD",
+                "price": 512.36,
+                "weights": {"dcf": 0.30, "forward_pe": 0.25, "ev_ebitda": 0.20, "peg": 0.15, "price_to_book": 0.10},
+                "valuation": [
+                    {"key": "forward_pe", "label": "Forward P/E", "value": 28.4, "unit": "multiple",
+                     "peer_median": 25.1, "comparison": "高于同行 13%"},
+                    {"key": "price_to_book", "label": "P/B", "value": 11.2, "unit": "multiple"},
+                ],
+                "dcf_scenarios": {"bear": 420, "base": 510, "bull": 600},
+                "graham": {
+                    "graham_number": {"value": 402.5, "margin_of_safety": -0.27},
+                    "overall_status": "overvalued",
+                },
+                "consensus": {"value": 498.2, "current": 512.36},
+                "model_signals": [{"key": "dcf", "verdict": "合理", "stars": 3}],
+                "model_conflict": False,
+            },
+        },
+        sources=[],
+        freshness={"as_of": now.isoformat(), "status": "fresh"},
+        stats=empty_stats(),
+    )
+    candidates, warnings = build_candidates(result, [_citation()])
+    assert warnings == []
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.block_type == "valuation_summary"
+    data = candidate.block.data
+    # Top-three by weight: DCF (30%), Forward P/E (25%), EV/EBITDA replaced by
+    # Graham only if its average weight beats EV/EBITDA — average is 20%, a tie
+    # broken by deterministic insertion order (DCF, Graham, relative metrics).
+    assert [method["key"] for method in data["methods"]] == ["dcf", "forward_pe", "graham"]
+    assert float(data["methods"][0]["fair_value"]) == 510
+    assert float(data["methods"][0]["scenario_low"]) == 420
+    assert float(data["methods"][0]["scenario_high"]) == 600
+    assert float(data["methods"][1]["metric_value"]) == 28.4
+    assert float(data["methods"][1]["peer_median"]) == 25.1
+    assert data["methods"][2]["verdict"] == "偏贵"
+    assert float(data["consensus_value"]) == 498.2
+    assert float(data["consensus_position_percent"]) == 2.8
+    assert data["model_conflict"] is False
+    assert "模型估值共识" in candidate.block.fallback_markdown
+    assert "402.5" in candidate.block.fallback_markdown
 
 
 def test_auto_insertion_uses_central_intent_allowlist(monkeypatch):

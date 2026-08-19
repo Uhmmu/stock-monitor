@@ -380,7 +380,7 @@ class ResearchGateway:
     @staticmethod
     def _valuation(r, detail: bool):
         payload = r.payload or {}; keys = {"company", "classification", "price", "currency", "model_signals", "summary", "valuation_range", "confidence", "status"}
-        if detail: keys |= {"inputs", "evidence", "health", "weights", "growth", "graham", "dcf", "relative", "reverse_dcf", "dividend_discount"}
+        if detail: keys |= {"inputs", "evidence", "health", "weights", "weight_details", "growth", "graham", "dcf", "dcf_scenarios", "relative", "reverse_dcf", "dividend_discount", "valuation", "consensus", "model_conflict"}
         return {"snapshot_id": r.id, "symbol": r.ticker, "snapshot_date": r.snapshot_date,
                 "valuation": _bounded({k: payload[k] for k in keys if k in payload}),
                 "existing_generated_content": ({"opinion": r.ai_opinion, "model": r.ai_model} if r.ai_opinion else None),
@@ -408,6 +408,14 @@ class ResearchGateway:
         symbol = normalize_symbol(symbol); r = get_latest_persisted_price_snapshot(self.db, symbol)
         if not r: raise ResearchError(ResearchErrorCode.not_found, "price snapshot was not found", status_code=404)
         data = price_snapshot_out(r)
+        # Realtime provider snapshots can lack the day range; recover it from another
+        # same-trading-day snapshot or the persisted daily bar instead of showing a gap.
+        if r.trading_date is not None and (data.get("day_high") is None or data.get("day_low") is None):
+            day_high, day_low = self.repo.price_day_range(symbol, r.trading_date)
+            if data.get("day_high") is None and day_high is not None:
+                data["day_high"] = day_high
+            if data.get("day_low") is None and day_low is not None:
+                data["day_low"] = day_low
         state = snapshot_freshness(r)
         data_status = "stale" if state["is_stale"] else ("delayed" if r.is_delayed else "fresh")
         freshness = ResearchFreshness(

@@ -5,6 +5,7 @@ import { StockQuoteBlock } from './blocks/StockQuoteBlock'
 import { MetricGridBlock } from './blocks/MetricGridBlock'
 import { MiniLineChartBlock } from './blocks/MiniLineChartBlock'
 import { ValuationRangeBlock } from './blocks/ValuationRangeBlock'
+import { ValuationSummaryBlock } from './blocks/ValuationSummaryBlock'
 import { ComparisonTableBlock } from './blocks/ComparisonTableBlock'
 import { PortfolioAllocationBlock } from './blocks/PortfolioAllocationBlock'
 import { RiskPanelBlock } from './blocks/RiskPanelBlock'
@@ -38,6 +39,7 @@ register('stock_quote', 1, StockQuoteBlock)
 register('metric_grid', 1, MetricGridBlock)
 register('mini_line_chart', 1, MiniLineChartBlock)
 register('valuation_range', 1, ValuationRangeBlock)
+register('valuation_summary', 1, ValuationSummaryBlock)
 register('comparison_table', 1, ComparisonTableBlock)
 register('portfolio_allocation', 1, PortfolioAllocationBlock)
 register('risk_panel', 1, RiskPanelBlock)

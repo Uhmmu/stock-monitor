@@ -387,6 +387,47 @@ class ChartFactory(BaseRichBlockFactory):
         ]
 
 
+VALUATION_METHOD_LABELS = {
+    "dcf": "DCF（现金流折现）",
+    "graham": "Graham（格莱厄姆估值）",
+    "forward_pe": "Forward P/E（预期市盈率）",
+    "peg": "PEG（市盈增长比）",
+    "ev_sales": "EV/Sales（市销率）",
+    "ev_ebitda": "EV/EBITDA（企业倍数）",
+    "fcf_yield": "FCF Yield（自由现金流收益率）",
+    "price_to_book": "P/B（市净率）",
+}
+
+GRAHAM_VERDICTS = {
+    "undervalued": "低估",
+    "fairly_valued": "合理",
+    "overvalued": "偏贵",
+    "not_applicable": "不适用",
+}
+
+RELATIVE_VALUATION_KEYS = (
+    "forward_pe",
+    "peg",
+    "ev_sales",
+    "ev_ebitda",
+    "fcf_yield",
+    "price_to_book",
+)
+
+
+def _weight_percent(weight: Decimal | None) -> Decimal | None:
+    if weight is None:
+        return None
+    return (weight * 100).quantize(Decimal("0.1"))
+
+
+def _stars_value(signal: dict[str, Any]) -> int | None:
+    stars = signal.get("stars")
+    if isinstance(stars, int) and 0 <= stars <= 5:
+        return stars
+    return None
+
+
 def _valuation_payload(value: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     outer = mapping(value)
     if isinstance(outer.get("valuation"), dict) and any(
@@ -397,6 +438,8 @@ def _valuation_payload(value: Any) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 class ValuationFactory(BaseRichBlockFactory):
+    """Top-weighted valuation methods plus the fixed model consensus card."""
+
     supported_tool_names: ClassVar[set[str]] = {
         "get_latest_valuation",
         "get_company_snapshot",
@@ -406,60 +449,144 @@ class ValuationFactory(BaseRichBlockFactory):
         body = mapping(tool_result.data)
         value = body.get("valuation") if tool_result.tool_name == "get_company_snapshot" else body
         outer, payload = _valuation_payload(value)
-        ranges = mapping(payload.get("valuation_range"))
-        scenarios = mapping(
+        weights = {
+            str(key): decimal_value(raw)
+            for key, raw in mapping(payload.get("weights")).items()
+        }
+        signals = {
+            str(item.get("key")): mapping(item)
+            for item in payload.get("model_signals") or []
+            if isinstance(item, dict) and item.get("key")
+        }
+        metrics = {
+            str(item.get("key")): mapping(item)
+            for item in payload.get("valuation") or []
+            if isinstance(item, dict) and item.get("key")
+        }
+        graham = mapping(payload.get("graham"))
+        dcf = mapping(
             payload.get("dcf_scenarios")
             or payload.get("dcf")
-            or ranges
+            or payload.get("valuation_range")
         )
-        bear = decimal_value(
-            scenarios.get("bear")
-            or scenarios.get("bear_value")
-            or ranges.get("lower")
-        )
-        base = decimal_value(
-            scenarios.get("base")
-            or scenarios.get("base_value")
-            or ranges.get("base")
-        )
-        bull = decimal_value(
-            scenarios.get("bull")
-            or scenarios.get("bull_value")
-            or ranges.get("upper")
-        )
-        lower = decimal_value(ranges.get("lower_bound") or ranges.get("lower"))
-        upper = decimal_value(ranges.get("upper_bound") or ranges.get("upper"))
-        if all(value is None for value in (bear, base, bull, lower, upper)):
+        consensus = mapping(payload.get("consensus"))
+        current = decimal_value(payload.get("price") or consensus.get("current"))
+        entries: list[tuple[Decimal, int, dict[str, Any]]] = []
+        order = 0
+
+        base = decimal_value(dcf.get("base"))
+        bear = decimal_value(dcf.get("bear"))
+        bull = decimal_value(dcf.get("bull"))
+        if base is not None or bear is not None or bull is not None:
+            signal = signals.get("dcf", {})
+            entries.append(
+                (
+                    weights.get("dcf") or Decimal(0),
+                    order,
+                    {
+                        "key": "dcf",
+                        "label": VALUATION_METHOD_LABELS["dcf"],
+                        "weight_percent": _weight_percent(weights.get("dcf")),
+                        "verdict": signal.get("verdict"),
+                        "stars": _stars_value(signal),
+                        "fair_value": base,
+                        "scenario_low": bear,
+                        "scenario_high": bull,
+                        "note": "Bear/Base/Bull 使用不同增长与折现假设",
+                    },
+                )
+            )
+            order += 1
+
+        graham_number = mapping(graham.get("graham_number"))
+        graham_value = decimal_value(graham_number.get("value"))
+        if graham_value is not None:
+            # Graham is not part of the cross-model weight table; give it the
+            # average model weight so it competes for a top-three slot on equal footing.
+            default_weight = (
+                sum(weights.values()) / len(weights) if weights else Decimal(0)
+            )
+            margin = decimal_value(graham_number.get("margin_of_safety"))
+            entries.append(
+                (
+                    default_weight,
+                    order,
+                    {
+                        "key": "graham",
+                        "label": VALUATION_METHOD_LABELS["graham"],
+                        "weight_percent": _weight_percent(default_weight),
+                        "verdict": GRAHAM_VERDICTS.get(
+                            str(graham.get("overall_status") or graham_number.get("status") or "")
+                        ),
+                        "fair_value": graham_value,
+                        "note": (
+                            f"安全边际 {display_number(margin * 100, 'percent')}"
+                            if margin is not None
+                            else None
+                        ),
+                    },
+                )
+            )
+            order += 1
+
+        for key in RELATIVE_VALUATION_KEYS:
+            metric = metrics.get(key)
+            if metric is None:
+                continue
+            metric_value = decimal_value(metric.get("value"))
+            if metric_value is None:
+                continue
+            signal = signals.get(key, {})
+            entries.append(
+                (
+                    weights.get(key) or Decimal(0),
+                    order,
+                    {
+                        "key": clean_identifier(key, "method"),
+                        "label": VALUATION_METHOD_LABELS.get(
+                            key, str(metric.get("label") or key)[:120]
+                        ),
+                        "weight_percent": _weight_percent(weights.get(key)),
+                        "verdict": signal.get("verdict"),
+                        "stars": _stars_value(signal),
+                        "metric_value": metric_value,
+                        "metric_unit": str(metric.get("unit") or "")[:16] or None,
+                        "peer_median": decimal_value(metric.get("peer_median")),
+                        "comparison": metric.get("comparison"),
+                    },
+                )
+            )
+            order += 1
+
+        entries.sort(key=lambda item: (-item[0], item[1]))
+        methods = [entry[2] for entry in entries[:3]]
+        consensus_value = decimal_value(consensus.get("value"))
+        if not methods and consensus_value is None:
             return []
+        position = None
+        if consensus_value is not None and current is not None and consensus_value > 0:
+            position = ((current / consensus_value - 1) * 100).quantize(Decimal("0.1"))
         symbol = str(outer.get("symbol") or payload.get("ticker") or payload.get("symbol") or "UNKNOWN")[:32]
-        current = decimal_value(
-            payload.get("price")
-            or payload.get("current_price")
-            or mapping(payload.get("consensus")).get("current")
-        )
         return [
             create_candidate(
                 tool_result=tool_result,
                 context=context,
-                block_type="valuation_range",
+                block_type="valuation_summary",
                 data={
                     "symbol": symbol,
                     "currency": str(payload.get("currency") or "—")[:12],
                     "current_price": current,
-                    "bear_value": bear,
-                    "base_value": base,
-                    "bull_value": bull,
-                    "lower_bound": lower,
-                    "upper_bound": upper,
-                    "model_name": outer.get("data_version")
-                    or payload.get("model_name")
-                    or "内部估值情景",
+                    "methods": methods,
+                    "consensus_value": consensus_value,
+                    "consensus_label": "模型估值共识（公允价值中位数）",
+                    "consensus_position_percent": position,
+                    "model_conflict": payload.get("model_conflict"),
                     "valuation_date": outer.get("snapshot_date")
                     or outer.get("generated_at"),
-                    "current_position_label": payload.get("current_position_label"),
                 },
-                title=f"{symbol} 估值区间",
-                description=f"{symbol} current price versus deterministic valuation scenarios",
+                title=f"{symbol} 估值",
+                description=f"{symbol} top-weighted valuation methods and the deterministic model consensus",
+                recommended_position="early",
                 interaction=BlockInteractionConfig(
                     navigation_target=f"/?tab=crossmodel&symbol={symbol}"
                 ),

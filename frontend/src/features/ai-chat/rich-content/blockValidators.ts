@@ -84,6 +84,37 @@ const valuationRange: Validator = value => {
   )
 }
 
+const valuationMethod = (value: unknown): value is Record<string, unknown> => (
+  isRecord(value)
+  && identifier(value.key, 64)
+  && identifier(value.label, 120)
+  && optionalNumeric(value.weight_percent)
+  && optionalString(value.verdict, 32)
+  && (value.stars == null || (Number.isInteger(value.stars) && Number(value.stars) >= 0 && Number(value.stars) <= 5))
+  && optionalNumeric(value.fair_value)
+  && optionalNumeric(value.scenario_low)
+  && optionalNumeric(value.scenario_high)
+  && optionalNumeric(value.metric_value)
+  && optionalString(value.metric_unit, 16)
+  && optionalNumeric(value.peer_median)
+  && optionalString(value.comparison, 80)
+  && optionalString(value.note, 200)
+)
+
+const valuationSummary: Validator = value => {
+  if (!isRecord(value) || !identifier(value.symbol, 32)) return false
+  if (!Array.isArray(value.methods) || value.methods.length > 3) return false
+  if (!value.methods.every(valuationMethod)) return false
+  return (
+    optionalNumeric(value.current_price)
+    && optionalNumeric(value.consensus_value)
+    && optionalString(value.consensus_label, 64)
+    && optionalNumeric(value.consensus_position_percent)
+    && (value.model_conflict == null || typeof value.model_conflict === 'boolean')
+    && optionalString(value.valuation_date, 80)
+  )
+}
+
 const comparisonTable: Validator = value => {
   if (!isRecord(value) || !requiredRecords(value.columns, 12) || !requiredRecords(value.rows, 100)) return false
   const keys = new Set<string>()
@@ -190,6 +221,7 @@ export const blockDataValidators: Record<string, Validator> = {
   metric_grid: metricGrid,
   mini_line_chart: miniLineChart,
   valuation_range: valuationRange,
+  valuation_summary: valuationSummary,
   comparison_table: comparisonTable,
   portfolio_allocation: portfolioAllocation,
   risk_panel: riskPanel,

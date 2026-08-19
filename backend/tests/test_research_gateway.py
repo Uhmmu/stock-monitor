@@ -13,7 +13,7 @@ from app.database import Base, get_db
 from app.models import (
     CompanyProfile, NewsItem, Portfolio, PortfolioPosition, PortfolioPositionLot, PortfolioStrategyProfile, StockProfile,
     PriceSnapshot, StockDiscoveryRun, StockDiscoveryMarketContext, TradeTransaction, User,
-    PortfolioAnalysisRun, CongressTrade, TrackedFigure, FigurePosition,
+    PortfolioAnalysisRun, CongressTrade, TrackedFigure, FigurePosition, HistoricalPrice,
 )
 from app.research.enums import FreshnessStatus, SourceAuthority, SourceType
 from app.research.exceptions import ResearchError
@@ -32,6 +32,7 @@ TABLES = [
     PortfolioPosition.__table__, PortfolioPositionLot.__table__, PriceSnapshot.__table__, StockDiscoveryRun.__table__,
     StockDiscoveryMarketContext.__table__, PortfolioAnalysisRun.__table__, CongressTrade.__table__,
     TrackedFigure.__table__, FigurePosition.__table__, StockProfile.__table__, CompanyProfile.__table__, NewsItem.__table__,
+    HistoricalPrice.__table__,
 ]
 
 
@@ -274,3 +275,31 @@ def test_extended_gateway_reads_persisted_analysis_market_and_public_ownership_w
     assert gw.congress_trades("MSFT",None,None,None,None,None,1,10).meta.total==1
     assert gw.figure_positions(figure.id).data[0]["symbol"]=="MSFT"
     with pytest.raises(ResearchError): ResearchGateway(db,first).portfolio_analysis(p2.id)
+
+
+def test_price_latest_backfills_missing_day_range_from_same_day_snapshot_or_daily_bar(db, users):
+    first,_,_,_=users
+    trading_day=date(2026,8,19)
+    now=datetime(2026,8,19,20,tzinfo=UTC)
+    # Latest realtime snapshot without day high/low (typical Alpaca shape).
+    db.add(PriceSnapshot(symbol="MSFT",market_timestamp=now,fetched_at=now,persisted_at=now,
+                         last_price=512.36,previous_close=508.15,day_volume=100,
+                         provider="alpaca",provider_symbol="MSFT",trading_date=trading_day))
+    # A same-trading-day yfinance snapshot carrying the day range.
+    db.add(PriceSnapshot(symbol="MSFT",market_timestamp=now-timedelta(hours=1),fetched_at=now-timedelta(hours=1),persisted_at=now-timedelta(hours=1),
+                         last_price=511.9,previous_close=508.15,day_high=514.2,day_low=507.6,day_volume=90,
+                         provider="yfinance",provider_symbol="MSFT",trading_date=trading_day))
+    db.commit()
+
+    data=ResearchGateway(db,first).price_latest("MSFT").data
+    assert data["day_high"] is not None and data["day_high"]==pytest.approx(514.2)
+    assert data["day_low"] is not None and data["day_low"]==pytest.approx(507.6)
+    assert data["last_price"]==pytest.approx(512.36)
+
+    # Without any same-day snapshot range, the daily bar fills the gap.
+    db.query(PriceSnapshot).filter(PriceSnapshot.provider=="yfinance").delete()
+    db.add(HistoricalPrice(symbol="MSFT",date=trading_day,open=509,high=515.1,low=506.2,close=512,source="fmp"))
+    db.commit()
+    data=ResearchGateway(db,first).price_latest("MSFT").data
+    assert data["day_high"]==pytest.approx(515.1)
+    assert data["day_low"]==pytest.approx(506.2)

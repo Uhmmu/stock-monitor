@@ -60,6 +60,7 @@ describe('Rich AI content runtime', () => {
       'metric_grid:1',
       'mini_line_chart:1',
       'valuation_range:1',
+      'valuation_summary:1',
       'comparison_table:1',
       'portfolio_allocation:1',
       'risk_panel:1',
@@ -129,5 +130,60 @@ describe('Rich AI content runtime', () => {
       />,
     )
     expect(html).toContain('安全降级文本')
+  })
+
+  it('renders the valuation summary card with top methods and the consensus', () => {
+    const valuationSummaryBlock = {
+      block_id: 'block_valuation_summary_test',
+      block_type: 'valuation_summary',
+      block_version: 1,
+      title: 'MSFT 估值',
+      data: {
+        symbol: 'MSFT',
+        currency: 'USD',
+        current_price: '512.36',
+        methods: [
+          { key: 'dcf', label: 'DCF（现金流折现）', weight_percent: '30', verdict: '合理', stars: 3, fair_value: '510', scenario_low: '420', scenario_high: '600' },
+          { key: 'graham', label: 'Graham（格莱厄姆估值）', weight_percent: '20', verdict: '偏贵', fair_value: '402.5' },
+          { key: 'forward_pe', label: 'Forward P/E（预期市盈率）', weight_percent: '25', verdict: '偏贵', stars: 2, metric_value: '28.4', metric_unit: 'multiple', peer_median: '25.1', comparison: '高于同行 13%' },
+        ],
+        consensus_value: '498.2',
+        consensus_label: '模型估值共识（公允价值中位数）',
+        consensus_position_percent: '2.8',
+        model_conflict: false,
+        valuation_date: '2026-07-31',
+      },
+      citation_keys: ['S1'],
+      source_ids: ['valuation:MSFT'],
+      warnings: [],
+      fallback_markdown: '**MSFT 估值**',
+    }
+    const valuationDocument = {
+      schema_version: 1,
+      parts: [
+        { type: 'markdown', part_id: 'markdown_0', content: '估值结论如下。[S1]' },
+        { type: 'block', part_id: 'part_valuation', block: valuationSummaryBlock },
+      ],
+      fallback_markdown: '估值结论如下。[S1]',
+      warnings: [],
+    }
+    expect(validateRichContentDocument(valuationDocument)).not.toBeNull()
+    const html = renderToStaticMarkup(
+      <RichContentRenderer
+        document={valuationDocument}
+        fallbackMarkdown={valuationDocument.fallback_markdown}
+        citations={citations}
+        onCitation={() => undefined}
+      />,
+    )
+    expect(html).toContain('MSFT 估值')
+    expect(html).toContain('模型估值共识（公允价值中位数）')
+    expect(html).toContain('US$498.20')
+    expect(html).toContain('DCF（现金流折现）')
+    expect(html).toContain('Graham（格莱厄姆估值）')
+    expect(html).toContain('Forward P/E（预期市盈率）')
+    expect(html).toContain('US$510.00')
+    expect(html).toContain('权重')
+    expect(html).toContain('现价较共识')
   })
 })
