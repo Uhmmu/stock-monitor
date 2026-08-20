@@ -122,9 +122,15 @@ def test_pi_agent_mode_executes_pipeline_and_persists_evidence(db, owner, monkey
     assert usage.total_cost_usd == pytest.approx(.142)
     assert usage.raw_usage["engine"] == "pi_agent"
     source = db.scalar(select(StockDiscoverySource).where(
-        StockDiscoverySource.run_id == run.id, StockDiscoverySource.source_origin == "pi_agent_evidence"))
+        StockDiscoverySource.run_id == run.id, StockDiscoverySource.source_origin == "pi_web_source"))
     assert source is not None
     assert source.url == "https://example.com/anet-risk"
+    # origins now carry the evidence source type instead of a blanket "pi agent"
+    # (the internal_data evidence in this fixture has no URL and is therefore
+    # not persisted as a source row; its attribution lives in the evidence list)
+    origins = set(db.scalars(select(StockDiscoverySource.source_origin)
+        .where(StockDiscoverySource.run_id == run.id)).all())
+    assert origins == {"pi_web_source"}
     # raw payload preserves funnel events for observability
     raw = db.scalar(select(OpportunityHistory).where(OpportunityHistory.run_id == run.id))
     assert raw is not None

@@ -7,10 +7,36 @@ import {
   PiFunnelProgress,
   RawCandidatePanel,
   chooseCandidateGroup,
+  discoverySearchSourceLabel,
+  discoverySourceLabel,
   discoveryStatusText,
   visibleCandidateMetrics,
   type DiscoveryCandidate,
 } from './OpportunityDiscovery'
+
+describe('数据出处标签', () => {
+  it('把 Pi 来源按证据类型写成具体出处，而不是统一 pi agent', () => {
+    expect(discoverySourceLabel('pi_sec_filing')).toBe('SEC 文件')
+    expect(discoverySourceLabel('pi_company_ir')).toBe('公司 IR')
+    expect(discoverySourceLabel('pi_earnings_call')).toBe('财报电话会')
+    expect(discoverySourceLabel('pi_reputable_news')).toBe('权威新闻')
+    expect(discoverySourceLabel('pi_web_source')).toBe('网络来源')
+    expect(discoverySourceLabel('pi_internal_data')).toBe('内部数据')
+    expect(discoverySourceLabel('pi_model_inference')).toBe('模型推断')
+  })
+  it('兼容历史行与其他引擎的来源标记', () => {
+    expect(discoverySourceLabel('pi_agent_evidence')).toBe('Pi 证据链')
+    expect(discoverySourceLabel('pi_agent')).toBe('Pi 报告值')
+    expect(discoverySourceLabel('yfinance')).toBe('Yahoo')
+    expect(discoverySourceLabel('local_calculation')).toBe('本地计算')
+    expect(discoverySourceLabel('totally_unknown')).toBe('totally_unknown')
+  })
+  it('历史机会的搜索引擎来源显示为可读名称', () => {
+    expect(discoverySearchSourceLabel('pi_agent')).toBe('Pi Agent 智能研究')
+    expect(discoverySearchSourceLabel('perplexity_finance_agent')).toBe('Perplexity Finance Agent')
+    expect(discoverySearchSourceLabel('exa_agent_financial_datasets')).toBe('Exa Agent + Financial Datasets')
+  })
+})
 
 describe('机会发现候选展示', () => {
   it('隐藏空指标且最多展示六项', () => {

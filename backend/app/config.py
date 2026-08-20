@@ -173,6 +173,9 @@ class Settings(BaseSettings):
     pi_agent_deep_effort: str = "medium"  # minimal|low|medium|high|xhigh
     pi_agent_timeout_seconds: int = 900
     pi_agent_request_timeout_seconds: int = 960
+    # Named capability scope resolved in app.ai_tools.scopes; the sidecar
+    # passes it through on every /tools and /execute gateway call.
+    pi_agent_tool_scope: str = "opportunity_research"
     agent_gateway_token: str = ""
     # Adanos is server-only. The browser calls the authenticated FastAPI proxy.
     adanos_api_key: str = ""

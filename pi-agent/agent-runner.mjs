@@ -13,6 +13,7 @@ import {
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 
 const USER_AGENT = "stock-monitor-pi-agent/1.0";
+const RESCUE_TIMEOUT_MS = 120_000; // rescue turn must not hang the worker forever
 
 function env(name, fallback = "") {
   const value = process.env[name];
@@ -24,11 +25,12 @@ function env(name, fallback = "") {
 // ---------------------------------------------------------------------------
 
 export class BackendGateway {
-  constructor({ baseUrl, token, runId, userId }) {
+  constructor({ baseUrl, token, runId, userId, scope = "opportunity_research" }) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.token = token;
     this.runId = runId;
     this.userId = userId;
+    this.scope = scope;
     this.toolCalls = [];
   }
 
@@ -53,7 +55,8 @@ export class BackendGateway {
   }
 
   async listTools() {
-    const { status, payload } = await this.fetchJson("/api/agent/v1/tools");
+    const scope = encodeURIComponent(this.scope);
+    const { status, payload } = await this.fetchJson(`/api/agent/v1/tools?scope=${scope}`);
     if (status !== 200 || !Array.isArray(payload?.tools)) {
       throw new Error(`agent gateway /tools failed (HTTP ${status})`);
     }
@@ -63,7 +66,10 @@ export class BackendGateway {
   async executeTool(name, arguments_) {
     const { status, payload } = await this.fetchJson("/api/agent/v1/execute", {
       method: "POST",
-      body: { run_id: this.runId, user_id: this.userId, tool: name, arguments: arguments_ },
+      body: {
+        run_id: this.runId, user_id: this.userId, tool: name,
+        arguments: arguments_, tool_scope: this.scope,
+      },
     });
     if (status === 404) {
       return { error: { code: "RUN_NOT_FOUND", message: "The discovery run no longer exists." } };
@@ -167,6 +173,180 @@ export function safeJson(value) {
 }
 
 // ---------------------------------------------------------------------------
+// Tool activity -> progress events
+//
+// The backend already maps event types to funnel stages, so reporting tool
+// activity as it happens turns the two-event (started/finalized) progress
+// stream into a live one — without ever exposing model reasoning. Only tool
+// *names* are inspected; never message content.
+// ---------------------------------------------------------------------------
+
+const PORTFOLIO_TOOL_PATTERN = /^(get_portfolio_|get_position_|get_completed_trades|get_trade_statistics|get_dividend_history|get_fee_and_tax_summary|get_cash_flow_summary|get_currency_exposure)/;
+
+const COMPANY_DATA_TOOLS = new Set([
+  "get_company_snapshot", "get_company_profile", "get_company_peers",
+  "get_latest_valuation", "get_valuation_history", "compare_valuations",
+  "get_financial_summary", "get_financial_statements", "get_financial_trends",
+  "compare_financial_metrics", "get_mood_overview", "get_latest_price",
+  "get_price_history", "compare_price_performance",
+]);
+
+const EVIDENCE_TOOLS = new Set([
+  "get_latest_news", "search_news", "get_news_detail", "get_news_archives",
+  "get_sec_filings", "get_sec_filing_detail", "get_sec_events",
+  "get_sec_financial_facts", "get_insider_trades", "get_institutional_holdings",
+  "get_company_ownership_activity", "get_technical_analysis",
+  "get_technical_levels", "compare_technical_signals",
+  "get_technical_chart_reference", "get_calendar_events",
+  "get_calendar_event_detail", "get_options_overview",
+  "get_symbol_options_summary", "get_mood_history", "get_mood_validation",
+]);
+
+export function mapToolProgress(name) {
+  if (name === "run_deep_web_research") {
+    return { eventType: "external_search", stats: { deep_searches: 1 } };
+  }
+  if (/^search_/.test(name)) {
+    return { eventType: "external_search", stats: { web_searches: 1 } };
+  }
+  if (PORTFOLIO_TOOL_PATTERN.test(name)) {
+    return { eventType: "portfolio_loaded", stats: {} };
+  }
+  if (COMPANY_DATA_TOOLS.has(name)) {
+    return { eventType: "candidate_screened", stats: {} };
+  }
+  if (EVIDENCE_TOOLS.has(name)) {
+    return { eventType: "evidence_found", stats: {} };
+  }
+  return null; // unmapped (e.g. list_research_capabilities): counted, not reported
+}
+
+// Screening is counted per *symbol*, not per call: the agent legitimately
+// pulls several company tools for the same candidate, and per-call counting
+// inflated `candidates_screened` far beyond the real candidate pool.
+export function extractToolSymbols(args) {
+  const symbols = new Set();
+  if (!args || typeof args !== "object") return symbols;
+  const add = (value) => {
+    if (typeof value === "string" && value.trim()) symbols.add(value.trim().toUpperCase());
+  };
+  add(args.symbol);
+  add(args.ticker);
+  for (const key of ["symbols", "tickers"]) {
+    if (Array.isArray(args[key])) for (const item of args[key]) add(item);
+  }
+  return symbols;
+}
+
+// Batches cheap tool activity so a fast loop does not hammer /progress; paid
+// events (web/deep search) and the first portfolio load are sent immediately.
+// The backend merges funnel_stats additively, so every report only ever sends
+// deltas and `reported` tracks what has already been counted server-side —
+// finalize therefore cannot double-count earlier reports.
+export class ProgressBridge {
+  constructor(gateway, { intervalMs = 4000, now = () => Date.now() } = {}) {
+    this.gateway = gateway;
+    this.intervalMs = intervalMs;
+    this.now = now;
+    this.lastSentAt = 0;
+    this.pendingStats = {};
+    this.pendingEventType = null;
+    this.hasPending = false;
+    this.portfolioLoaded = false;
+    this.screenedSymbols = new Set();
+    this.reported = {};
+    this.totals = { tool_calls: 0, web_searches: 0, deep_searches: 0 };
+  }
+
+  _addStats(target, stats) {
+    for (const [key, value] of Object.entries(stats)) {
+      target[key] = (target[key] || 0) + value;
+    }
+  }
+
+  _send(eventType, detail, stats) {
+    this.gateway.reportProgress({ event_type: eventType, detail, funnel_stats: stats });
+    this._addStats(this.reported, stats);
+    this.lastSentAt = this.now();
+  }
+
+  onAgentEvent(event) {
+    if (event?.type === "tool_execution_start") {
+      const name = String(event.toolName || "");
+      if (COMPANY_DATA_TOOLS.has(name)) {
+        for (const symbol of extractToolSymbols(event.args)) this.screenedSymbols.add(symbol);
+      }
+      return;
+    }
+    if (event?.type !== "tool_execution_end") return;
+    const name = String(event.toolName || "");
+    this.totals.tool_calls += 1;
+    if (event.result?.details?.budget_exhausted) return; // stub answer, nothing really executed
+    const mapped = mapToolProgress(name);
+    if (!mapped) return;
+    this._addStats(this.totals, mapped.stats);
+    if (mapped.eventType === "portfolio_loaded") {
+      if (this.portfolioLoaded) return;
+      this.portfolioLoaded = true;
+      this._send("portfolio_loaded", name, { tool_calls: 1 });
+      return;
+    }
+    if (mapped.eventType === "external_search") {
+      this._send("external_search", name, { ...mapped.stats, tool_calls: 1 });
+      return;
+    }
+    this._addStats(this.pendingStats, { tool_calls: 1 });
+    this.pendingEventType = mapped.eventType;
+    this.hasPending = true;
+    if (this.now() - this.lastSentAt >= this.intervalMs) this.flush();
+  }
+
+  flush() {
+    if (!this.hasPending) return;
+    const funnel_stats = { ...this.pendingStats };
+    const screenedDelta = this.screenedSymbols.size - (this.reported.candidates_screened || 0);
+    if (screenedDelta > 0) funnel_stats.candidates_screened = screenedDelta;
+    this.pendingStats = {};
+    this.hasPending = false;
+    this._send(this.pendingEventType || "stage_update", "", funnel_stats);
+  }
+
+  finalize(detail = "result submitted") {
+    this.flush();
+    const totals = { ...this.totals, candidates_screened: this.screenedSymbols.size };
+    const delta = {};
+    for (const [key, value] of Object.entries(totals)) {
+      const remaining = value - (this.reported[key] || 0);
+      if (remaining > 0) delta[key] = remaining;
+    }
+    this._send("finalized", detail, delta);
+  }
+}
+
+// Hard stop for the agent loop: max_turns is no longer just prompt text.
+// One turn = one completed model round trip (`turn_end`); when the budget is
+// exhausted the loop is aborted and the rescue turn forces a best-effort
+// submit instead of failing the whole run.
+export class TurnBudget {
+  constructor(maxTurns) {
+    this.maxTurns = Number(maxTurns) || 0;
+    this.turns = 0;
+    this.reached = false;
+  }
+
+  note(event) {
+    if (event?.type !== "turn_end") return false;
+    this.turns += 1;
+    if (this.reached || this.maxTurns <= 0) return false;
+    if (this.turns >= this.maxTurns) {
+      this.reached = true;
+      return true;
+    }
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Provider setup: project OpenAI-compatible endpoint
 // ---------------------------------------------------------------------------
 
@@ -225,8 +405,12 @@ export async function runAgentResearch({ request, backendBaseUrl, agentToken }) 
     timeout_seconds: Number(request.limits?.timeout_seconds || 900),
   };
 
-  const gateway = new BackendGateway({ baseUrl: backendBaseUrl, token: agentToken, runId, userId });
+  const gateway = new BackendGateway({
+    baseUrl: backendBaseUrl, token: agentToken, runId, userId,
+    scope: String(request.tool_scope || "opportunity_research"),
+  });
   await gateway.reportProgress({ event_type: "research_started", detail: "agent loop starting", funnel_stats: {} });
+  const progress = new ProgressBridge(gateway);
 
   const backendTools = await gateway.listTools();
   const counters = { webSearches: 0, deepResearch: 0 };
@@ -273,9 +457,15 @@ export async function runAgentResearch({ request, backendBaseUrl, agentToken }) 
     toolExecution: "parallel",
   });
 
+  const turnBudget = new TurnBudget(limits.max_turns);
   agent.subscribe((event) => {
     accumulateUsage(usageTotals, event);
     trackToolEvents(toolResults, events, event);
+    progress.onAgentEvent(event);
+    if (turnBudget.note(event)) {
+      events.push({ event_type: "max_turns_reached", detail: `stopped after ${turnBudget.turns} turns` });
+      abort.abort(new Error("max turns reached"));
+    }
   });
 
   const abort = new AbortController();
@@ -285,33 +475,43 @@ export async function runAgentResearch({ request, backendBaseUrl, agentToken }) 
     await agent.prompt("Begin the research funnel now.", { signal: abort.signal });
   } catch (error) {
     // Best-effort rescue: if the model already submitted a result, use it.
-    if (!submitted) {
+    if (submitted) {
+      events.push({ event_type: "run_aborted_after_submit", detail: String(error?.message || error) });
+    } else if (turnBudget.reached) {
+      // Turn budget exhausted mid-loop: fall through to the rescue turn that
+      // forces a best-effort submit instead of wasting the whole run.
+    } else {
       throw error;
     }
-    events.push({ event_type: "run_aborted_after_submit", detail: String(error?.message || error) });
   } finally {
     clearTimeout(timer);
   }
 
   if (!submitted) {
-    // Rescue turn: force a final answer from gathered evidence.
+    // Rescue turn: force a final answer from gathered evidence. Bounded so a
+    // stalling model cannot hang the worker past the run budget.
+    const rescueAbort = new AbortController();
+    const rescueTimer = setTimeout(() => rescueAbort.abort(new Error("rescue timeout")), RESCUE_TIMEOUT_MS);
     try {
       await agent.prompt(
         "The research budget has been reached. Stop all tool calls and submit your best-effort result now using the submit_discovery_result tool with the evidence gathered so far. If evidence is insufficient for a field, use null.",
-        { signal: AbortSignal.any ? AbortSignal.any([]) : undefined },
+        { signal: rescueAbort.signal },
       );
     } catch (error) {
       events.push({ event_type: "rescue_failed", detail: String(error?.message || error) });
+    } finally {
+      clearTimeout(rescueTimer);
     }
   }
 
   if (!submitted) {
     const error = new Error("The agent finished without submitting a structured result.");
     error.retryable = false;
+    progress.flush();
     throw error;
   }
 
-  await gateway.reportProgress({ event_type: "finalized", detail: "result submitted", funnel_stats: {} });
+  progress.finalize();
 
   return {
     status: "completed",

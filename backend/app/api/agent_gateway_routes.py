@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.ai_tools.executor import ToolExecutor
 from app.ai_tools.registry import tool_registry
 from app.ai_tools.schemas import ToolExecutionContext
+from app.ai_tools.scopes import DEFAULT_AGENT_TOOL_SCOPE, UnknownToolScope, resolve_tool_scope
 from app.config import get_settings
 from app.database import get_db
 from app.models import StockDiscoveryRun, User
@@ -33,43 +34,10 @@ from app.research.service import ResearchGateway
 router = APIRouter(prefix="/api/agent/v1")
 
 
-# The funnel tool allowlist. Discovery research must rely on stored project
-# data first; memory/AI-chat-only tools are intentionally excluded.
-ALLOWED_TOOL_NAMES: frozenset[str] = frozenset({
-    "list_research_capabilities",
-    # portfolio
-    "get_portfolio_summary", "get_portfolio_overview", "get_portfolio_positions",
-    "get_position_detail", "get_portfolio_risk_analysis", "get_portfolio_performance",
-    "get_portfolio_equity_curve", "get_portfolio_drawdown",
-    "get_portfolio_return_attribution", "get_position_performance",
-    "get_position_transaction_timeline", "get_position_open_lots",
-    "get_completed_trades", "get_trade_statistics", "get_dividend_history",
-    "get_fee_and_tax_summary", "get_cash_flow_summary", "get_currency_exposure",
-    # company / market
-    "get_company_profile", "get_company_snapshot", "get_company_peers",
-    "get_latest_price", "get_price_history", "compare_price_performance",
-    "get_market_context",
-    # news
-    "get_latest_news", "search_news", "get_news_detail", "get_news_archives",
-    # sec / ownership
-    "get_sec_filings", "get_sec_filing_detail", "get_sec_events",
-    "get_sec_financial_facts", "get_insider_trades", "get_institutional_holdings",
-    "get_company_ownership_activity",
-    # financials / valuation / technical / calendar
-    "get_financial_summary", "get_financial_statements",
-    "compare_financial_metrics", "get_financial_trends",
-    "get_latest_valuation", "get_valuation_history", "compare_valuations",
-    "get_technical_analysis", "get_technical_levels",
-    "compare_technical_signals", "get_technical_chart_reference",
-    "get_calendar_events", "get_calendar_event_detail",
-    # external retrieval (Exa) — still budgeted/privacy-filtered by the executor
-    "search_web", "search_latest_news_web", "search_official_company_sources",
-    "search_financial_reports_web", "search_publications_web",
-    "run_deep_web_research",
-    # options / mood
-    "get_options_overview", "get_symbol_options_summary",
-    "get_mood_overview", "get_mood_history", "get_mood_validation",
-})
+# Backwards-compatible alias: the opportunity research scope is the default
+# capability set for this gateway. New agent surfaces add scopes in
+# ``app.ai_tools.scopes`` instead of extending a bespoke allowlist here.
+ALLOWED_TOOL_NAMES = resolve_tool_scope(DEFAULT_AGENT_TOOL_SCOPE)
 
 
 def _require_token(x_agent_token: str | None) -> None:
@@ -93,6 +61,7 @@ class GatewayCall(BaseModel):
     user_id: int = Field(gt=0)
     tool: str = Field(min_length=1, max_length=64)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    tool_scope: str = Field(default=DEFAULT_AGENT_TOOL_SCOPE, max_length=64)
 
 
 class ProgressEvent(BaseModel):
@@ -116,11 +85,16 @@ def _gateway(db: Session, user: User, request: Request) -> ResearchGateway:
 
 @router.get("/tools")
 def list_tools(
+    scope: str = DEFAULT_AGENT_TOOL_SCOPE,
     x_agent_token: str | None = Header(default=None),
 ):
     _require_token(x_agent_token)
-    tools = tool_registry.export_openai_tools(allowed_tools=ALLOWED_TOOL_NAMES)
-    return {"tools": tools, "count": len(tools)}
+    try:
+        allowed = resolve_tool_scope(scope)
+    except UnknownToolScope:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown tool scope: {scope}") from None
+    tools = tool_registry.export_openai_tools(allowed_tools=allowed)
+    return {"tools": tools, "count": len(tools), "scope": scope or DEFAULT_AGENT_TOOL_SCOPE}
 
 
 @router.post("/execute")
@@ -136,7 +110,11 @@ async def execute_tool(
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     _owned_run(db, call.user_id, call.run_id)
-    if call.tool not in ALLOWED_TOOL_NAMES:
+    try:
+        allowed = resolve_tool_scope(call.tool_scope)
+    except UnknownToolScope:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown tool scope: {call.tool_scope}") from None
+    if call.tool not in allowed:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Tool is not allowed for agent research")
     context = ToolExecutionContext(
         request_id=f"pi-agent:{call.run_id}:{request.headers.get('X-Request-ID') or 'r'}",
@@ -147,7 +125,7 @@ async def execute_tool(
         ),
         deep_search_confirmed=False,
         caller="internal",
-        allowed_tools=ALLOWED_TOOL_NAMES,
+        allowed_tools=allowed,
         # Per-call ceilings stay at the executor defaults; run-level budget
         # enforcement happens at the sidecar (counters) plus executor limits.
         max_tool_calls=min(settings.ai_tools_max_calls_per_batch, 12),

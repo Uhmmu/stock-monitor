@@ -133,3 +133,35 @@ def test_progress_rejects_invalid_event_type(client, owner):
         "run_id": 1, "user_id": user.id, "event_type": "chain_of_thought_dump",
     })
     assert response.status_code == 422
+
+
+def test_tools_unknown_scope_is_rejected(client):
+    response = client.get("/api/agent/v1/tools?scope=does_not_exist", headers={"X-Agent-Token": "test-token"})
+    assert response.status_code == 404
+
+
+def test_scope_filters_tool_listing(client, monkeypatch):
+    from app.ai_tools.scopes import TOOL_SCOPES
+    monkeypatch.setitem(TOOL_SCOPES, "test_subset", frozenset({"get_market_context", "search_web"}))
+    response = client.get("/api/agent/v1/tools?scope=test_subset", headers={"X-Agent-Token": "test-token"})
+    assert response.status_code == 200
+    names = {tool["function"]["name"] for tool in response.json()["tools"]}
+    assert names == {"get_market_context", "search_web"}
+    assert response.json()["scope"] == "test_subset"
+
+
+def test_execute_enforces_requested_scope(client, db, owner, monkeypatch):
+    from app.ai_tools.scopes import TOOL_SCOPES
+    monkeypatch.setitem(TOOL_SCOPES, "test_subset", frozenset({"get_market_context"}))
+    user, _ = owner
+    run = _run(db, owner)
+    blocked = client.post("/api/agent/v1/execute", headers={"X-Agent-Token": "test-token"}, json={
+        "run_id": run.id, "user_id": user.id, "tool": "get_latest_price",
+        "arguments": {"symbol": "AAPL"}, "tool_scope": "test_subset",
+    })
+    assert blocked.status_code == 403
+    unknown = client.post("/api/agent/v1/execute", headers={"X-Agent-Token": "test-token"}, json={
+        "run_id": run.id, "user_id": user.id, "tool": "get_latest_price",
+        "arguments": {"symbol": "AAPL"}, "tool_scope": "missing_scope",
+    })
+    assert unknown.status_code == 404

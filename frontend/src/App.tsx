@@ -8,6 +8,7 @@ import { Sheet } from './Sheet'
 import { SecuritySearchAutocomplete, securityPayload, type SecuritySearchResult } from './SecuritySearchAutocomplete'
 import { PortfolioBenchmarkOverview, PortfolioModule } from './Portfolio'
 import { DiscoverySettingsPanel, OpportunityDiscovery } from './OpportunityDiscovery'
+import { DiscoveryResearchWidget } from './DiscoveryResearchWidget'
 import { AdanosQuotaPanel, SentimentModule } from './Sentiment'
 import { InvestmentCalendar } from './InvestmentCalendar'
 import { OwnershipSection } from './Ownership'
@@ -551,6 +552,7 @@ export default function App() {
       {tab==='ibkr-test'&&authUser.role==='admin'&&<IbkrIntegrationTest/>}
       </div>
     </main>
+    {!demoMode&&<DiscoveryResearchWidget activeTab={tab} onNavigate={selectTab}/>}
     <Sheet open={selectedReport!==null} onClose={()=>setSelectedReport(null)} title={report.data?typeNames[report.data.report_type]||report.data.report_type:'报告'}>
       {report.data?<article className="report-detail sheet-report"><p className="eyebrow">{typeNames[report.data.report_type]} · {report.data.model}</p><h2>{report.data.title}</h2><div className="report-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{report.data.content}</ReactMarkdown></div><h3>信息来源</h3>{report.data.sources.map((s,i)=><a href={s.url} target="_blank" rel="noreferrer" key={i}>{i+1}. {s.title}</a>)}</article>:<div className="empty">加载中…</div>}
     </Sheet>

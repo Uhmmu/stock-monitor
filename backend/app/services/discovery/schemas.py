@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-PROMPT_VERSION = "stock-discovery-prompt-v0.7"
+PROMPT_VERSION = "stock-discovery-prompt-v0.8"
 SCHEMA_VERSION = "stock-discovery-schema-v0.7"
 FILTER_VERSION = "stock-discovery-filter-v0.4"
 

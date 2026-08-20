@@ -39,7 +39,7 @@ from .analysis import AnalysisError, AnalysisResult, analyze_opportunities
 from .exa import ExaAgentResult, ExaError, build_request as build_exa_request, run_agent as run_exa_agent
 from .perplexity import AgentResult, PerplexityError, build_request, run_agent
 from .pi_agent import PiAgentError, PiAgentResult, build_request as build_pi_request, run_agent as run_pi_agent
-from .progress import agent_events_payload
+from .progress import agent_events_payload, run_progress_payload
 from .search import SearchError, SearchResult, build_search_queries, run_search
 from .schemas import (
     DiscoveryResult,
@@ -322,6 +322,16 @@ def _persist_pi_usage(db: Session, run_id: int, result: PiAgentResult) -> None:
     ))
 
 
+def _pi_source_origin(source_type: Any) -> str:
+    """Origin badge for Pi Agent sources, derived from the evidence type so the
+    UI can attribute data to SEC filings / company IR / news / internal data
+    instead of a blanket "pi agent" tag. Unknown types fall back to a generic
+    engine tag (legacy rows already persisted as "pi_agent*" keep working via
+    the frontend label map)."""
+    kind = str(source_type or "").strip()
+    return f"pi_{kind}" if kind else "pi_evidence"
+
+
 def _persist_pi_sources(db: Session, run_id: int, parsed: DiscoveryResult) -> None:
     seen: set[str] = set()
     for group in parsed.candidate_groups:
@@ -334,7 +344,7 @@ def _persist_pi_sources(db: Session, run_id: int, parsed: DiscoveryResult) -> No
                     db.add(StockDiscoverySource(
                         run_id=run_id, title=evidence.get("claim") or "",
                         url=reference, source_type=evidence.get("source_type") or "other",
-                        source_origin="pi_agent_evidence",
+                        source_origin=_pi_source_origin(evidence.get("source_type")),
                     ))
             for source in raw.get("sources") or []:
                 url = source.get("url")
@@ -343,7 +353,7 @@ def _persist_pi_sources(db: Session, run_id: int, parsed: DiscoveryResult) -> No
                     db.add(StockDiscoverySource(
                         run_id=run_id, title=source.get("title") or "", url=url,
                         source_type=source.get("source_type") or "other",
-                        source_origin="pi_agent",
+                        source_origin=_pi_source_origin(source.get("source_type")),
                     ))
 
 
@@ -712,7 +722,7 @@ def _persist_candidates(
                     source_origin=(
                         "exa_financial_datasets" if raw_source == "exa_finance" and source.get("source_type") == "finance"
                         else ("exa_web" if raw_source == "exa_finance" else (
-                            "pi_agent_evidence" if raw_source == "pi_agent" else (
+                            _pi_source_origin(source.get("source_type")) if raw_source == "pi_agent" else (
                                 "perplexity_finance" if source.get("source_type") == "finance" else "perplexity_web"
                             )
                         ))
@@ -800,6 +810,7 @@ def execute_discovery_run(db: Session, run_id: int) -> StockDiscoveryRun:
                 max_web_search_calls=env.pi_agent_max_web_search_calls,
                 deep_effort=env.pi_agent_deep_effort,
                 max_output_tokens=config.max_output_tokens,
+                tool_scope=env.pi_agent_tool_scope,
             ))
             parsed = pi.parsed
             history_batch = _legacy_to_opportunity_batch(parsed)
@@ -1141,8 +1152,11 @@ def latest_discovery_payload(db: Session, user_id: int) -> dict:
             StockDiscoveryCandidate.run_id == current.id)) or 0)
     display_run = success or (current if partial_count else None)
     display = discovery_run_payload(db, display_run) if display_run else None
+    current_payload = _run_payload(current)
+    if current is not None and current_payload is not None:
+        current_payload.update(run_progress_payload(db, current))
     return {
-        "current_run": _run_payload(current), "result": display,
+        "current_run": current_payload, "result": display,
         "using_previous_result": bool(success and current and success.id != current.id and current.status in ACTIVE_STATUSES | {"failed", "blocked_by_budget"}),
         "api_key_configured": bool(
             get_settings().exa_api_key.strip()

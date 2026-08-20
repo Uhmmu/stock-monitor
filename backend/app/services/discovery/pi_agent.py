@@ -66,7 +66,7 @@ class PiAgentResult:
 def build_request(
     *, run_id: int, user_id: int, context: dict, model: str,
     max_turns: int, max_web_search_calls: int, deep_effort: str,
-    max_output_tokens: int,
+    max_output_tokens: int, tool_scope: str = "opportunity_research",
 ) -> dict:
     settings = get_settings()
     return {
@@ -75,6 +75,7 @@ def build_request(
         "model": model,
         "system_prompt": PI_SYSTEM_INSTRUCTIONS,
         "context": context,
+        "tool_scope": tool_scope,
         "limits": {
             "max_turns": max_turns,
             "max_web_search_calls": max_web_search_calls,

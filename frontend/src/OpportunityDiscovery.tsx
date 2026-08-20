@@ -42,6 +42,23 @@ const engineLabel:Record<string,string>={search_local:'GPT-5.6-sol + Perplexity 
 const filterLabel:Record<string,string> = {accepted:'已保留',accepted_with_warning:'保留但有警告',watch_only:'仅观察',rejected:'已过滤',insufficient_data:'数据不足',duplicate:'重复候选',already_held:'已持有',already_watched:'已在自选',unsupported_symbol:'无法识别'}
 const levelLabel:Record<string,string> = {high:'高',medium:'中',low:'低',uncertain:'不确定',cheap:'便宜',reasonable:'合理',elevated:'偏高',extreme:'极高',cold:'冷',neutral:'中性',improving:'改善',strong:'强',euphoric:'过热',verified:'已验证',partial:'部分验证',pending:'待验证',failed:'待验证',positive:'增加分散',negative:'重复敞口'}
 const metricLabels:Record<string,string> = {market_cap:'市值',pe_trailing:'PE',pe_forward:'预期 PE',price_to_sales:'市销率',revenue_growth:'营收增长',earnings_growth:'盈利增长',free_cash_flow:'自由现金流',free_cash_flow_margin:'FCF 利润率',return_on_invested_capital:'ROIC',operating_margin:'经营利润率',gross_margin:'毛利率',price:'价格',average_volume:'平均成交量'}
+
+// 数据出处统一映射：Pi 来源按证据类型细分（SEC 文件/公司 IR/…），不再统一显示 "pi agent"。
+// 旧的 pi_agent / pi_agent_evidence 行（历史数据）也在这里映射，保证旧 run 可读。
+const sourceOriginLabels:Record<string,string> = {
+  pi_sec_filing:'SEC 文件', pi_company_ir:'公司 IR', pi_earnings_call:'财报电话会',
+  pi_reputable_news:'权威新闻', pi_web_source:'网络来源', pi_internal_data:'内部数据',
+  pi_model_inference:'模型推断', pi_evidence:'Pi 证据', pi_agent_evidence:'Pi 证据链', pi_agent:'Pi 报告值',
+  perplexity_search:'Perplexity Search', perplexity_finance:'Perplexity Finance', perplexity_web:'Perplexity Web',
+  exa_financial_datasets:'Exa Financial Datasets', exa_grounding:'Exa Grounding', exa_finance:'Exa Finance', exa_web:'Exa Web',
+  yfinance:'Yahoo', local_calculation:'本地计算',
+}
+export const discoverySourceLabel=(origin:string)=>sourceOriginLabels[origin]||origin
+const searchSourceLabels:Record<string,string> = {
+  pi_agent:'Pi Agent 智能研究', perplexity_search:'GPT-5.6-sol + Perplexity Search',
+  perplexity_finance_agent:'Perplexity Finance Agent', exa_agent_financial_datasets:'Exa Agent + Financial Datasets',
+}
+export const discoverySearchSourceLabel=(source:string)=>searchSourceLabels[source]||engineLabel[source]||source
 const percentMetrics = new Set(['revenue_growth','earnings_growth','free_cash_flow_margin','return_on_invested_capital','operating_margin','gross_margin'])
 
 export function visibleCandidateMetrics(snapshot:CandidateMetric, limit=6) {
@@ -117,7 +134,7 @@ function CandidateCard({candidate,onDetail,onAction}:{candidate:DiscoveryCandida
     <CandidateMetricRow snapshot={candidate.financial_snapshot}/>
     <div className="candidate-tags"><span>质量：{levelLabel[candidate.quality_level]||'不确定'}</span><span>估值：{levelLabel[candidate.valuation_level]||'不确定'}</span><span>动量：{levelLabel[candidate.momentum_state]||'不确定'}</span><span>验证：{levelLabel[candidate.verification_status]||'待验证'}</span></div>
     {!!candidate.filter_reasons.length&&<p className="candidate-warning">{candidate.filter_reasons.join('；')}</p>}
-    <div className="candidate-sources">{candidate.source_badges.slice(0,4).map(source=><span key={source}>{source.replace('perplexity_search','Perplexity Search').replace('perplexity_finance','Perplexity Finance').replace('perplexity_web','Perplexity Web').replace('exa_financial_datasets','Exa Financial Datasets').replace('exa_grounding','Exa Grounding').replace('exa_finance','Exa Finance').replace('exa_web','Exa Web').replace('yfinance','Yahoo').replace('local_calculation','本地计算')}</span>)}</div>
+    <div className="candidate-sources">{candidate.source_badges.slice(0,4).map(source=><span key={source}>{discoverySourceLabel(source)}</span>)}</div>
     <div className="candidate-actions"><button onClick={()=>onDetail(candidate.id)}>查看详情</button><details><summary aria-label={`${ticker} 更多操作`}>•••</summary><div><button onClick={()=>onAction('watchlist',candidate.id)}>加入自选</button><button onClick={()=>onAction('researched',candidate.id)}>标记已研究</button><button onClick={()=>onAction('dismiss',candidate.id)}>忽略</button></div></details></div>
   </article>
 }
@@ -153,7 +170,7 @@ export function DataDiscrepancies({items}:{items:DiscoveryCandidate['data_discre
 function CandidateDetailDrawer({id,onClose,onChanged}:{id:number|null;onClose:()=>void;onChanged:()=>void}) {
   const detail=useQuery({queryKey:['discovery-candidate',id],queryFn:()=>api<DiscoveryCandidateDetail>(`/discovery/candidates/${id}`),enabled:id!=null})
   const item=detail.data
-  const analysisLabel=item?.source_badges.some(source=>source.startsWith('exa_'))?'Exa Agent + Financial Datasets':item?.source_badges.includes('perplexity_finance')?'Perplexity Finance Search + GPT-5.4':'GPT-5.6-sol + Perplexity Search'
+  const analysisLabel=item?.source_badges.some(source=>source.startsWith('pi_'))?'Pi Agent 智能研究':item?.source_badges.some(source=>source.startsWith('exa_'))?'Exa Agent + Financial Datasets':item?.source_badges.includes('perplexity_finance')?'Perplexity Finance Search + GPT-5.4':'GPT-5.6-sol + Perplexity Search'
   return <Sheet open={id!=null} onClose={onClose} title={item?.normalized_ticker||item?.raw_ticker||'候选详情'}>{detail.isLoading&&<div className="empty">正在读取已保存的候选资料…</div>}{item&&<article className="candidate-detail">
     <div className="candidate-detail-heading"><div><p className="eyebrow">研究候选</p><h2>{item.normalized_ticker||item.raw_ticker} <small>{item.company_name}</small></h2></div><CandidateStatusBadge status={item.display_status}/></div>
     <section><h3>{analysisLabel}</h3><p>{item.discovery_reason}</p>{!!item.investment_thesis.length&&<ul>{item.investment_thesis.map(text=><li key={text}>{text}</li>)}</ul>}<CandidateMetricRow snapshot={(item.raw_analysis.financial_snapshot||{}) as CandidateMetric}/></section>
@@ -162,14 +179,14 @@ function CandidateDetailDrawer({id,onClose,onChanged}:{id:number|null;onClose:()
     {!!item.bear_case.length&&<section className="candidate-bear-case"><h3>反方论据（Bear Case）</h3><ul>{item.bear_case.map(text=><li key={text}>{text}</li>)}</ul><small>主动寻找的不买入理由，用于对冲确认偏误。</small></section>}
     {!!item.evidence.length&&<section><h3>证据链</h3><ul className="candidate-evidence-list">{item.evidence.map((row,index)=><li key={`${row.claim}-${index}`}><span className={`evidence-source-type ${row.source_type}`}>{evidenceSourceLabel(row.source_type)}</span><div><p>{row.claim}</p><small>{row.date?`日期 ${row.date}　`:''}{row.confidence!=null?`置信度 ${(row.confidence*100).toFixed(0)}%　`:''}{row.url_or_reference&&<a href={row.url_or_reference} target="_blank" rel="noreferrer">来源链接</a>}</small></div></li>)}</ul></section>}
     <section><h3>风险与失效条件</h3>{!!item.major_risks.length&&<><b>主要风险</b><ul>{item.major_risks.map(text=><li key={text}>{text}</li>)}</ul></>}{!!item.thesis_breakers.length&&<><b>失效条件</b><ul>{item.thesis_breakers.map(text=><li key={text}>{text}</li>)}</ul></>}{!!item.filter_reasons.length&&<p className="candidate-warning">本地过滤：{item.filter_reasons.join('；')}</p>}</section>
-    <section><h3>来源与数据差异</h3>{item.sources.map((source,index)=><a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">{source.title||source.url} <small>{source.origin}</small></a>)}{!item.sources.length&&<p>来源链接数据不足</p>}</section>
+    <section><h3>来源与数据差异</h3>{item.sources.map((source,index)=><a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">{source.title||source.url} <small>{discoverySourceLabel(source.origin)}</small></a>)}{!item.sources.length&&<p>来源链接数据不足</p>}</section>
     <div className="candidate-detail-actions"><button onClick={()=>post(`/discovery/candidates/${item.id}/watchlist`,{}).then(onChanged)}>加入自选</button><button onClick={()=>post(`/discovery/candidates/${item.id}/researched`,{}).then(onChanged)}>标记已研究</button></div>
   </article>}</Sheet>
 }
 
 function OpportunityReport({history}:{history:OpportunityHistory}) {
   return <section className="opportunity-history-detail" aria-label="机会详情">
-    <div className="section-title"><div><p>机会详情</p><h2>{formatTime(history.created_at)}</h2></div><small>{history.model_version} · {history.search_source}</small></div>
+    <div className="section-title"><div><p>机会详情</p><h2>{formatTime(history.created_at)}</h2></div><small>{history.model_version} · {discoverySearchSourceLabel(history.search_source)}</small></div>
     <p className="history-market-condition"><b>当时市场环境</b>{history.market_condition}</p>
     <div className="history-report-grid">{history.opportunities.map((item,index)=><article key={`${item.ticker}-${index}`}>
       <div className="history-company-heading"><div><span>{item.ticker}</span><h3>{item.title}</h3></div><strong>{item.confidence}</strong></div>
@@ -181,7 +198,7 @@ function OpportunityReport({history}:{history:OpportunityHistory}) {
       <section><h4>风险</h4><ul>{item.risks.map(text=><li key={text}>{text}</li>)}</ul></section>
       <p><b>估值判断</b>{item.valuation_view}</p>
     </article>)}</div>
-    {!!history.sources?.length&&<details className="history-sources"><summary>数据来源（{history.sources.length}）</summary><div>{history.sources.map((source,index)=><a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">{source.title||source.url}<small>{source.origin}</small></a>)}</div></details>}
+    {!!history.sources?.length&&<details className="history-sources"><summary>数据来源（{history.sources.length}）</summary><div>{history.sources.map((source,index)=><a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">{source.title||source.url}<small>{discoverySourceLabel(source.origin)}</small></a>)}</div></details>}
   </section>
 }
 
