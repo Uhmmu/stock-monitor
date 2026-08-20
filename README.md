@@ -5,76 +5,59 @@
 <h1 align="center">Stock Monitor</h1>
 
 <p align="center">
-  自托管的美股监控、研究与投资组合分析工作台
+  自托管的市场监控、投资研究与组合分析工作台
 </p>
 
-Stock Monitor 把行情、自选股、新闻、SEC 披露、基本面、估值、投资组合、交易日志和 AI 研究集中在一个响应式仪表盘中。数据、账户和 API Key 都保留在自己的服务器上，适合个人投资者或小团队部署。
+Stock Monitor 将行情、自选股、新闻、SEC 披露、基本面、估值、投资组合和 AI 研究集中在一个应用中。数据、账户信息和第三方 API Key 均由自己的服务器保存。
 
-> 本项目是研究与记录工具，不提供投资建议，也不会自动下单。历史数据、模型结果和模拟结果不代表未来表现。
+> 本项目只用于研究和记录，不提供投资建议，也不会自动下单。历史数据、模型结果和模拟结果不代表未来表现。
 
-## 核心能力
+## 功能
 
-- **市场雷达**：聚合 Alpaca、Tiingo、Finnhub 和 Yahoo 行情，保存标准化快照，通过 SSE 推送实时价格与盘中事件。
-- **行业板块检测（桌面端）**：以 11/50/229 的基础行业分类和 5/25/92 的 AI 产业链图谱组织 64 个 ETF 代理；按日优先 yfinance、失败回退 Finnhub，持久化确定性 Pulse / Heat / Risk / Focus / Relative Strength 快照，AI 摘要可选，页面只读已保存结果，不在加载时调用 Provider 或 AI。
-- **期权研究**：为市场 ETF、一级行业及少量行业代理、自选股维护有界的 yfinance 期权聚合与每日历史，提供 IV、Put/Call、OI、skew、activity 和显式数据质量；Finnhub 仅补充标的行情/资料。
-- **异动与新闻**：监控自选股价格和成交量变化，聚合公司新闻、市场新闻及调查上下文，并支持按需 AI 总结。
-- **基本面研究**：提供财务报表、公司资料、分析师评级、SEC 8-K / 10-Q / 10-K、Form 4、13F、技术分析和个股横向比较。
-- **估值与宏观**：包含 DCF、多模型估值、ROIC、Piotroski F-Score、Altman Z-Score，以及可选的美国宏观数据。
-- **投资组合中心**：支持多币种折算、权威交易流水、持仓重建、收益归因、组合健康、策略画像和大盘基准对比。
-- **组合量化分析**：提供风险体检、压力测试、情景分析、蒙特卡洛模拟和约束组合优化；结果每周后台预计算，也保留手动刷新。
-- **AI 研究助手**：支持流式多轮对话、只读研究工具、引用、长期记忆、投资决策记录，以及可选的 Exa 联网研究。
-- **机会发现与舆情**：可选 Perplexity / Exa 机会发现和 Adanos 多源舆情，带本地验证、预算限制和持久化历史。
-- **桌面与 iPhone 前端**：桌面端位于 `/`，独立 iPhone PWA 位于 `/mobile/`，两端共用同一套认证和 API。
-- **多用户与管理**：JWT 登录、注册审核、管理员设置和按用户隔离的数据访问。
+- **行情与异动**：标准化多源报价、实时 SSE 更新、价格与成交量告警、调查记录。
+- **研究数据**：公司新闻、财务报表、估值、技术分析、SEC 文件、Form 4、13F 和投资日历。
+- **行业与期权**：持久化行业 Pulse、ETF/产业链代理，以及有明确数据质量和历史门槛的期权分析。
+- **投资组合**：多币种持仓、交易流水、收益归因、健康检查、策略画像、压力测试、情景分析、蒙特卡洛和组合优化。
+- **AI 研究**：带引用的流式对话、只读研究工具、长期记忆、投资决策记录，以及可选的 Exa、Perplexity 和 Pi Agent。
+- **机会与舆情**：组合感知的股票机会发现、多源舆情、本地复核、成本预算和历史留存。
+- **多端访问**：桌面 Web、独立 iPhone PWA，以及实验性的 Qt Quick 原生桌面客户端。
 
-外部数据缺失或覆盖不足时，界面会明确显示“数据不足”，不会把缺失值当作 0，也不会编造财务数据。
-
-## 技术栈
-
-| 层 | 技术 |
-|---|---|
-| 桌面与移动前端 | React 19、TypeScript、Vite、TanStack Query |
-| API | FastAPI、SQLAlchemy 2、Alembic、Pydantic Settings |
-| 后台任务 | Celery、Redis |
-| 数据库 | PostgreSQL 16 |
-| 数据处理 | pandas、NumPy、SciPy、yfinance、edgartools |
-| 网关 | nginx、Caddy |
-| 部署 | Docker Compose |
-
-原生桌面客户端 Phase 1 位于 `desktop/`，使用 Qt Quick、C++20 和现有 FastAPI API；它不嵌入 WebView，也不复制服务端业务逻辑。
+当上游数据缺失或样本不足时，应用会显示“数据不足”或对应原因，不会用 0 或猜测值填补。
 
 ## 架构
 
 ```mermaid
 flowchart LR
-    U[浏览器 / PWA] --> C[Caddy]
-    C --> D[桌面前端]
-    C --> M[iPhone 前端]
-    D --> A[FastAPI]
-    M --> A
-    A --> P[(PostgreSQL)]
-    A --> R[(Redis)]
-    R --> W[Celery Worker]
-    R --> S[SEC / IBKR Worker]
-    B[Celery Beat] --> R
-    Q[Market Stream] --> R
-    A --> F[Finnhub MCP]
-    A --> E[外部行情 / 新闻 / AI / SEC]
-    W --> E
-    S --> E
+    U["浏览器 / PWA"] --> G["Caddy / nginx"]
+    G --> A["FastAPI"]
+    A --> P[("PostgreSQL")]
+    A --> R[("Redis")]
+    R --> W["Celery workers"]
+    B["Celery beat"] --> R
+    M["Market stream"] --> R
+    A --> F["Finnhub MCP"]
+    A --> X["行情 / 新闻 / SEC / AI"]
+    W --> X
+    Q["Pi Agent"] --> A
 ```
+
+| 层 | 技术 |
+|---|---|
+| Web / PWA | React 19、TypeScript、Vite、TanStack Query |
+| API | FastAPI、SQLAlchemy 2、Alembic |
+| 异步任务 | Celery、Redis |
+| 数据库 | PostgreSQL 16 |
+| 数据与计算 | pandas、NumPy、SciPy、yfinance、edgartools |
+| 网关与部署 | nginx、Caddy、Docker Compose |
+| 原生桌面实验 | Qt Quick、C++20、CMake |
 
 ## 快速开始
 
-### 环境要求
+### 要求
 
 - Docker Engine
 - Docker Compose v2
 - 建议至少 4 GB 内存
-
-所有第三方 Provider 都是可选项。没有 API Key 时应用仍可启动，对应功能会降级或显示数据不足。
-
-行业板块检测使用 yfinance 批量日线，单个标的失败时回退 Finnhub；分析按低频批次写入数据库，页面读取持久化结果，不会在加载时触发上游行情或 AI。AI 摘要由 `INDUSTRY_PULSE_AI_ENABLED` 控制。
 
 ### 1. 获取代码
 
@@ -84,9 +67,9 @@ cd stock-monitor
 cp .env.example .env
 ```
 
-### 2. 设置基础配置
+### 2. 配置基础环境
 
-编辑 `.env`，至少修改以下值：
+编辑 `.env`，至少设置以下值：
 
 ```env
 POSTGRES_DB=stock_monitor
@@ -100,157 +83,123 @@ ADMIN_INIT_PASSWORD=replace-with-a-strong-admin-password
 SEC_USER_AGENT=Stock Monitor admin@example.com
 ```
 
-`POSTGRES_PASSWORD` 和 `DATABASE_URL` 中的密码必须一致。可以使用 `openssl rand -hex 32` 生成随机密钥。
+`POSTGRES_PASSWORD` 必须与 `DATABASE_URL` 中的密码一致。可用 `openssl rand -base64 48` 生成 `JWT_SECRET`。
 
-### 3. 启动本地环境
+### 3. 启动
 
 ```bash
 docker compose up -d --build
 docker compose ps
 ```
 
-打开 <http://127.0.0.1:8080>。API 健康检查：
+本地预览地址：<http://127.0.0.1:8080>
 
 ```bash
 curl http://127.0.0.1:8080/api/health
 ```
 
-API 启动时会自动执行数据库迁移。首次启动且数据库中没有管理员时，会使用 `ADMIN_USERNAME` 和 `ADMIN_INIT_PASSWORD` 创建管理员账户。
+API 启动时会自动执行 Alembic 迁移。数据库中没有管理员时，应用会使用 `ADMIN_USERNAME` 和 `ADMIN_INIT_PASSWORD` 创建首个管理员。
 
-## 可选 Provider
+## 可选集成
 
-按需要在 `.env` 中启用，不要把真实 Key 提交到 Git：
+应用没有第三方 Key 也能启动；对应功能会停用或显示数据不足。完整配置和默认值见 [`.env.example`](.env.example)。
 
 | 能力 | 主要配置 |
 |---|---|
-| Finnhub 行情与新闻 | `FINNHUB_API_KEY` |
+| Finnhub | `FINNHUB_API_KEY` |
 | Alpaca 实时行情 | `ALPACA_MARKET_DATA_ENABLED`、`ALPACA_API_KEY`、`ALPACA_API_SECRET` |
-| Tiingo 行情与新闻 | `TIINGO_MARKET_DATA_ENABLED`、`TIINGO_API_TOKEN`、`TIINGO_NEWS_ENABLED` |
-| FMP 公司资料与历史日线 | `FMP_API_KEY` |
-| Tavily / Marketaux 新闻 | `TAVILY_API_KEY`、`MARKETAUX_API_KEY` |
-| AI 总结与报告 | `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`MODEL_*` |
-| AI 对话 | `AI_ENABLED`、`AI_API_BASE`、`AI_API_KEY`、`AI_MODEL` |
-| Exa 联网研究 | `EXA_ENABLED`、`EXA_API_KEY` |
-| Perplexity 机会发现 | `PERPLEXITY_API_KEY` |
-| Adanos 舆情 | `ADANOS_API_KEY` 或 `ADANOS_API_KEYS` |
-| Alpha Vantage 宏观数据 | `ALPHA_VANTAGE_ENABLED`、`ALPHA_VANTAGE_API_KEY` |
-| 行业板块检测 | `INDUSTRY_PULSE_*`；Finnhub 回退时使用 `FINNHUB_API_KEY` |
-| 期权研究 | `OPTIONS_*`；期权链使用 yfinance，Finnhub 仅补充标的行情/资料 |
-| IBKR 只读账户同步 | `IBKR_CP_*` 或 `IBKR_FLEX_*`，参见 [IBKR 文档](docs/integrations/ibkr.md) |
+| Tiingo | `TIINGO_MARKET_DATA_ENABLED`、`TIINGO_API_TOKEN`、`TIINGO_NEWS_ENABLED` |
+| FMP | `FMP_API_KEY` |
+| 新闻搜索 | `TAVILY_API_KEY`、`MARKETAUX_API_KEY` |
+| AI 对话与报告 | `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`AI_*`、`MODEL_*` |
+| 深度研究 | `EXA_ENABLED`、`EXA_API_KEY`、`AGENT_GATEWAY_TOKEN` |
+| 机会发现与舆情 | `PERPLEXITY_API_KEY`、`ADANOS_API_KEY` |
+| 美国宏观数据 | `ALPHA_VANTAGE_ENABLED`、`ALPHA_VANTAGE_API_KEY` |
+| IBKR 只读同步 | `IBKR_CP_*` 或 `IBKR_FLEX_*` |
 
-AI、搜索、机会发现和舆情 Key 只由服务端读取，浏览器不会接触这些凭据。IBKR 集成必须使用经过验证的 `socks5h` 代理并采用 fail-closed 配置，禁止代理失败后直连。
+所有 Key 仅由服务端读取。IBKR 连接必须使用经过验证的 `socks5h` 代理并 fail closed，禁止代理失败后直连；详见 [IBKR 集成文档](docs/integrations/ibkr.md)。
 
 ## 生产部署
 
-设置生产域名后，使用不包含本地 override 的 Compose 文件启动完整栈：
+设置域名和 Caddy Basic Auth：
 
 ```env
 SITE_DOMAINS="stocks.example.com, www.stocks.example.com"
+AUTH_USER=admin
+AUTH_PASSWORD_HASH=replace-with-a-caddy-password-hash
 ```
+
+使用基础 Compose 文件启动完整栈：
 
 ```bash
 docker compose -f compose.yaml up -d --build
 docker compose -f compose.yaml ps
 ```
 
-Caddy 会负责 HTTPS，并将 `/`、`/mobile/` 和 `/api` 分别路由到桌面前端、iPhone 前端和 FastAPI。
+Caddy 提供 HTTPS；桌面端位于 `/`，iPhone PWA 位于 `/mobile/`，API 位于 `/api/`。生产升级前应备份 PostgreSQL 和持久卷。
 
-后端代码或依赖变化时，`api`、`worker`、`sec-worker`、`beat` 和 `market-stream` 使用同一个构建上下文，需要一起重建。生产升级前请先备份 PostgreSQL 和持久卷。
+后端代码或依赖变化时，需一起重建共享 `backend` 构建上下文的 `api`、`worker`、`sec-worker`、`beat` 和 `market-stream`。
 
-## 常用命令
-
-```bash
-make up       # 构建并启动本地环境
-make down     # 停止服务
-make logs     # 查看日志
-make migrate  # 执行数据库迁移
-make test     # 运行后端与桌面前端测试
-make backup   # 备份 PostgreSQL
-```
-
-单独验证各部分：
+## 开发与验证
 
 ```bash
-docker compose run --rm api pytest
+# 后端
+PYTHONPATH=backend .venv/bin/pytest
 
+# 桌面 Web
 cd frontend
 npm ci
 npm test
 npm run build
 
+# iPhone PWA
 cd ../frontend-ios
 npm ci
 npm test
 npm run build
 ```
 
-原生 Qt 桌面端（Qt 6.8+、CMake、Ninja）：
+常用 Compose 操作也可通过 `make up`、`make down`、`make logs`、`make migrate`、`make backup` 和 `make restore FILE=backup.sql.gz` 执行。
+
+Qt 客户端需要 Qt 6.8+、CMake 和 Ninja：
 
 ```bash
 cmake -S desktop -B desktop/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build desktop/build
 ctest --test-dir desktop/build --output-on-failure
-cmake --install desktop/build --prefix "$HOME/.local"
-QT_QPA_PLATFORM=wayland desktop/build/stock-monitor-desktop
 ```
 
-默认开发地址为 `http://127.0.0.1:8080`，可在登录页切换为 HTTPS 生产地址；非本机 HTTP 地址会被拒绝。Phase 1 令牌只保存在进程内存，关闭应用后需要重新登录。
-
-Phase 2 的原生设计系统 Playground 可直接运行，主题、对比度、减少动态和减少透明度设置会保存到本机：
-
-```bash
-stock-monitor-desktop --playground
-stock-monitor-desktop --showcase
-stock-monitor-desktop --showcase --custom-chrome # experimental; native decoration remains the default
-stock-monitor-desktop --showcase --frame-benchmark
-sh desktop/tests/visual/capture.sh desktop/build/stock-monitor-desktop desktop/build/visual-output
-```
-
-## 项目结构
+## 目录
 
 ```text
-stock-monitor/
-├── backend/
-│   ├── app/api/                 # FastAPI 路由
-│   ├── app/services/            # 行情、新闻、SEC、组合与分析服务
-│   ├── app/tasks/               # Celery 任务与调度
-│   ├── app/research/            # 只读 Research Data Gateway
-│   ├── app/ai*/                 # AI 对话、工具、记忆与富内容
-│   ├── alembic/versions/        # 数据库迁移
-│   └── tests/                   # 后端测试
-├── frontend/                    # 桌面 React 应用
-├── frontend-ios/                # iPhone PWA
-├── packages/shared/             # 两端共享 API、类型与格式化
-├── desktop/                     # 原生 Qt Quick 桌面客户端
-├── finnhub-mcp/                 # Finnhub MCP sidecar
-├── docs/                        # 架构与集成文档
-├── compose.yaml                 # 生产服务拓扑
-└── compose.override.yaml        # 本地预览覆盖
+backend/         FastAPI、Celery、Alembic 与测试
+frontend/        桌面 React 应用
+frontend-ios/    iPhone PWA
+packages/shared/ 两个 Web 前端共享的 API、类型与格式化
+desktop/         Qt Quick 原生桌面实验
+finnhub-mcp/     Finnhub MCP sidecar
+pi-agent/        AI research sidecar
+docs/            架构和集成文档
+compose.yaml     完整生产拓扑
 ```
 
-## 深入文档
+## 文档
 
 - [Research Data Gateway](docs/research-data-gateway.md)
 - [Options analytics](docs/options.md)
-- [AI 工具层](docs/ai-tool-layer.md)
 - [AI Orchestrator](docs/ai-orchestrator.md)
-- [AI 对话](docs/ai-conversations.md)
-- [AI 长期记忆](docs/ai-long-term-memory.md)
-- [投资决策记录](docs/ai-investment-decisions.md)
-- [Exa 联网研究](docs/external-search.md)
+- [AI 对话与长期记忆](docs/ai-conversations.md)
 - [Exa Deep Search](docs/exa-deep-search.md)
 - [iPhone 前端](docs/frontend-ios.md)
 - [组合交易流水](docs/portfolio-ledger.md)
 - [IBKR 集成](docs/integrations/ibkr.md)
+- [Qt 桌面架构](docs/qt-desktop-architecture-audit.md)
 
-## 安全与数据说明
+## 安全边界
 
-- `.env`、数据库备份、API Key、Token、账户凭据和私钥不得提交到仓库。
-- 生产环境必须修改数据库密码、`JWT_SECRET`、管理员初始密码和 `SEC_USER_AGENT`。
-- PostgreSQL、Redis 和内部服务不应直接暴露到公网。
-- 外部 Provider 的覆盖、延迟、配额和字段口径会影响结果；使用数据前请核对来源与时间。
-- 组合分析基于历史数据和用户假设，仅用于研究，不构成收益承诺或交易建议。
+- 不要提交 `.env`、API Key、Token、账户凭据、私钥或数据库备份。
+- 生产环境必须设置强随机 `JWT_SECRET`、数据库密码和管理员初始密码。
+- PostgreSQL、Redis、MCP sidecar 和 Agent gateway 不应暴露到公网。
+- 外部数据的覆盖、延迟、配额和口径会影响结果，使用前应核对来源与时间。
 
-## 项目状态
-
-这是一个持续迭代的个人项目，数据库迁移、API 和界面可能随版本变化。生产升级前请阅读提交记录、执行测试并保留可恢复备份。
+这是持续迭代的个人项目。生产升级前请检查提交记录、执行相关测试并保留可恢复备份。
