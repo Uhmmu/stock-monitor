@@ -76,7 +76,7 @@ from app.services.marketaux import fetch_marketaux_market_news, fetch_marketaux_
 from app.services.fmp_market import FmpAuthenticationError, FmpError, FmpInvalidSymbol, FmpPremiumRequired, FmpQuotaExhausted, checkpoint, sync_history as sync_fmp_history_service, sync_profile as sync_fmp_profile_service
 from app.services.technical_analysis_engine import generate_for_symbol, sync_fallback_history
 from app.services.company_profile_translation import translate_description
-from app.services.news import MARKET_TICKER, collect_ticker_news, prepare_news
+from app.services.news import MARKET_INDEX_TICKERS, MARKET_TICKER, collect_ticker_news, prepare_news
 from app.services.news_store import news_for_day, persist_news
 from app.services.news_tiingo import fetch_tiingo_news
 from app.services.article_fetch import fetch_article
@@ -290,6 +290,55 @@ def reconcile_news_enrichment():
                     row.ai_summary_last_error = f"{type(error).__name__}: {error}"[:1000]
                     db.commit()
     return {"claimed": len(claimed), "queued": queued, "window_start": start.isoformat(), "window_end": end.isoformat()}
+
+
+@celery_app.task(name="app.tasks.celery_app.backfill_news_enrichment")
+def backfill_news_enrichment(days: int = 3):
+    """One-off backfill for rows the rolling window missed.
+
+    The market feed used to replay a fixed 48h lookback, so items landed older
+    than the yesterday+today enrichment window and stayed idle forever. This
+    task requeues those in reverse-chronological order; it is not scheduled and
+    safe to re-run (claims are idempotent through ai_summary_request_id).
+    """
+    days = max(1, min(int(days), 7))
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        rows = db.scalars(
+            select(NewsItem)
+            .where(
+                func.coalesce(NewsItem.published_at, NewsItem.found_at) >= now - timedelta(days=days),
+                NewsItem.ai_summary_status.in_(("idle", "pending", "failed")),
+            )
+            .order_by(func.coalesce(NewsItem.published_at, NewsItem.found_at).desc(), NewsItem.id)
+        ).all()
+        target_ids = [row.id for row in rows if row.ai_summary_attempts < settings.news_enrichment_max_attempts]
+    queued = 0
+    for news_id in target_ids:
+        with SessionLocal() as db:
+            row = db.get(NewsItem, news_id)
+            if not row or row.ai_summary_status in ("completed", "degraded", "queued", "processing"):
+                continue
+            request_id = str(uuid4())
+            row.ai_summary_status = "queued"
+            row.ai_summary_request_id = request_id
+            row.ai_summary_requested_at = now
+            row.ai_summary_next_retry_at = None
+            db.commit()
+        try:
+            summarize_news_item.apply_async(args=[news_id, request_id], priority=7)
+            queued += 1
+        except Exception as error:
+            logger.warning("news_enrichment_backfill_enqueue_failed news_id=%s error=%s", news_id, type(error).__name__)
+            with SessionLocal() as db:
+                row = db.get(NewsItem, news_id)
+                if row and row.ai_summary_request_id == request_id:
+                    row.ai_summary_status = "pending"
+                    db.commit()
+    return {"candidates": len(rows), "queued": queued, "window_days": days}
+
+
+
 
 
 @celery_app.task(
@@ -1039,6 +1088,10 @@ def poll_market_news():
         if settings.marketaux_market_news_enabled:
             try: inputs.extend(fetch_marketaux_market_news(db, now=now))
             except Exception as exc: db.rollback(); logger.warning("Marketaux market collection failed: %s", type(exc).__name__)
+        # Yahoo has no market-wide endpoint; index tickers pull the same wire
+        # copy (Reuters/CNBC/AP) through yfinance and let dedupe merge overlap.
+        try: inputs.extend(_yfinance_market_news_dtos())
+        except Exception as exc: logger.warning("Yahoo index market collection failed: %s", type(exc).__name__)
         final, stats = prepare_news(inputs, scope="market", now=now, limit=settings.market_news_max_items)
         saved = persist_news(db, MARKET_TICKER, now.date(), final, [(dto.importance_score, None) for dto in final])
         db.commit()
@@ -1047,6 +1100,16 @@ def poll_market_news():
             reconcile_news_enrichment.delay()
         logger.info("news provider=combined scope=market fetched=%d accepted=%d filtered=%d clustered=%d inserted=%d", stats["fetched"], stats["accepted"], stats["filtered"], stats["clustered"], len(saved))
         return {**stats, "inserted": len(saved)}
+
+
+def _yfinance_market_news_dtos() -> list:
+    from dataclasses import replace
+    from app.services.news import _yfinance_news_dtos
+    items: list = []
+    for index_ticker in MARKET_INDEX_TICKERS:
+        try: items.extend(_yfinance_news_dtos(index_ticker))
+        except Exception: continue
+    return [replace(item, scope="market") for item in items]
 
 
 def _daily_input_hash(news: list[NewsItem]) -> str:

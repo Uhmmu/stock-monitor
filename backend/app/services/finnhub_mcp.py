@@ -82,23 +82,23 @@ def fetch_company_news(ticker: str, days: int = 7) -> list[NewsDTO]:
 
 
 def fetch_market_news() -> list[NewsDTO]:
-    """Finnhub's documented general market-news endpoint, bounded and defensive."""
+    """Finnhub's general market news via the MCP sidecar, bounded and defensive."""
     settings = get_settings()
     if not settings.finnhub_api_key:
         logger.info("Finnhub market news skipped: API key unavailable")
         return []
-    request = Request("https://finnhub.io/api/v1/news?category=general", headers={"X-Finnhub-Token": settings.finnhub_api_key, "User-Agent": "stock-monitor/2.0"})
     try:
-        with urlopen(request, timeout=_REQUEST_TIMEOUT) as response:
-            if response.status == 429: logger.warning("Finnhub market news rate limited"); return []
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = _run(_call_tool(
+            "finnhub_news_sentiment",
+            {"operation": "get_market_news", "category": "general"},
+        ))
     except Exception as exc:
-        status = getattr(exc, "code", None)
-        logger.warning("Finnhub market news request failed%s", f": HTTP {status}" if status else f": {type(exc).__name__}")
+        logger.warning("Finnhub market news request failed: %s", type(exc).__name__)
         return []
-    if not isinstance(payload, list): return []
+    rows = payload if isinstance(payload, list) else payload.get("data", []) if isinstance(payload, dict) else []
+    if not isinstance(rows, list): return []
     items: list[NewsDTO] = []
-    for row in payload[:100]:
+    for row in rows[:100]:
         if not isinstance(row, dict) or not row.get("headline") or not row.get("url"): continue
         symbols = [str(value).upper() for value in row.get("related", "").split(",") if value.strip()]
         items.append(NewsDTO(provider="finnhub", ticker="__MARKET__", external_id=str(row.get("id")) if row.get("id") is not None else None, title=str(row["headline"])[:512], url=str(row["url"]), source=row.get("source"), summary=row.get("summary"), published_at=_parse_time(row.get("datetime")), symbols=symbols, raw_payload=row, scope="market"))

@@ -32,6 +32,10 @@ _BROWSER_TIMEOUT_MS = 25_000
 _BROWSER_WAIT_SECONDS = 2.0
 DOMAIN_POLICY = {"news.google.com": "playwright"}
 DEFAULT_DOMAIN_POLICY = "http_then_playwright"
+# Publishers whose pages reliably defeat both HTTP and browser extraction
+# (hard bot walls, no JSON-LD). Retrying every article costs a 25s browser
+# timeout per row; the provider summary is the ceiling, so fail fast instead.
+UNFETCHABLE_NEWS_DOMAINS = ("reuters.com",)
 _BLOCKER_PATTERNS = (
     r"\baccess denied\b",
     r"\bchecking your browser before accessing\b",
@@ -119,6 +123,16 @@ def fetch_article(url: str, timeout: float = 10.0) -> ArticleFetchResult:
             started=started,
             error="invalid_url",
             error_code="invalid_url",
+        )
+    if _is_unfetchable_news_domain(url):
+        return _result(
+            url=url,
+            final_url=url,
+            fetched_at=fetched_at,
+            started=started,
+            error="publisher bot wall blocks article extraction",
+            error_code="quality_blocked",
+            metadata={"domain_policy": "unfetchable"},
         )
 
     http_error = None
@@ -406,6 +420,11 @@ def _is_http_url(value: str) -> bool:
 def _domain_policy(value: str) -> str:
     hostname = (urlsplit(value).hostname or "").casefold()
     return DOMAIN_POLICY.get(hostname, DEFAULT_DOMAIN_POLICY)
+
+
+def _is_unfetchable_news_domain(value: str) -> bool:
+    hostname = (urlsplit(value).hostname or "").casefold().removeprefix("www.")
+    return any(hostname == domain or hostname.endswith(f".{domain}") for domain in UNFETCHABLE_NEWS_DOMAINS)
 
 
 def _is_retryable_error_code(code: str | None) -> bool:

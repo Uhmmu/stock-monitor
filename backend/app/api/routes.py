@@ -860,6 +860,26 @@ def list_news(
     return [_news_out(item) for item in db.scalars(query).all()]
 
 
+def _diversify_market_rows(rows: list[NewsItem], limit: int) -> list[NewsItem]:
+    """Cap any single provider at 2/3 of a ranked page.
+
+    SQL ordering is per-row; a provider whose quality scores saturate (Finnhub's
+    Reuters wire) otherwise fills the whole first page. Soft quota: the page is
+    never left thin when one provider is all there is.
+    """
+    cap = max(2, (limit * 2) // 3)
+    kept: list[NewsItem] = []; deferred: list[NewsItem] = []; counts: dict[str, int] = {}
+    for row in rows:
+        provider = row.provider or "unknown"
+        if counts.get(provider, 0) >= cap:
+            deferred.append(row); continue
+        kept.append(row); counts[provider] = counts.get(provider, 0) + 1
+        if len(kept) >= limit: break
+    if len(kept) < limit:
+        kept.extend(deferred[:limit - len(kept)])
+    return kept
+
+
 @router.get("/news/market")
 def list_market_news(
     limit: int = Query(20, ge=1, le=100),
@@ -872,7 +892,14 @@ def list_market_news(
     if topic:
         query = query.where(NewsItem.topic == topic)
     total = len(db.scalars(query).all())
-    rows = db.scalars(query.order_by(*_news_order(sort)).offset(offset).limit(limit)).all()
+    if sort == "ranked" and not topic:
+        # Oversample then diversify so the quota is applied across the full
+        # ranked ordering, not just the first page of one dominant provider.
+        window = min(total, max(limit + offset + limit, limit * 4))
+        rows = db.scalars(query.order_by(*_news_order(sort)).limit(window)).all()
+        rows = _diversify_market_rows(rows, offset + limit)[offset:offset + limit] if offset else _diversify_market_rows(rows, limit)
+    else:
+        rows = db.scalars(query.order_by(*_news_order(sort)).offset(offset).limit(limit)).all()
     return {"items": [_news_out(item) for item in rows], "total": total, "generated_at": datetime.now(UTC), "last_updated_at": max((item.found_at for item in rows), default=None), "sources": sorted({item.provider for item in rows})}
 
 

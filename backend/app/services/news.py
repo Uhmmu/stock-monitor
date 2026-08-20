@@ -15,6 +15,9 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 MARKET_TICKER = "__MARKET__"  # storage sentinel; never exposed as a security/ticker.
+# Yahoo has no market-wide news endpoint; index tickers are the closest proxy
+# and pull the same wire stories (Reuters/CNBC/AP) that feed the general feeds.
+MARKET_INDEX_TICKERS = ("^GSPC", "^IXIC", "^DJI", "^RUT", "^VIX")
 _TRACKING_KEYS = {"fbclid", "gclid", "guccounter", "ref", "spm"}
 _TRACKING_PREFIXES = ("utm_", "mc_")
 MARKET_MAX_AGE = timedelta(hours=72)
@@ -300,6 +303,13 @@ def filter_news(dto: NewsDTO, now: datetime | None = None) -> bool:
     except ValueError:
         return False
     if not title or not url or not parsed_url.scheme:
+        return False
+    # The market page curates market-level themes. Unclassified items from
+    # broad feeds are almost always single-company PR or off-market noise.
+    # dto.topic is authoritative when scored (cluster merges can inherit a
+    # topic from a partner whose headline carried the keywords); reclassify
+    # only for unscored DTOs.
+    if dto.scope == "market" and dto.topic == "其他" and classify_topic(dto) == "其他":
         return False
     if dto.published_at:
         published = dto.published_at if dto.published_at.tzinfo else dto.published_at.replace(tzinfo=UTC)

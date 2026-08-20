@@ -322,8 +322,13 @@ def fetch_marketaux_market_news(db, *, config: Settings | None = None, now: date
     if reservation.status != "request_reserved":
         logger.info("Marketaux market news skipped: %s", reservation.status)
         return []
+    # Incremental window like the company path: resume from the last successful
+    # fetch so the feed stops replaying the same 48h firehose every run.
+    published_after = _utc(reservation.last_successful_fetch) if reservation.last_successful_fetch else None
+    if published_after is None or published_after < started - _INITIAL_LOOKBACK:
+        published_after = started - _INITIAL_LOOKBACK
     params = {"api_token": config.marketaux_api_key, "language": "en", "group_similar": "true", "limit": 50,
-              "published_after": (started - _INITIAL_LOOKBACK).strftime("%Y-%m-%dT%H:%M:%S")}
+              "published_after": published_after.strftime("%Y-%m-%dT%H:%M:%S")}
     try:
         response = http_get(_ENDPOINT, params=params, timeout=_REQUEST_TIMEOUT, follow_redirects=True)
         response.raise_for_status(); payload = response.json(); rows = payload.get("data", []) if isinstance(payload, dict) else []
