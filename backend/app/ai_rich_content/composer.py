@@ -13,6 +13,11 @@ from app.research.security import safe_external_url
 from .fallback import block_fallback_markdown
 from .metrics import rich_content_metrics
 from .registry import RichBlockRegistry, rich_block_registry
+from .table_dedup import (
+    VALUATION_BLOCK_TYPES,
+    strip_redundant_valuation_tables,
+    valuation_reference_numbers,
+)
 from .schemas import (
     BlockFreshness,
     CompositionResult,
@@ -459,6 +464,34 @@ def compose_rich_content(
                 used_type_counts.get(block.block_type, 0) + 1
             )
             auto_inserted += 1
+
+    valuation_tables_merged = 0
+    valuation_blocks = [
+        part.block
+        for part in parts
+        if isinstance(part, RichBlockPart)
+        and part.block.block_type in VALUATION_BLOCK_TYPES
+    ]
+    references = valuation_reference_numbers(valuation_blocks)
+    if references:
+        deduped_parts: list[MarkdownPart | RichBlockPart] = []
+        for part in parts:
+            if not isinstance(part, MarkdownPart):
+                deduped_parts.append(part)
+                continue
+            stripped, removed = strip_redundant_valuation_tables(
+                part.content, references
+            )
+            valuation_tables_merged += removed
+            if stripped:
+                deduped_parts.append(
+                    part.model_copy(update={"content": stripped})
+                )
+        parts = deduped_parts
+    if valuation_tables_merged:
+        rich_content_metrics.increment(
+            "valuation_tables_merged", valuation_tables_merged
+        )
 
     markdown_for_citations = "\n".join(
         part.content for part in parts if isinstance(part, MarkdownPart)

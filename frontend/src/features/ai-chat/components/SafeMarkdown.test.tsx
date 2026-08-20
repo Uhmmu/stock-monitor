@@ -24,12 +24,26 @@ describe('safe assistant markdown', () => {
     expect(html).toContain('[S1]')
   })
 
-  it('renders standard GFM tables as semantic table markup', () => {
+  it('renders GFM tables as card entries instead of raw table markup', () => {
     const content = '| 指标 | NVDA | AVGO |\n| --- | ---: | ---: |\n| ROIC | 145.75% | 20.36% |'
     const html = renderToStaticMarkup(<SafeMarkdown content={content} citations={[]} onCitation={() => undefined}/>)
-    expect(html).toContain('<table>')
-    expect(html).toContain('<th>指标</th>')
-    expect(html).toContain('>145.75%</td>')
+    expect(html).not.toContain('<table>')
+    expect(html).toContain('ai-md-table-row')
+    expect(html).toContain('ai-md-table-row-head')
+    expect(html).toContain('<small>NVDA</small>')
+    expect(html).toContain('<small>AVGO</small>')
+    expect(html).toContain('>145.75%</span>')
+    expect(html).toContain('>20.36%</span>')
+  })
+
+  it('renders two-column tables as label/value card rows', () => {
+    const content = '| 指标 | 数值 |\n| --- | --- |\n| P/E | 28.4 |\n| P/B | 11.2 |'
+    const html = renderToStaticMarkup(<SafeMarkdown content={content} citations={[]} onCitation={() => undefined}/>)
+    expect(html).toContain('ai-md-table kv')
+    expect(html).toContain('ai-md-table-key')
+    expect(html).toContain('<span class="ai-md-table-key">P/E</span>')
+    expect(html).toContain('<span class="ai-md-table-value">28.4</span>')
+    expect(html).not.toContain('<table>')
   })
 
   it('repairs compact single-line model tables before rendering', () => {
@@ -37,9 +51,9 @@ describe('safe assistant markdown', () => {
     const normalized = normalizeMarkdownTables(content)
     expect(normalized.split('\n')).toHaveLength(4)
     const html = renderToStaticMarkup(<SafeMarkdown content={content} citations={[]} onCitation={() => undefined}/>)
-    expect(html).toContain('<table>')
-    expect(html).toContain('<th>解读</th>')
-    expect(html).toContain('<td>NVDA 更高</td>')
+    expect(html).not.toContain('<table>')
+    expect(html).toContain('<small>解读</small>')
+    expect(html).toContain('NVDA 更高')
   })
 
   it('does not rewrite compact table-like text inside fenced code', () => {

@@ -448,3 +448,171 @@ def test_auto_insertion_uses_central_intent_allowlist(monkeypatch):
         part.type != "block" or part.block.block_type != "stock_quote"
         for part in unrelated.document.parts
     )
+
+
+def _valuation_tool_result() -> ToolExecutionResult:
+    now = datetime(2026, 7, 31, 8, 30, tzinfo=UTC)
+    return ToolExecutionResult(
+        tool_call_id="call-valuation-dedup",
+        tool_name="get_latest_valuation",
+        tool_version="1.0.0",
+        status=ToolStatus.success,
+        data={
+            "snapshot_id": 3,
+            "symbol": "MSFT",
+            "snapshot_date": "2026-07-31",
+            "valuation": {
+                "currency": "USD",
+                "price": 512.36,
+                "weights": {"dcf": 0.30, "forward_pe": 0.25},
+                "valuation": [
+                    {"key": "forward_pe", "label": "Forward P/E", "value": 28.4,
+                     "unit": "multiple", "peer_median": 25.1},
+                ],
+                "dcf_scenarios": {"bear": 420, "base": 510, "bull": 600},
+                "graham": {"graham_number": {"value": 402.5}},
+                "consensus": {"value": 498.2, "current": 512.36},
+            },
+        },
+        sources=[],
+        freshness={"as_of": now.isoformat(), "status": "fresh"},
+        stats=empty_stats(),
+    )
+
+
+def _markdown_of(result) -> str:
+    return "\n".join(
+        part.content
+        for part in result.document.parts
+        if part.type == "markdown"
+    )
+
+
+def test_valuation_card_replaces_duplicate_markdown_table(monkeypatch):
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_rich_content_auto_insert_enabled", True)
+    monkeypatch.setattr(settings, "ai_rich_content_auto_insert_max_blocks", 1)
+    candidates, _ = build_candidates(_valuation_tool_result(), [_citation()])
+    answer = (
+        "MSFT 现价 512.36，模型共识公允价值 498.2。\n\n"
+        "| 方法 | 公允价值 | 权重 |\n"
+        "| --- | --- | --- |\n"
+        "| DCF | $510（$420–$600） | 30% |\n"
+        "| Forward P/E | 28.4x | 25% |\n"
+        "| Graham | $402.5 | — |\n\n"
+        "整体判断：现价略高于共识。[S1]"
+    )
+    result = compose_rich_content(
+        answer_markdown=answer,
+        candidates=candidates,
+        citations=[_citation()],
+        user_message="MSFT 现在估值怎么样？",
+    )
+    markdown = _markdown_of(result)
+    blocks = [
+        part.block.block_type
+        for part in result.document.parts
+        if part.type == "block"
+    ]
+    assert "valuation_summary" in blocks
+    assert "|" not in markdown
+    assert "MSFT 现价 512.36" in markdown
+    assert "整体判断" in markdown
+    assert "| 方法" not in result.document.fallback_markdown
+
+
+def test_valuation_table_dedup_handles_collapsed_single_line_table(monkeypatch):
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_rich_content_auto_insert_enabled", True)
+    monkeypatch.setattr(settings, "ai_rich_content_auto_insert_max_blocks", 1)
+    candidates, _ = build_candidates(_valuation_tool_result(), [_citation()])
+    answer = (
+        "MSFT 估值结论如下。\n\n"
+        "| 方法 | 公允价值 | |---|---| | DCF | $510 | | Graham | $402.5 |\n\n"
+        "以上为模型输出。"
+    )
+    result = compose_rich_content(
+        answer_markdown=answer,
+        candidates=candidates,
+        citations=[_citation()],
+        user_message="MSFT 估值",
+    )
+    markdown = _markdown_of(result)
+    assert "|" not in markdown
+    assert "MSFT 估值结论如下" in markdown
+    assert "以上为模型输出" in markdown
+
+
+def test_analyst_target_table_is_not_treated_as_duplicate(monkeypatch):
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_rich_content_auto_insert_enabled", True)
+    monkeypatch.setattr(settings, "ai_rich_content_auto_insert_max_blocks", 1)
+    candidates, _ = build_candidates(_valuation_tool_result(), [_citation()])
+    answer = (
+        "卖方目标价与内部模型不同。\n\n"
+        "| 机构 | 目标价 |\n"
+        "| --- | --- |\n"
+        "| Morgan Stanley | $580 |\n"
+        "| Goldman Sachs | $620 |\n\n"
+        "现价 512.36。"
+    )
+    result = compose_rich_content(
+        answer_markdown=answer,
+        candidates=candidates,
+        citations=[_citation()],
+        user_message="MSFT 估值和卖方目标价",
+    )
+    markdown = _markdown_of(result)
+    assert "| 机构 | 目标价 |" in markdown
+    assert "$580" in markdown
+
+
+def test_ticker_comparison_table_is_not_treated_as_duplicate(monkeypatch):
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_rich_content_auto_insert_enabled", True)
+    monkeypatch.setattr(settings, "ai_rich_content_auto_insert_max_blocks", 1)
+    candidates, _ = build_candidates(_valuation_tool_result(), [_citation()])
+    answer = (
+        "对比如下。\n\n"
+        "| 指标 | NVDA | AMD |\n"
+        "| --- | --- | --- |\n"
+        "| 现价 | 512.36 | 154.20 |\n"
+        "| Forward P/E | 28.4 | 22.1 |\n"
+    )
+    result = compose_rich_content(
+        answer_markdown=answer,
+        candidates=candidates,
+        citations=[_citation()],
+        user_message="MSFT 估值对比一下",
+    )
+    markdown = _markdown_of(result)
+    assert "| 指标 | NVDA | AMD |" in markdown
+    assert "154.20" in markdown
+
+
+def test_markdown_tables_kept_without_valuation_block(monkeypatch):
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_rich_content_auto_insert_enabled", False)
+    answer = (
+        "| 方法 | 公允价值 |\n"
+        "| --- | --- |\n"
+        "| DCF | $510 |\n"
+        "| Graham | $402.5 |\n"
+    )
+    result = compose_rich_content(
+        answer_markdown=answer,
+        candidates=[],
+        citations=[_citation()],
+        user_message="DCF 是什么",
+    )
+    assert "| DCF | $510 |" in _markdown_of(result)

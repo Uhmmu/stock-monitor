@@ -279,8 +279,10 @@ def test_extended_gateway_reads_persisted_analysis_market_and_public_ownership_w
 
 def test_price_latest_backfills_missing_day_range_from_same_day_snapshot_or_daily_bar(db, users):
     first,_,_,_=users
-    trading_day=date(2026,8,19)
-    now=datetime(2026,8,19,20,tzinfo=UTC)
+    # The users fixture seeds an MSFT snapshot at datetime.now(UTC); stay ahead of
+    # it so this test's rows stay the latest persisted snapshots on any run date.
+    now=datetime.now(UTC)+timedelta(hours=1)
+    trading_day=now.date()
     # Latest realtime snapshot without day high/low (typical Alpaca shape).
     db.add(PriceSnapshot(symbol="MSFT",market_timestamp=now,fetched_at=now,persisted_at=now,
                          last_price=512.36,previous_close=508.15,day_volume=100,

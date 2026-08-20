@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getDeepSearchRun, type AIMessage, type Citation, type ToolActivity as Activity, type WebAccessMode } from '../api'
 import { SafeMarkdown } from './SafeMarkdown'
+import { ThinkingTimer } from './ThinkingTimer'
 import { ToolActivity } from './ToolActivity'
 import { DeepSearchRunDetails } from '../search/DeepSearchRunDetails'
 import { RichBlockSkeleton, RichContentRenderer } from '../rich-content'
@@ -73,7 +74,7 @@ function Message({ message, isLatestAssistant, activities, savingDecisionId, onC
         : <SafeMarkdown content={streamingMarkdown} citations={message.citations} onCitation={key => onCitation(message.citations, key)}/>}
       {message.rich_block_skeletons?.map(block => <RichBlockSkeleton key={block.block_id} blockType={block.block_type}/>)}
       {pending && <span className="ai-stream-cursor" aria-hidden="true"/>}
-    </div> : pending ? <div className="ai-thinking"><i/><i/><i/><span>{statusText[message.status]}</span></div> : null}
+    </div> : pending ? <div className="ai-thinking"><i/><i/><i/><ThinkingTimer startedAt={message.created_at} label={statusText[message.status]}/></div> : null}
     {(message.status !== 'completed' || interrupted) && <div className={`ai-message-status ${message.status}`} role={message.status === 'failed' ? 'alert' : 'status'}>{interrupted ? '生成已中断，刷新不会自动重新提交。' : statusText[message.status] || message.error_message_safe || '回答状态异常'}</div>}
     {message.deep_search_run_id && <PersistedDeepRun runId={message.deep_search_run_id}/>} 
     {hasContent && !pending && <MessageActions content={message.content} assistant savingDecision={message.id===savingDecisionId} canRegenerate={isLatestAssistant && ['completed', 'partial', 'failed', 'cancelled'].includes(message.status)} onRegenerate={() => onRegenerate(message)} onSaveDecision={()=>onSaveDecision(message)} onShowMemory={()=>onShowMemory(message)}/>}

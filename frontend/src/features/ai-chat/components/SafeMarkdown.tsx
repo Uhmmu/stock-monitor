@@ -1,4 +1,4 @@
-import { Children, isValidElement, ReactNode, useState } from 'react'
+import { Children, isValidElement, ReactElement, ReactNode, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeSanitize from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
@@ -9,6 +9,64 @@ function textOf(value: ReactNode): string {
   if (Array.isArray(value)) return value.map(textOf).join('')
   if (isValidElement<{ children?: ReactNode }>(value)) return textOf(value.props.children)
   return ''
+}
+
+function hostChildren(value: ReactNode): ReactElement<{ children?: ReactNode }>[] {
+  return Children.toArray(value).filter(
+    (child): child is ReactElement<{ children?: ReactNode }> => isValidElement(child)
+  )
+}
+
+function tagName(element: ReactElement): string {
+  return typeof element.type === 'string' ? element.type : ''
+}
+
+type ParsedMarkdownTable = {
+  headers: string[]
+  rows: ReactNode[][]
+}
+
+/** Extract header labels and row cell nodes from react-markdown's table tree. */
+function parseMarkdownTable(children: ReactNode): ParsedMarkdownTable | null {
+  let headers: string[] | null = null
+  const rows: ReactNode[][] = []
+  for (const section of hostChildren(children)) {
+    const sectionTag = tagName(section)
+    if (sectionTag !== 'thead' && sectionTag !== 'tbody' && sectionTag !== 'tfoot') continue
+    for (const row of hostChildren(section.props.children)) {
+      if (tagName(row) !== 'tr') continue
+      const cells = hostChildren(row.props.children).map(cell => cell.props.children)
+      if (sectionTag === 'thead') headers = cells.map(textOf)
+      else rows.push(cells)
+    }
+  }
+  if (!headers || headers.length < 2 || rows.length === 0) return null
+  return { headers, rows }
+}
+
+/** Chat tables render as entry cards (valuation-card style), not raw grids. */
+function MarkdownTable({ children }: { children: ReactNode }) {
+  const parsed = parseMarkdownTable(children)
+  if (!parsed) return <div className="ai-table-scroll"><table>{children}</table></div>
+  if (parsed.headers.length === 2) {
+    return <div className="ai-md-table kv" role="list">
+      {parsed.rows.map((row, index) => <div className="ai-md-table-row" role="listitem" key={index}>
+        <span className="ai-md-table-key">{row[0] ?? ''}</span>
+        <span className="ai-md-table-value">{row[1] ?? ''}</span>
+      </div>)}
+    </div>
+  }
+  return <div className="ai-md-table" role="list">
+    {parsed.rows.map((row, index) => <div className="ai-md-table-row" role="listitem" key={index}>
+      <div className="ai-md-table-row-head">{row[0] ?? ''}</div>
+      <div className="ai-md-table-row-body">
+        {parsed.headers.slice(1).map((header, columnIndex) => <div className="ai-md-table-cell" key={columnIndex}>
+          {header && <small>{header}</small>}
+          <span>{row[columnIndex + 1] ?? ''}</span>
+        </div>)}
+      </div>
+    </div>)}
+  </div>
 }
 
 const tableDivider = /\|\s*(?::?-{3,}:?\s*\|){2,}/
@@ -77,7 +135,7 @@ export function SafeMarkdown({ content, citations, onCitation }: {
         return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
       },
       pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-      table: ({ children }) => <div className="ai-table-scroll"><table>{children}</table></div>,
+      table: ({ children }) => <MarkdownTable>{children}</MarkdownTable>,
     }}
   >{citationMarkdown(content)}</ReactMarkdown>
 }
