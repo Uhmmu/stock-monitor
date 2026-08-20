@@ -281,7 +281,7 @@ export function DiscoverySettingsPanel() {
     <label>单次成本预警线（美元）<input type="number" min="0.01" step="0.05" value={form.max_run_cost_usd} onChange={e=>set('max_run_cost_usd',Number(e.target.value))}/></label>
     <label>最低市值<input type="number" min="0" value={form.min_market_cap} onChange={e=>set('min_market_cap',Number(e.target.value))}/></label>
     <label className="settings-toggle">排除当前持仓<input type="checkbox" checked={form.exclude_current_holdings} onChange={e=>set('exclude_current_holdings',e.target.checked)}/></label>
-    <label className="settings-toggle">排除已有自选<input type="checkbox" checked={form.exclude_watchlist} onChange={e=>set('exclude_watchlist',e.target.checked)}/></label>
+    <label className="settings-toggle">排除已有自选（默认开启，自选股只进"仅观察"）<input type="checkbox" checked={form.exclude_watchlist} onChange={e=>set('exclude_watchlist',e.target.checked)}/></label>
     <label className="settings-toggle">要求正自由现金流<input type="checkbox" checked={form.require_positive_fcf} onChange={e=>set('require_positive_fcf',e.target.checked)}/></label>
     <label>最大 PE<input type="number" value={form.max_trailing_pe} onChange={e=>set('max_trailing_pe',Number(e.target.value))}/></label>
     <label>最大预期 PE<input type="number" value={form.max_forward_pe} onChange={e=>set('max_forward_pe',Number(e.target.value))}/></label>

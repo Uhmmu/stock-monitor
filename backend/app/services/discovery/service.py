@@ -97,7 +97,9 @@ def _settings_defaults() -> dict:
         "max_run_cost_usd": env.perplexity_max_run_cost_usd,
         "min_market_cap": 2_000_000_000.0,
         "exclude_current_holdings": True,
-        "exclude_watchlist": False,
+        # Watched tickers the investor already knows about are downgraded to
+        # watch_only by default; discovery is for finding NEW names.
+        "exclude_watchlist": True,
         "require_positive_fcf": True,
         "max_trailing_pe": 80.0,
         "max_forward_pe": 60.0,

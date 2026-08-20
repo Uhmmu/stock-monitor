@@ -219,3 +219,37 @@ def test_latest_payload_includes_agent_events_for_pi_runs(db, owner, monkeypatch
     record_agent_event(db, run, "research_started", "start")
     payload = latest_discovery_payload(db, user.id)
     assert payload["result"]["agent_events"][0]["event_type"] == "research_started"
+
+
+def test_default_settings_now_exclude_watchlist(db, owner):
+    """Discovery must surface NEW names; watched tickers default to watch_only."""
+    from app.services.discovery.service import discovery_settings
+    user, _ = owner
+    settings = discovery_settings(db, user.id)
+    assert settings.exclude_watchlist is True
+    assert settings.exclude_current_holdings is True
+
+
+def test_pi_prompt_requires_novelty_over_watchlist():
+    from app.services.discovery.prompt import PI_SYSTEM_INSTRUCTIONS
+    assert "NOVELTY RULE" in PI_SYSTEM_INSTRUCTIONS
+    assert "OUTSIDE current_watchlist" in PI_SYSTEM_INSTRUCTIONS
+    assert "failed batch" in PI_SYSTEM_INSTRUCTIONS
+
+
+def test_watched_candidates_downgrade_to_watch_only(db, owner):
+    from app.services.discovery.normalization import apply_filters
+    from app.models import StockDiscoverySettings
+    settings = StockDiscoverySettings(
+        user_id=1, exclude_current_holdings=True, exclude_watchlist=True,
+        require_positive_fcf=True, min_market_cap=2_000_000_000,
+        max_trailing_pe=80, max_forward_pe=60, max_price_to_sales=25,
+        filter_extreme_momentum=True, missing_data_policy="warn",
+    )
+    decision = apply_filters(
+        raw={"financial_snapshot": {"market_cap": 10_000_000_000, "pe_trailing": 20}},
+        local={}, ticker="NFLX", settings=settings,
+        held_symbols=set(), watched_symbols={"NFLX"}, symbol_valid=True,
+    )
+    assert decision.status == "already_watched"
+    assert "已在自选股" in decision.reasons
