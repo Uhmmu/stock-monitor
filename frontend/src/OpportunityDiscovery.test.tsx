@@ -7,12 +7,22 @@ import {
   PiFunnelProgress,
   RawCandidatePanel,
   chooseCandidateGroup,
+  formatDateOnly,
   discoverySearchSourceLabel,
   discoverySourceLabel,
   discoveryStatusText,
   visibleCandidateMetrics,
   type DiscoveryCandidate,
 } from './OpportunityDiscovery'
+
+describe('分析时间显示', () => {
+  it('判断基准日按纯日期渲染，不捏造时分秒', () => {
+    expect(formatDateOnly('2026-08-20')).toBe('2026/8/20')
+    expect(formatDateOnly('2026-08-20T00:00:00Z')).toBe('2026/8/20')
+    expect(formatDateOnly('2026-08-20T19:41:29+00:00')).toBe('2026/8/20')
+    expect(formatDateOnly(null)).toBe('—')
+  })
+})
 
 describe('数据出处标签', () => {
   it('把 Pi 来源按证据类型写成具体出处，而不是统一 pi agent', () => {

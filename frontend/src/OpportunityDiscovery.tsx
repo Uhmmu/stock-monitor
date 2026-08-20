@@ -77,6 +77,15 @@ const formatMetric=(key:string,value:number|string)=>{
   return value.toLocaleString('zh-CN',{maximumFractionDigits:2})
 }
 const formatTime=(value:string|null|undefined)=>value?new Date(value).toLocaleString('zh-CN'):'—'
+// analysis_date 是模型声明的“判断基准日”（纯日期，UTC 语义），不能当时间戳渲染：
+// new Date("2026-08-20") 会按 UTC 午夜解析并捏造出本地 08:00:00。只按日期展示。
+export const formatDateOnly=(value:string|null|undefined)=>{
+  if(!value)return '—'
+  const datePart=value.slice(0,10)
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(datePart))return formatTime(value)
+  const [year,month,day]=datePart.split('-').map(Number)
+  return `${year}/${month}/${day}`
+}
 const money=(value:number|null|undefined)=>value==null?'—':`$${value.toFixed(4)}`
 
 export function CandidateStatusBadge({status}:{status:string}) {
@@ -263,7 +272,7 @@ export function OpportunityDiscovery() {
       <p className={`discovery-engine-save-state ${saveEngine.isError?'error':''}`}>{saveEngine.isPending?'正在保存选择…':saveEngine.isError?'引擎选择保存失败':`当前选择：${engineLabel[selectedEngine]}`}</p>
     </section>
     {!result?<section className="discovery-empty"><span className="discovery-empty-icon" aria-hidden="true">⌁</span><h2>还没有机会发现结果</h2><p>系统会结合持仓结构、市场资金方向与公开金融数据生成一批研究候选。</p><button onClick={()=>onRefresh()} disabled={refresh.isPending||!latest.data?.api_key_configured}>{refresh.isPending?'正在提交…':'开始首次发现'}</button>{refresh.error&&<small>{refresh.error.message}</small>}</section>:<>
-      <section className="opportunity-header"><div><p className="eyebrow">当前机会</p><h2>机会发现</h2><p>上方选择器决定下一次发现使用哪一个引擎。</p><small>仅用于发现研究对象，不构成买入或卖出建议。</small></div><button onClick={onRefresh} disabled={refresh.isPending||running||saveEngine.isPending||!latest.data?.api_key_configured}>{refresh.isPending||running?'正在发现…':'发现机会'}</button><dl><div><dt>分析时间</dt><dd>{formatTime(result.analysis_date)}</dd></div><div><dt>运行方式</dt><dd>仅手动触发</dd></div><div><dt>本批结果引擎</dt><dd>{engineLabel[result.discovery_mode||'search_local']}</dd></div><div><dt>原始 / 保留</dt><dd>{result.counts.raw} / {result.counts.accepted}</dd></div><div><dt>可计量成本</dt><dd>{money(result.usage?.total_cost_usd)}</dd></div><div><dt>当前状态</dt><dd>{statusLabel[result.status]||result.status}</dd></div></dl></section>
+      <section className="opportunity-header"><div><p className="eyebrow">当前机会</p><h2>机会发现</h2><p>上方选择器决定下一次发现使用哪一个引擎。</p><small>仅用于发现研究对象，不构成买入或卖出建议。</small></div><button onClick={onRefresh} disabled={refresh.isPending||running||saveEngine.isPending||!latest.data?.api_key_configured}>{refresh.isPending||running?'正在发现…':'发现机会'}</button><dl><div><dt>分析时间</dt><dd>{formatTime(result.completed_at||result.started_at)}</dd></div><div><dt>判断基准日</dt><dd>{formatDateOnly(result.analysis_date)}</dd></div><div><dt>运行方式</dt><dd>仅手动触发</dd></div><div><dt>本批结果引擎</dt><dd>{engineLabel[result.discovery_mode||'search_local']}</dd></div><div><dt>原始 / 保留</dt><dd>{result.counts.raw} / {result.counts.accepted}</dd></div><div><dt>可计量成本</dt><dd>{money(result.usage?.total_cost_usd)}</dd></div><div><dt>当前状态</dt><dd>{statusLabel[result.status]||result.status}</dd></div></dl></section>
       <section className="discovery-section"><div className="section-title"><div><p>组合诊断</p><h2>组合暴露诊断</h2></div></div><div className="exposure-grid"><PortfolioExposureCard title="持仓偏重" items={result.portfolio_diagnosis.overweight}/><PortfolioExposureCard title="持仓缺口" items={result.portfolio_diagnosis.missing}/><PortfolioExposureCard title="组合优势" items={result.portfolio_diagnosis.strength}/><PortfolioExposureCard title="主要脆弱点" items={result.portfolio_diagnosis.vulnerability}/></div></section>
       <section className="discovery-section"><div className="section-title"><div><p>市场观察</p><h2>市场资金方向</h2></div></div><div className="capital-flow-grid"><CapitalFlowColumn title="资金正在加速的方向" items={result.capital_flows.strong} onTicker={goTicker}/><CapitalFlowColumn title="资金尚弱但可提前研究" items={result.capital_flows.early} onTicker={goTicker}/></div></section>
       <section className="discovery-section candidate-groups"><div className="section-title"><div><p>本地验证后</p><h2>研究候选</h2></div><small>{result.counts.accepted} 只保留 · {result.counts.watch_only} 只观察</small></div><div className="candidate-group-tabs" role="tablist">{result.groups.map(item=><button role="tab" aria-selected={item.id===group?.id} className={item.id===group?.id?'active':''} key={item.id} onClick={()=>setActiveGroup(item.id)}>{item.name}<span>{item.candidates.length}</span></button>)}</div>{group&&<><p className="candidate-group-summary">{group.summary}</p><div className="candidate-grid">{group.candidates.map(candidate=><CandidateCard key={candidate.id} candidate={candidate} onDetail={setSelectedId} onAction={(kind,id)=>action.mutate({kind,id})}/>)}{!group.candidates.length&&<div className="empty">该分组没有通过本地过滤的候选。</div>}</div></>}</section>
