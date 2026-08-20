@@ -93,10 +93,17 @@ def discovery_refresh(payload: RefreshIn, user: User = Depends(get_current_user)
     settings = get_settings()
     config = discovery_settings(db, user.id)
     missing = []
-    if config.discovery_mode == "exa_finance" and not settings.exa_api_key.strip():
-        missing.append("Exa API Key")
-    elif config.discovery_mode != "exa_finance" and not settings.perplexity_api_key.strip():
-        missing.append("Perplexity API Key")
+    if config.discovery_mode == "exa_finance":
+        if not settings.exa_api_key.strip():
+            missing.append("Exa API Key")
+    elif config.discovery_mode == "pi_agent":
+        if not settings.agent_gateway_token.strip():
+            missing.append("AGENT_GATEWAY_TOKEN")
+        if not settings.openai_api_key.strip():
+            missing.append("OPENAI_API_KEY")
+    else:
+        if not settings.perplexity_api_key.strip():
+            missing.append("Perplexity API Key")
     if config.discovery_mode == "search_local" and not settings.openai_api_key.strip():
         missing.append("OPENAI_API_KEY")
     if missing:

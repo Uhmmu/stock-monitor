@@ -1776,6 +1776,7 @@ class StockDiscoveryRun(Base):
     filter_version: Mapped[str] = mapped_column(String(64), default="stock-discovery-filter-v0.4")
     portfolio_snapshot_hash: Mapped[str] = mapped_column(String(64))
     warnings: Mapped[list] = mapped_column(JSON, default=list)
+    funnel_stats: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False, server_default="{}")
     failure_code: Mapped[str | None] = mapped_column(String(48))
     failure_reason: Mapped[str | None] = mapped_column(Text)
 
@@ -1936,6 +1937,21 @@ class StockDiscoveryUsage(Base):
     model_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     raw_usage: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class StockDiscoveryAgentEvent(Base):
+    """Lightweight research-funnel event reported by the Pi Agent sidecar.
+
+    Only observable milestones are stored (theme discovered, candidate
+    screened, ...), never model chain-of-thought.
+    """
+    __tablename__ = "stock_discovery_agent_events"
+    __table_args__ = (Index("ix_stock_discovery_agent_events_run", "run_id", "id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("stock_discovery_runs.id", ondelete="CASCADE"))
+    event_type: Mapped[str] = mapped_column(String(64))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class OpportunityHistory(Base):

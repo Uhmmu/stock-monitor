@@ -4,6 +4,7 @@ import {
   CandidateStatusBadge,
   DataDiscrepancies,
   DiscoveryRunMetadata,
+  PiFunnelProgress,
   RawCandidatePanel,
   chooseCandidateGroup,
   discoveryStatusText,
@@ -77,5 +78,39 @@ describe('机会发现候选展示', () => {
     expect(html).toContain('发现数据差异')
     expect(html).toContain('perplexity_finance 28')
     expect(html).toContain('yfinance 34')
+  })
+
+  it('为 Pi Agent 引擎展示智能研究语义', () => {
+    const result={
+      id:3,status:'completed',stage:'completed',trigger:'manual',requested_at:'2026-08-20T00:00:00Z',started_at:'2026-08-20T00:00:01Z',completed_at:'2026-08-20T00:12:00Z',analysis_date:'2026-08-20',next_scheduled_at:null,
+      model_requested:'gpt-5.6-sol',model_used:'gpt-5.6-sol',prompt_version:'stock-discovery-prompt-v0.7',schema_version:'stock-discovery-schema-v0.7',filter_version:'stock-discovery-filter-v0.4',warnings:[],failure_code:null,failure_reason:null,previous_successful_run_id:null,
+      discovery_mode:'pi_agent' as const,funnel_stats:{candidates_discovered:32,candidates_promoted:9},
+      usage:{input_tokens:12000,output_tokens:8000,total_tokens:20000,finance_search_calls:1,web_search_calls:6,tool_cost_usd:.14,model_cost_usd:0,total_cost_usd:.14},
+      market_context:{},portfolio_diagnosis:{overweight:[],missing:[],strength:[],vulnerability:[]},capital_flows:{strong:[],early:[]},groups:[],raw_candidates:[],filtered_candidates:[],counts:{raw:12,accepted:9,watch_only:2,rejected:1},portfolio_actions:[],limitations:[],
+    }
+    const html=renderToStaticMarkup(<DiscoveryRunMetadata result={result}/>)
+    expect(html).toContain('Pi Agent 智能研究')
+    expect(html).toContain('本机端点输入 / 输出 token')
+    expect(html).toContain('$0.1400')
+  })
+
+  it('Pi 漏斗进度条标记已完成与当前阶段', () => {
+    const html=renderToStaticMarkup(<PiFunnelProgress stage="pi_counter_evidence" stats={{candidates_discovered:32,candidates_promoted:9}}/>)
+    expect(html).toContain('研究规划')
+    expect(html).toContain('反方论据')
+    expect(html).toContain('发现候选 32')
+    expect(html).toContain('已晋级 9')
+    expect(html).toContain('done')
+    expect(html).toContain('active')
+  })
+
+  it('Pi 漏斗对非 Pi 阶段不渲染', () => {
+    expect(renderToStaticMarkup(<PiFunnelProgress stage="searching_market"/>)).toBe('')
+  })
+
+  it('完成后漏斗所有阶段都显示完成', () => {
+    const html=renderToStaticMarkup(<PiFunnelProgress stage="completed"/>)
+    expect(html).toContain('✓')
+    expect(html).not.toContain('active')
   })
 })

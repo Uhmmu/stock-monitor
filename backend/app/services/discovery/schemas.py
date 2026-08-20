@@ -6,8 +6,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-PROMPT_VERSION = "stock-discovery-prompt-v0.6"
-SCHEMA_VERSION = "stock-discovery-schema-v0.6"
+PROMPT_VERSION = "stock-discovery-prompt-v0.7"
+SCHEMA_VERSION = "stock-discovery-schema-v0.7"
 FILTER_VERSION = "stock-discovery-filter-v0.4"
 
 
@@ -97,6 +97,19 @@ class CandidateSource(StrictModel):
     source_type: Literal["finance", "company", "filing", "news", "research", "other"]
 
 
+class EvidenceItem(StrictModel):
+    """One traceable claim backing a recommendation (Pi Agent v0.7)."""
+
+    claim: str
+    source_type: Literal[
+        "sec_filing", "company_ir", "earnings_call", "reputable_news",
+        "web_source", "internal_data", "model_inference",
+    ]
+    url_or_reference: str | None = None
+    date: str | None = None
+    confidence: float = Field(ge=0, le=1)
+
+
 class Candidate(StrictModel):
     ticker: str
     company_name: str
@@ -112,6 +125,9 @@ class Candidate(StrictModel):
     overlap_with_existing_holdings: list[str]
     business_quality_summary: str
     investment_thesis: list[str]
+    bear_case: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    research_depth: Literal["screened", "researched", "deep_researched"] = "screened"
     capital_flow_context: str
     valuation_context: str
     why_now: str
@@ -161,7 +177,7 @@ class DiscoveryResult(StrictModel):
 
 
 class DiscoverySettingsUpdate(BaseModel):
-    discovery_mode: Literal["search_local", "agent_finance", "exa_finance"] | None = None
+    discovery_mode: Literal["search_local", "agent_finance", "exa_finance", "pi_agent"] | None = None
     max_output_tokens: int | None = Field(default=None, ge=2048, le=32000)
     monthly_budget_usd: float | None = Field(default=None, ge=0, le=1000)
     max_run_cost_usd: float | None = Field(default=None, ge=0.01, le=100)

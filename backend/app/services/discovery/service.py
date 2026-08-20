@@ -38,6 +38,8 @@ from .normalization import apply_filters, enrich_candidate, resolve_local_symbol
 from .analysis import AnalysisError, AnalysisResult, analyze_opportunities
 from .exa import ExaAgentResult, ExaError, build_request as build_exa_request, run_agent as run_exa_agent
 from .perplexity import AgentResult, PerplexityError, build_request, run_agent
+from .pi_agent import PiAgentError, PiAgentResult, build_request as build_pi_request, run_agent as run_pi_agent
+from .progress import agent_events_payload
 from .search import SearchError, SearchResult, build_search_queries, run_search
 from .schemas import (
     DiscoveryResult,
@@ -138,6 +140,14 @@ def settings_payload(db: Session, user_id: int) -> dict:
         "exa_agent_effort": get_settings().exa_agent_effort,
         "exa_finance_provider": "financial_datasets",
         "search_source": "perplexity_search",
+        "pi_agent_ready": bool(
+            get_settings().agent_gateway_token.strip()
+            and get_settings().openai_api_key.strip()
+        ),
+        "pi_agent_model": get_settings().pi_agent_model.strip() or get_settings().model_important,
+        "pi_agent_max_turns": get_settings().pi_agent_max_turns,
+        "pi_agent_max_web_search_calls": get_settings().pi_agent_max_web_search_calls,
+        "pi_agent_deep_effort": get_settings().pi_agent_deep_effort,
         "prompt_version": PROMPT_VERSION, "schema_version": SCHEMA_VERSION,
         "filter_version": FILTER_VERSION,
     })
@@ -166,6 +176,13 @@ def estimate_max_cost(context: dict, settings: StockDiscoverySettings) -> float:
         # and Financial Datasets provider calls during one discovery run.
         effort_cost = EXA_FIXED_EFFORT_COST.get(get_settings().exa_agent_effort, 1.0)
         return round(effort_cost + .15, 6)
+    if settings.discovery_mode == "pi_agent":
+        # Pi Agent: cheap Exa searches + one deep run (medium by default). The
+        # project LLM endpoint does not report a reliable dollar cost.
+        env = get_settings()
+        search_cost = env.pi_agent_max_web_search_calls * .007
+        deep_cost = EXA_FIXED_EFFORT_COST.get(env.pi_agent_deep_effort, .10)
+        return round(search_cost + deep_cost, 6)
     input_rate, output_rate = MODEL_PRICING_PER_MILLION.get(settings.model, (5.0, 30.0))
     input_tokens = max(1000, len(json.dumps(context, ensure_ascii=False, default=str)) // 3)
     model_cost = (
@@ -229,7 +246,7 @@ def create_discovery_run(db: Session, portfolio: Portfolio, user_id: int) -> tup
         requested_at=now, completed_at=now if budget_reason else None,
         model_requested=(
             get_settings().model_important
-            if config.discovery_mode == "search_local"
+            if config.discovery_mode in ("search_local", "pi_agent")
             else ("exa-agent" if config.discovery_mode == "exa_finance" else config.model)
         ),
         portfolio_snapshot_hash=context_hash,
@@ -277,6 +294,55 @@ def _persist_pipeline_usage(
         },
         "perplexity_model_tokens": 0,
     }
+
+
+def _persist_pi_usage(db: Session, run_id: int, result: PiAgentResult) -> None:
+    db.add(StockDiscoveryUsage(
+        run_id=run_id,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        total_tokens=result.total_tokens,
+        finance_search_calls=result.deep_search_calls,
+        web_search_calls=result.web_search_calls,
+        tool_cost_usd=result.tool_cost_usd,
+        model_cost_usd=result.model_cost_usd,
+        total_cost_usd=result.total_cost_usd,
+        raw_usage={
+            **result.usage,
+            "provider": "pi_agent",
+            "engine": "pi_agent",
+            "deep_search_calls": result.deep_search_calls,
+            "web_search_calls": result.web_search_calls,
+            "internal_tool_calls": max(
+                0, len(result.tool_results) - result.web_search_calls - result.deep_search_calls
+            ),
+        },
+    ))
+
+
+def _persist_pi_sources(db: Session, run_id: int, parsed: DiscoveryResult) -> None:
+    seen: set[str] = set()
+    for group in parsed.candidate_groups:
+        for item in group.candidates:
+            raw = item.model_dump(mode="json")
+            for evidence in raw.get("evidence") or []:
+                reference = str(evidence.get("url_or_reference") or "")
+                if reference.startswith("http") and reference not in seen:
+                    seen.add(reference)
+                    db.add(StockDiscoverySource(
+                        run_id=run_id, title=evidence.get("claim") or "",
+                        url=reference, source_type=evidence.get("source_type") or "other",
+                        source_origin="pi_agent_evidence",
+                    ))
+            for source in raw.get("sources") or []:
+                url = source.get("url")
+                if url and url not in seen:
+                    seen.add(url)
+                    db.add(StockDiscoverySource(
+                        run_id=run_id, title=source.get("title") or "", url=url,
+                        source_type=source.get("source_type") or "other",
+                        source_origin="pi_agent",
+                    ))
 
 
 def _persist_agent_usage(db: Session, run_id: int, result: AgentResult) -> None:
@@ -641,12 +707,14 @@ def _persist_candidates(
                     if url:
                         db.add(StockDiscoverySource(run_id=run.id, candidate_id=candidate.id,
                             title=source.get("title") or "", url=url, source_type=source.get("source_type") or "other",
-                            source_origin=(
-                                "exa_financial_datasets" if raw_source == "exa_finance" and source.get("source_type") == "finance"
-                                else ("exa_web" if raw_source == "exa_finance" else (
-                                    "perplexity_finance" if source.get("source_type") == "finance" else "perplexity_web"
-                                ))
-                            )))
+                    source_origin=(
+                        "exa_financial_datasets" if raw_source == "exa_finance" and source.get("source_type") == "finance"
+                        else ("exa_web" if raw_source == "exa_finance" else (
+                            "pi_agent_evidence" if raw_source == "pi_agent" else (
+                                "perplexity_finance" if source.get("source_type") == "finance" else "perplexity_web"
+                            )
+                        ))
+                    )))
             appearances = list(candidate.raw_data.get("appearances") or [])
             appearances.append({"group_id": group.group_id, "group_type": group.group_type,
                                 "reason": raw.get("discovery_reason"), "raw_order": position})
@@ -718,7 +786,35 @@ def execute_discovery_run(db: Session, run_id: int) -> StockDiscoveryRun:
     run.status = "running"; run.stage = "preparing_local_data"; run.started_at = run.started_at or _now(); db.commit()
     try:
         local_context = build_local_research_context(db, snapshot.payload)
-        if run.discovery_mode == "exa_finance":
+        if run.discovery_mode == "pi_agent":
+            env = get_settings()
+            run.stage = "pi_planning"; db.commit()
+            pi = run_pi_agent(build_pi_request(
+                run_id=run.id,
+                user_id=run.user_id,
+                context=local_context,
+                model=env.pi_agent_model.strip() or env.model_important,
+                max_turns=env.pi_agent_max_turns,
+                max_web_search_calls=env.pi_agent_max_web_search_calls,
+                deep_effort=env.pi_agent_deep_effort,
+                max_output_tokens=config.max_output_tokens,
+            ))
+            parsed = pi.parsed
+            history_batch = _legacy_to_opportunity_batch(parsed)
+            queries: list[str] = []
+            run.model_used = pi.model
+            db.add(StockDiscoveryRawPayload(
+                run_id=run.id,
+                response_json={"engine": "pi_agent", "usage": pi.usage, "events": pi.events[:200]},
+                output_text=pi.output_text,
+                parsed_json=parsed.model_dump(mode="json"),
+                tool_results=pi.tool_results,
+            ))
+            _persist_pi_usage(db, run.id, pi)
+            _persist_pi_sources(db, run.id, parsed)
+            history_source = "pi_agent"
+            measured_cost = pi.total_cost_usd
+        elif run.discovery_mode == "exa_finance":
             run.stage = "running_exa_finance_agent"; db.commit()
             exa = run_exa_agent(build_exa_request(
                 context=local_context,
@@ -816,9 +912,13 @@ def execute_discovery_run(db: Session, run_id: int) -> StockDiscoveryRun:
         db.commit()
         run.stage = "local_verification"; db.commit()
         warnings = (
-            _persist_candidates(db, run, parsed, config, raw_source="exa_finance")
-            if run.discovery_mode == "exa_finance"
-            else _persist_candidates(db, run, parsed, config)
+            _persist_candidates(db, run, parsed, config, raw_source="pi_agent")
+            if run.discovery_mode == "pi_agent"
+            else (
+                _persist_candidates(db, run, parsed, config, raw_source="exa_finance")
+                if run.discovery_mode == "exa_finance"
+                else _persist_candidates(db, run, parsed, config)
+            )
         )
         db.add(OpportunityHistory(
             user_id=run.user_id,
@@ -842,7 +942,7 @@ def execute_discovery_run(db: Session, run_id: int) -> StockDiscoveryRun:
         run.status = "completed_with_warnings" if warnings else "completed"
         run.stage = "completed"; run.completed_at = _now(); run.next_scheduled_at = None
         db.commit(); db.refresh(run); return run
-    except (AnalysisError, SearchError, PerplexityError, ExaError) as exc:
+    except (AnalysisError, SearchError, PerplexityError, ExaError, PiAgentError) as exc:
         db.rollback(); run = db.get(StockDiscoveryRun, run_id)
         if exc.retryable:
             run.status = "pending"; run.stage = "retrying"; run.failure_code = exc.code
@@ -919,6 +1019,7 @@ def _run_payload(run: StockDiscoveryRun | None) -> dict | None:
         "requested_at", "started_at", "completed_at", "analysis_date",
         "next_scheduled_at", "model_requested", "model_used", "prompt_version", "schema_version", "filter_version",
         "warnings", "failure_code", "failure_reason", "previous_successful_run_id",
+        "funnel_stats",
     )}
 
 
@@ -963,6 +1064,12 @@ def _candidate_payload(db: Session, row: StockDiscoveryCandidate, memberships: l
             | set((row.local_data or {}).get("sources") or [])),
         "source_count": len(sources), "data_discrepancies": discrepancies,
         "major_risks": raw.get("major_risks") or [], "thesis_breakers": raw.get("thesis_breakers") or [],
+        "bear_case": raw.get("bear_case") or [],
+        "evidence": [
+            item for item in (raw.get("evidence") or [])
+            if isinstance(item, dict) and item.get("claim")
+        ],
+        "research_depth": raw.get("research_depth") or "screened",
         "reconsideration_condition": raw.get("reconsideration_condition"),
     }
     if detail:
@@ -978,6 +1085,8 @@ def discovery_run_payload(db: Session, run: StockDiscoveryRun, *, include_candid
     base["usage"] = ({key: getattr(usage, key) for key in (
         "input_tokens", "output_tokens", "total_tokens", "finance_search_calls", "web_search_calls",
         "tool_cost_usd", "model_cost_usd", "total_cost_usd") } if usage else None)
+    if run.discovery_mode == "pi_agent":
+        base["agent_events"] = agent_events_payload(db, run.id)
     if not include_candidates:
         return base
     groups = list(db.scalars(select(StockDiscoveryCandidateGroup).where(StockDiscoveryCandidateGroup.run_id == run.id)
@@ -1041,6 +1150,11 @@ def latest_discovery_payload(db: Session, user_id: int) -> dict:
                 and (
                     config.discovery_mode == "agent_finance"
                     or get_settings().openai_api_key.strip()
+                )
+                if config.discovery_mode != "pi_agent"
+                else (
+                    get_settings().agent_gateway_token.strip()
+                    and get_settings().openai_api_key.strip()
                 )
             )
         ),

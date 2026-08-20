@@ -653,6 +653,22 @@
 [data-theme="dark"] .discovery-mode-picker button.active{background:#0a84ff;border-color:#0a84ff;color:#fff}
 [data-theme="dark"] .discovery-skeleton{background:linear-gradient(90deg,#2c2c2e,#3a3a3c,#2c2c2e);background-size:200% 100%}
 [data-theme="dark"] .exposure-card small,[data-theme="dark"] .flow-column article>div:first-child span{color:#6cb6ff}
+/* Pi Agent research funnel + evidence/bear-case blocks. */
+[data-theme="dark"] .pi-funnel-progress{background:rgba(28,28,30,.68);border-color:var(--line)}
+[data-theme="dark"] .pi-funnel-step{background:rgba(255,255,255,.05);color:#a1a1a6}
+[data-theme="dark"] .pi-funnel-step em{background:rgba(255,255,255,.08);color:#d1d1d6}
+[data-theme="dark"] .pi-funnel-step.active{background:rgba(10,132,255,.16);color:#6cb6ff}
+[data-theme="dark"] .pi-funnel-step.active em{background:#0a84ff;color:#fff}
+[data-theme="dark"] .pi-funnel-step.done em{background:rgba(48,209,88,.16);color:#30d158}
+[data-theme="dark"] .pi-funnel-stats{color:#8e8e93}
+[data-theme="dark"] .candidate-detail .candidate-bear-case{background:rgba(120,45,35,.24);border-color:rgba(255,159,122,.18)}
+[data-theme="dark"] .candidate-detail .candidate-bear-case h3{color:#ff9f8a}
+[data-theme="dark"] .candidate-detail .candidate-bear-case small{color:#c7a29a}
+[data-theme="dark"] .candidate-evidence-list li{background:rgba(44,44,46,.72);border-color:var(--line)}
+[data-theme="dark"] .candidate-evidence-list li>p{color:#d1d1d6}
+[data-theme="dark"] .evidence-source-type{background:rgba(255,255,255,.08);color:#a1a1a6}
+[data-theme="dark"] .evidence-source-type.internal_data{background:rgba(10,132,255,.14);color:#6cb6ff}
+[data-theme="dark"] .evidence-source-type.model_inference{background:rgba(255,159,10,.12);color:#ffd60a}
 
 /* Sentiment dashboard. */
 [data-theme="dark"] .sentiment-page{--sentiment-track:rgba(255,255,255,.10)}

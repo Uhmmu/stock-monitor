@@ -2271,6 +2271,7 @@ def run_stock_discovery(self, run_id: int):
     from app.services.discovery.exa import ExaError
     from app.services.discovery.locks import discovery_lock
     from app.services.discovery.perplexity import PerplexityError
+    from app.services.discovery.pi_agent import PiAgentError
     from app.services.discovery.search import SearchError
     from app.services.discovery.service import execute_discovery_run
 
@@ -2286,7 +2287,7 @@ def run_stock_discovery(self, run_id: int):
             with SessionLocal() as db:
                 run = execute_discovery_run(db, run_id)
                 return {"status": run.status, "run_id": run_id}
-        except (SearchError, PerplexityError, ExaError) as exc:
+        except (SearchError, PerplexityError, ExaError, PiAgentError) as exc:
             if exc.retryable and self.request.retries < self.max_retries:
                 countdown = min(300, 30 * (2 ** self.request.retries))
                 raise self.retry(exc=exc, countdown=countdown)

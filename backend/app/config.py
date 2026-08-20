@@ -163,6 +163,17 @@ class Settings(BaseSettings):
     exa_agent_effort: str = "high"
     exa_agent_poll_interval_seconds: float = 4.0
     exa_agent_timeout_seconds: int = 900
+    # Pi Agent sidecar (discovery_mode="pi_agent"). The Node sidecar hosts the
+    # research agent loop; it talks back to this backend over the internal
+    # agent gateway with a shared service token (never exposed via nginx/Caddy).
+    pi_agent_base_url: str = "http://pi-agent:3001"
+    pi_agent_model: str = ""  # empty -> model_important
+    pi_agent_max_turns: int = 40
+    pi_agent_max_web_search_calls: int = 15
+    pi_agent_deep_effort: str = "medium"  # minimal|low|medium|high|xhigh
+    pi_agent_timeout_seconds: int = 900
+    pi_agent_request_timeout_seconds: int = 960
+    agent_gateway_token: str = ""
     # Adanos is server-only. The browser calls the authenticated FastAPI proxy.
     adanos_api_key: str = ""
     adanos_api_keys: str = ""

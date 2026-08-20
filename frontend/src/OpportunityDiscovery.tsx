@@ -4,15 +4,17 @@ import { api, patch, post } from './api'
 import { Sheet } from './Sheet'
 
 export type DiscoveryUsage = {input_tokens:number;output_tokens:number;total_tokens:number;finance_search_calls:number;web_search_calls:number;tool_cost_usd:number;model_cost_usd:number;total_cost_usd:number}
-export type DiscoveryMode = 'search_local'|'agent_finance'|'exa_finance'
-export type DiscoveryRunMeta = {id:number;status:string;stage:string;trigger:string;discovery_mode?:DiscoveryMode;requested_at:string;started_at:string|null;completed_at:string|null;analysis_date:string|null;next_scheduled_at:string|null;model_requested:string;model_used:string|null;prompt_version:string;schema_version:string;filter_version:string;warnings:string[];failure_code:string|null;failure_reason:string|null;previous_successful_run_id:number|null;usage?:DiscoveryUsage|null}
+export type DiscoveryMode = 'search_local'|'agent_finance'|'exa_finance'|'pi_agent'
+export type DiscoveryRunMeta = {id:number;status:string;stage:string;trigger:string;discovery_mode?:DiscoveryMode;requested_at:string;started_at:string|null;completed_at:string|null;analysis_date:string|null;next_scheduled_at:string|null;model_requested:string;model_used:string|null;prompt_version:string;schema_version:string;filter_version:string;warnings:string[];failure_code:string|null;failure_reason:string|null;previous_successful_run_id:number|null;usage?:DiscoveryUsage|null;funnel_stats?:Record<string,number>|null}
 export type CandidateGroupRef = {id:string;name:string;type:string;reason:string}
 export type CandidateMetric = Record<string,number|string>
+export type EvidenceItem = {claim:string;source_type:string;url_or_reference:string|null;date:string|null;confidence:number|null}
 export type DiscoveryCandidate = {
   id:number;raw_ticker:string;normalized_ticker:string|null;company_name:string;exchange:string|null;country:string|null;raw_rank:number|null;final_rank:number|null;priority:string
   symbol_match_status:string;symbol_match_reason:string|null;filter_status:string;display_status:string;filter_reasons:string[];filter_details:Record<string,unknown>
   verification_status:string;dismissed:boolean;researched:boolean;groups:CandidateGroupRef[];discovery_reason:string|null;portfolio_fit:string|null
   diversification_effect:string|null;overlap_with_existing_holdings:string[];business_quality_summary:string|null;investment_thesis:string[]
+  bear_case:string[];evidence:EvidenceItem[];research_depth:string
   capital_flow_context:string|null;valuation_context:string|null;why_now:string|null;quality_level:string;valuation_level:string;momentum_state:string;confidence:number|null
   financial_snapshot:CandidateMetric;source_badges:string[];source_count:number;data_discrepancies:{metric:string;values:{source:string;value:number|string;period:string|null}[]}[]
   major_risks:string[];thesis_breakers:string[];reconsideration_condition?:string|null
@@ -26,16 +28,17 @@ export type DiscoveryResult = DiscoveryRunMeta & {
   raw_candidates:DiscoveryCandidate[];filtered_candidates:DiscoveryCandidate[]
   counts:{raw:number;accepted:number;watch_only:number;rejected:number}
   portfolio_actions:{action:string;priority:string;reason:string}[];limitations:string[]
+  agent_events?:{event_type:string;detail:string;created_at:string|null}[]
 }
 type CapitalFlow = {direction:string;strength?:string;current_attention?:string;evidence?:string;sustainability?:string;catalyst?:string;long_term_case?:string;what_could_trigger_repricing?:string[];risks:string[];related_tickers:string[]}
 type LatestDiscovery = {current_run:DiscoveryRunMeta|null;result:DiscoveryResult|null;using_previous_result:boolean;api_key_configured:boolean;discovery_mode:DiscoveryMode;monthly_spend_usd:number;monthly_budget_usd:number}
 export type OpportunityItem = {title:string;ticker:string;category:string[];summary:string;why_now:string[];evidence:{type:'financial'|'news'|'market';content:string}[];catalysts:string[];risks:string[];valuation_view:string;confidence:number;action:string[]}
 export type OpportunityHistory = {id:number;run_id:number;created_at:string;market_condition:string;model_version:string;search_source:string;opportunities:OpportunityItem[];tickers:string[];categories:string[];max_confidence:number;sources?:{title:string;url:string;origin:string}[]}
-export type DiscoverySettings = {discovery_mode:DiscoveryMode;analysis_model:string;agent_model:string;exa_agent_model:string;exa_agent_effort:string;exa_finance_provider:string;search_source:string;max_output_tokens:number;monthly_budget_usd:number;max_run_cost_usd:number;min_market_cap:number;exclude_current_holdings:boolean;exclude_watchlist:boolean;require_positive_fcf:boolean;max_trailing_pe:number;max_forward_pe:number;max_price_to_sales:number;filter_extreme_momentum:boolean;missing_data_policy:'warn'|'watch_only'|'reject';api_key_configured:boolean;exa_api_key_configured:boolean;analysis_api_key_configured:boolean;prompt_version:string;schema_version:string;filter_version:string}
+export type DiscoverySettings = {discovery_mode:DiscoveryMode;analysis_model:string;agent_model:string;exa_agent_model:string;exa_agent_effort:string;exa_finance_provider:string;search_source:string;max_output_tokens:number;monthly_budget_usd:number;max_run_cost_usd:number;min_market_cap:number;exclude_current_holdings:boolean;exclude_watchlist:boolean;require_positive_fcf:boolean;max_trailing_pe:number;max_forward_pe:number;max_price_to_sales:number;filter_extreme_momentum:boolean;missing_data_policy:'warn'|'watch_only'|'reject';api_key_configured:boolean;exa_api_key_configured:boolean;analysis_api_key_configured:boolean;prompt_version:string;schema_version:string;filter_version:string;pi_agent_ready?:boolean;pi_agent_model?:string;pi_agent_max_turns?:number;pi_agent_max_web_search_calls?:number;pi_agent_deep_effort?:string}
 
 const statusLabel:Record<string,string> = {pending:'等待生成',running:'正在生成',completed:'已完成',completed_with_warnings:'部分完成',failed:'运行失败',blocked_by_budget:'预算已阻止'}
-const stageLabel:Record<string,string> = {preparing_portfolio:'正在整理持仓',preparing_local_data:'正在读取本地数据',budget_check:'正在检查预算',searching_market:'Perplexity Search 正在检索',analyzing_with_local_ai:'GPT-5.6-sol 正在生成机会',running_finance_agent:'Perplexity Finance Search + GPT-5.4 正在生成机会',running_exa_finance_agent:'Exa Agent + Financial Datasets 正在深度研究',normalizing_candidates:'正在生成候选',local_verification:'正在进行本地验证',applying_filters:'正在应用过滤规则',retrying:'请求受限，准备重试',completed:'已完成',failed:'运行失败'}
-const engineLabel:Record<string,string>={search_local:'GPT-5.6-sol + Perplexity Search',agent_finance:'Perplexity Finance Search + GPT-5.4',exa_finance:'Exa Agent + Financial Datasets'}
+const stageLabel:Record<string,string> = {preparing_portfolio:'正在整理持仓',preparing_local_data:'正在读取本地数据',budget_check:'正在检查预算',searching_market:'Perplexity Search 正在检索',analyzing_with_local_ai:'GPT-5.6-sol 正在生成机会',running_finance_agent:'Perplexity Finance Search + GPT-5.4 正在生成机会',running_exa_finance_agent:'Exa Agent + Financial Datasets 正在深度研究',pi_planning:'Pi Agent 正在规划研究',pi_discovering:'Pi Agent 正在探索主题与候选',pi_internal_verification:'Pi Agent 正在做内部数据筛选',pi_external_research:'Pi Agent 正在补充外部研究',pi_counter_evidence:'Pi Agent 正在寻找反方论据',pi_portfolio_fit:'Pi Agent 正在评估组合适配',pi_synthesizing:'Pi Agent 正在生成最终结果',normalizing_candidates:'正在生成候选',local_verification:'正在进行本地验证',applying_filters:'正在应用过滤规则',retrying:'请求受限，准备重试',completed:'已完成',failed:'运行失败'}
+const engineLabel:Record<string,string>={search_local:'GPT-5.6-sol + Perplexity Search',agent_finance:'Perplexity Finance Search + GPT-5.4',exa_finance:'Exa Agent + Financial Datasets',pi_agent:'Pi Agent 智能研究'}
 const filterLabel:Record<string,string> = {accepted:'已保留',accepted_with_warning:'保留但有警告',watch_only:'仅观察',rejected:'已过滤',insufficient_data:'数据不足',duplicate:'重复候选',already_held:'已持有',already_watched:'已在自选',unsupported_symbol:'无法识别'}
 const levelLabel:Record<string,string> = {high:'高',medium:'中',low:'低',uncertain:'不确定',cheap:'便宜',reasonable:'合理',elevated:'偏高',extreme:'极高',cold:'冷',neutral:'中性',improving:'改善',strong:'强',euphoric:'过热',verified:'已验证',partial:'部分验证',pending:'待验证',failed:'待验证',positive:'增加分散',negative:'重复敞口'}
 const metricLabels:Record<string,string> = {market_cap:'市值',pe_trailing:'PE',pe_forward:'预期 PE',price_to_sales:'市销率',revenue_growth:'营收增长',earnings_growth:'盈利增长',free_cash_flow:'自由现金流',free_cash_flow_margin:'FCF 利润率',return_on_invested_capital:'ROIC',operating_margin:'经营利润率',gross_margin:'毛利率',price:'价格',average_volume:'平均成交量'}
@@ -61,6 +64,42 @@ const money=(value:number|null|undefined)=>value==null?'—':`$${value.toFixed(4
 
 export function CandidateStatusBadge({status}:{status:string}) {
   return <span className={`discovery-status status-${status}`}>{filterLabel[status]||status}</span>
+}
+
+const funnelSteps:{stage:string;label:string}[] = [
+  {stage:'pi_planning',label:'研究规划'},
+  {stage:'pi_discovering',label:'主题与候选发现'},
+  {stage:'pi_internal_verification',label:'内部数据筛选'},
+  {stage:'pi_external_research',label:'外部研究'},
+  {stage:'pi_counter_evidence',label:'反方论据'},
+  {stage:'pi_portfolio_fit',label:'组合适配'},
+  {stage:'pi_synthesizing',label:'最终生成'},
+]
+
+export function PiFunnelProgress({stage,stats}:{stage:string;stats?:Record<string,number>|null}) {
+  const activeIndex=funnelSteps.findIndex(step=>step.stage===stage)
+  const done=activeIndex<0&&stage==='completed'
+  if(activeIndex<0&&!done)return null
+  return <div className="pi-funnel-progress" aria-label="研究漏斗进度">
+    {funnelSteps.map((step,index)=>{
+      const state=done||index<activeIndex?'done':index===activeIndex?'active':'pending'
+      return <div key={step.stage} className={`pi-funnel-step ${state}`}><em>{done||index<activeIndex?'✓':index+1}</em><span>{step.label}</span></div>
+    })}
+    {!!stats&&Object.keys(stats).length>0&&<small className="pi-funnel-stats">{Object.entries(stats).map(([key,value])=>`${funnelStatLabel(key)||key} ${value}`).join(' · ')}</small>}
+  </div>
+}
+
+const funnelStatLabel:(key:string)=>string|undefined=(key)=>({
+  candidates_discovered:'发现候选',
+  candidates_screened:'已筛选',
+  candidates_rejected:'已排除',
+  candidates_promoted:'已晋级',
+  web_searches:'外部检索',
+} as Record<string,string>)[key]
+
+const evidenceSourceLabel=(sourceType:string)=>{
+  const labels:Record<string,string>={sec_filing:'SEC 文件',company_ir:'公司 IR',earnings_call:'财报电话会',reputable_news:'权威新闻',web_source:'网络来源',internal_data:'内部数据',model_inference:'模型推断'}
+  return labels[sourceType]||sourceType
 }
 
 function CandidateMetricRow({snapshot}:{snapshot:CandidateMetric}) {
@@ -120,6 +159,8 @@ function CandidateDetailDrawer({id,onClose,onChanged}:{id:number|null;onClose:()
     <section><h3>{analysisLabel}</h3><p>{item.discovery_reason}</p>{!!item.investment_thesis.length&&<ul>{item.investment_thesis.map(text=><li key={text}>{text}</li>)}</ul>}<CandidateMetricRow snapshot={(item.raw_analysis.financial_snapshot||{}) as CandidateMetric}/></section>
     <section><h3>本地数据验证</h3><CandidateMetricRow snapshot={item.financial_snapshot}/><p className="detail-note">验证状态：{levelLabel[item.verification_status]||'待验证'}　·　时间：{formatTime(item.verified_at)}</p><DataDiscrepancies items={item.data_discrepancies}/></section>
     <section><h3>组合适配</h3><p>{item.portfolio_fit||'数据不足'}</p><p>分散作用：{levelLabel[item.diversification_effect||'']||'不确定'}</p>{!!item.overlap_with_existing_holdings.length&&<p>重叠持仓：{item.overlap_with_existing_holdings.join('、')}</p>}</section>
+    {!!item.bear_case.length&&<section className="candidate-bear-case"><h3>反方论据（Bear Case）</h3><ul>{item.bear_case.map(text=><li key={text}>{text}</li>)}</ul><small>主动寻找的不买入理由，用于对冲确认偏误。</small></section>}
+    {!!item.evidence.length&&<section><h3>证据链</h3><ul className="candidate-evidence-list">{item.evidence.map((row,index)=><li key={`${row.claim}-${index}`}><span className={`evidence-source-type ${row.source_type}`}>{evidenceSourceLabel(row.source_type)}</span><div><p>{row.claim}</p><small>{row.date?`日期 ${row.date}　`:''}{row.confidence!=null?`置信度 ${(row.confidence*100).toFixed(0)}%　`:''}{row.url_or_reference&&<a href={row.url_or_reference} target="_blank" rel="noreferrer">来源链接</a>}</small></div></li>)}</ul></section>}
     <section><h3>风险与失效条件</h3>{!!item.major_risks.length&&<><b>主要风险</b><ul>{item.major_risks.map(text=><li key={text}>{text}</li>)}</ul></>}{!!item.thesis_breakers.length&&<><b>失效条件</b><ul>{item.thesis_breakers.map(text=><li key={text}>{text}</li>)}</ul></>}{!!item.filter_reasons.length&&<p className="candidate-warning">本地过滤：{item.filter_reasons.join('；')}</p>}</section>
     <section><h3>来源与数据差异</h3>{item.sources.map((source,index)=><a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">{source.title||source.url} <small>{source.origin}</small></a>)}{!item.sources.length&&<p>来源链接数据不足</p>}</section>
     <div className="candidate-detail-actions"><button onClick={()=>post(`/discovery/candidates/${item.id}/watchlist`,{}).then(onChanged)}>加入自选</button><button onClick={()=>post(`/discovery/candidates/${item.id}/researched`,{}).then(onChanged)}>标记已研究</button></div>
@@ -191,6 +232,7 @@ export function OpportunityDiscovery() {
   if(latest.error)return <div className="error">机会发现数据暂时无法读取，请稍后重试。</div>
   return <div className="opportunity-discovery">
     {running&&<div className="discovery-banner active"><span><b>正在生成新的机会发现结果</b>{result?'当前仍显示上一批内容。':'完成前可离开此页面。'}</span><em>{stageLabel[latest.data?.current_run?.stage||'']||'正在处理'}</em></div>}
+    {running&&latest.data?.current_run?.discovery_mode==='pi_agent'&&<PiFunnelProgress stage={latest.data.current_run.stage} stats={latest.data.current_run.funnel_stats||undefined}/>}
     {latest.data?.using_previous_result&&!running&&<div className="discovery-banner warning"><span><b>正在使用上一批成功结果</b>{latest.data.current_run?.failure_reason||'新批次没有替换当前内容。'}</span></div>}
     {!latest.data?.api_key_configured&&<div className="discovery-banner warning"><span><b>当前引擎所需 API Key 未完整配置</b>请到设置确认 Perplexity、本机端点或 Exa 配置。</span></div>}
     {refresh.error&&<div className="discovery-banner warning"><span><b>未能开始本次发现</b>{refresh.error.message}</span></div>}
@@ -200,6 +242,7 @@ export function OpportunityDiscovery() {
         <button type="button" role="radio" aria-checked={selectedEngine==='search_local'} className={selectedEngine==='search_local'?'active':''} disabled={saveEngine.isPending||Boolean(running)} onClick={()=>saveEngine.mutate('search_local')}><b>低成本引擎</b><span>GPT-5.6-sol + Perplexity Search</span><small>本机端点负责研究判断</small></button>
         <button type="button" role="radio" aria-checked={selectedEngine==='agent_finance'} className={selectedEngine==='agent_finance'?'active':''} disabled={saveEngine.isPending||Boolean(running)} onClick={()=>saveEngine.mutate('agent_finance')}><b>高成本引擎</b><span>Perplexity Finance Search + GPT-5.4</span><small>Perplexity Agent 完成金融检索与判断</small></button>
         <button type="button" role="radio" aria-checked={selectedEngine==='exa_finance'} className={selectedEngine==='exa_finance'?'active':''} disabled={saveEngine.isPending||Boolean(running)} onClick={()=>saveEngine.mutate('exa_finance')}><b>Exa 深度研究</b><span>Exa Agent + Financial Datasets</span><small>覆盖行情、财务、SEC、持仓与股票筛选</small></button>
+        <button type="button" role="radio" aria-checked={selectedEngine==='pi_agent'} className={selectedEngine==='pi_agent'?'active':''} disabled={saveEngine.isPending||Boolean(running)} onClick={()=>saveEngine.mutate('pi_agent')}><b>Pi Agent 智能研究</b><span>{settings.data?.pi_agent_model||'GPT-5.6-sol'} · 内部数据优先 + Exa 检索</span><small>自主研究漏斗：规划→筛选→外部研究→反证→组合适配</small></button>
       </div>
       <p className={`discovery-engine-save-state ${saveEngine.isError?'error':''}`}>{saveEngine.isPending?'正在保存选择…':saveEngine.isError?'引擎选择保存失败':`当前选择：${engineLabel[selectedEngine]}`}</p>
     </section>
@@ -225,12 +268,13 @@ export function DiscoverySettingsPanel() {
   const save=useMutation({mutationFn:()=>patch<DiscoverySettings>('/discovery/settings',form),onSuccess:data=>{client.setQueryData(['discovery-settings'],data);setForm(data)}})
   if(!form)return <section className="settings-card"><h2>机会发现</h2><p>正在读取设置…</p></section>
   const set=<K extends keyof DiscoverySettings>(key:K,value:DiscoverySettings[K])=>setForm({...form,[key]:value})
-  const keysReady=form.discovery_mode==='exa_finance'?form.exa_api_key_configured:form.api_key_configured&&(form.discovery_mode==='agent_finance'||form.analysis_api_key_configured)
-  return <section className="settings-card discovery-settings"><h2>机会发现</h2><p>仅在页面点击“发现机会”时运行，不会定时扫描。下面三项是完成同一个机会发现任务的独立引擎，只会运行你选中的一项。</p><div className={`settings-key-state ${keysReady?'ready':''}`}>{keysReady?'当前引擎所需端点已配置':'当前引擎所需 API Key 未完整配置'}</div>
+  const keysReady=form.discovery_mode==='exa_finance'?form.exa_api_key_configured:form.discovery_mode==='pi_agent'?(form.pi_agent_ready!==false):(form.api_key_configured&&(form.discovery_mode==='agent_finance'||form.analysis_api_key_configured))
+  return <section className="settings-card discovery-settings"><h2>机会发现</h2><p>仅在页面点击“发现机会”时运行，不会定时扫描。下面四项是完成同一个机会发现任务的独立引擎，只会运行你选中的一项。</p><div className={`settings-key-state ${keysReady?'ready':''}`}>{keysReady?'当前引擎所需端点已配置':'当前引擎所需 API Key 未完整配置'}</div>
   <div className="discovery-mode-picker" role="radiogroup" aria-label="机会发现引擎">
     <button type="button" role="radio" aria-checked={form.discovery_mode==='search_local'} className={form.discovery_mode==='search_local'?'active':''} onClick={()=>set('discovery_mode','search_local')}><b>低成本引擎</b><span>{form.analysis_model} + Perplexity Search</span><small>本机端点负责研究判断，Search 提供最新公开信息</small></button>
     <button type="button" role="radio" aria-checked={form.discovery_mode==='agent_finance'} className={form.discovery_mode==='agent_finance'?'active':''} onClick={()=>set('discovery_mode','agent_finance')}><b>深度研究引擎</b><span>Perplexity Finance Search + {form.agent_model.replace('openai/','')}</span><small>由 Perplexity Agent 在同一次任务中完成金融检索与判断</small></button>
     <button type="button" role="radio" aria-checked={form.discovery_mode==='exa_finance'} className={form.discovery_mode==='exa_finance'?'active':''} onClick={()=>set('discovery_mode','exa_finance')}><b>Exa 深度研究</b><span>{form.exa_agent_model} · {form.exa_agent_effort}</span><small>Exa Agent + {form.exa_finance_provider}，包含金融数据与 Web 深度研究</small></button>
+    <button type="button" role="radio" aria-checked={form.discovery_mode==='pi_agent'} className={form.discovery_mode==='pi_agent'?'active':''} onClick={()=>set('discovery_mode','pi_agent')}><b>Pi Agent 智能研究</b><span>{form.pi_agent_model||form.analysis_model} · {form.pi_agent_deep_effort||'medium'} 深度</span><small>研究代理优先使用站内数据，外部检索预算 {form.pi_agent_max_web_search_calls||15} 次 + 深度研究 1 次</small></button>
   </div><div className="settings-grid">
     <label>单次最大输出长度<input type="number" min="2048" max="32000" value={form.max_output_tokens} onChange={e=>set('max_output_tokens',Number(e.target.value))}/></label>
     <label>每月预算上限（美元）<input type="number" min="0" step="0.1" value={form.monthly_budget_usd} onChange={e=>set('monthly_budget_usd',Number(e.target.value))}/></label>

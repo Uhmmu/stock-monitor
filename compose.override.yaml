@@ -6,6 +6,10 @@ services:
     image: stock-monitor-finnhub-mcp:latest
     pull_policy: never
 
+  pi-agent:
+    image: stock-monitor-pi-agent:latest
+    pull_policy: never
+
   api:
     image: stock-monitor-api:latest
     pull_policy: never
