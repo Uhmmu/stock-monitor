@@ -218,6 +218,7 @@
 [data-theme="dark"] .ai-chat-settings-button{background:rgba(28,28,30,.6);border-color:var(--ai-line);color:var(--ai-text)}
 [data-theme="dark"] .ai-chat-settings-button:hover{background:rgba(44,44,46,.82)}
 [data-theme="dark"] .ai-chat-settings-button>span:first-child{background:rgba(10,132,255,.16);color:#6cb6ff}
+[data-theme="dark"] .ai-chat-workspace{background:var(--ai-surface)}
 [data-theme="dark"] .ai-message-scroll{background:linear-gradient(180deg,var(--ai-surface),color-mix(in srgb,var(--ai-surface) 94%,var(--ai-bg)))}
 [data-theme="dark"] .user-message p{background:var(--ai-surface-2);border-color:var(--ai-line);color:var(--ai-text)}
 [data-theme="dark"] .ai-message-content{color:var(--ai-text)}
