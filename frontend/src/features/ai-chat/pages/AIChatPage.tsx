@@ -29,6 +29,7 @@ import { DeepSearchConfirmDialog } from '../search/DeepSearchConfirmDialog'
 import { DeepSearchProgress } from '../search/DeepSearchProgress'
 import { effortForMode, isDeepMode } from '../search/searchModes'
 import { loadChatPreference, newestChatPreference, saveChatPreference, validateChatPreference } from '../preferences'
+import { appHref, appPath } from '../../../appRoute'
 import {
   AIMemorySettingsPage,
   ChatMemorySuggestions,
@@ -45,7 +46,7 @@ import {
 } from '../../ai-memory'
 
 function routeConversationId(): number | null {
-  const match = window.location.pathname.match(/^\/ai\/(\d+)\/?$/)
+  const match = appPath().match(/^\/ai\/(\d+)\/?$/)
   return match ? Number(match[1]) : null
 }
 
@@ -54,7 +55,7 @@ function navigate(id: number | null, context?: { symbol?: string | null; pageCon
   if (context?.symbol) params.set('symbol', context.symbol)
   if (context?.pageContext) params.set('context', context.pageContext)
   const path = id == null ? `/ai/new${params.size ? `?${params}` : ''}` : `/ai/${id}`
-  window.history.pushState({}, '', path)
+  window.history.pushState({}, '', appHref(path))
   window.dispatchEvent(new PopStateEvent('popstate'))
 }
 
@@ -82,10 +83,10 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
   const [toast, setToast] = useState<string | null>(null)
   const [usageMessageId,setUsageMessageId] = useState<number|null>(null)
   const [decisionPreview,setDecisionPreview] = useState<DecisionDraftPreview|null>(null)
-  const [memorySettingsOpen,setMemorySettingsOpen] = useState(() => window.location.pathname.startsWith('/ai-memory'))
+  const [memorySettingsOpen,setMemorySettingsOpen] = useState(() => appPath().startsWith('/ai-memory'))
 
   useEffect(() => {
-    if (window.location.pathname.startsWith('/ai-memory')) window.history.replaceState({}, '', '/ai/new')
+    if (appPath().startsWith('/ai-memory')) window.history.replaceState({}, '', appHref('/ai/new'))
     const onPop = () => {
       setConversationId(routeConversationId())
       const next = new URLSearchParams(window.location.search)

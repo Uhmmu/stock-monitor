@@ -1,6 +1,7 @@
 import type { PropsWithChildren } from 'react'
 import type { Citation } from '../../api'
 import type { RichBlock } from '../types'
+import { appHref } from '../../../../appRoute'
 
 const freshnessText = {
   fresh: '较新',
@@ -11,7 +12,7 @@ const freshnessText = {
 
 function navigate(target: string) {
   if (!target.startsWith('/') || target.startsWith('//')) return
-  window.history.pushState({}, '', target)
+  window.history.pushState({}, '', appHref(target))
   window.dispatchEvent(new PopStateEvent('popstate'))
 }
 

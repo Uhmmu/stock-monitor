@@ -26,6 +26,7 @@ import { OptionsPage } from './Options'
 import { AIMoodConsole, MoodReportSection } from './AIMoodConsole'
 import { MoodValidationLab } from './MoodValidationLab'
 import { ThemeToggle } from './ThemeToggle'
+import { appHref, appPath } from './appRoute'
 import { providerValuesDiffer } from './financialComparison'
 import { subscribeTheme, getResolvedTheme, type ThemeMode } from './theme'
 import './macro.css'
@@ -433,13 +434,13 @@ function TechnicalAnalysisCenter() {
   </div>
 }
 
-export default function App() {
+export default function App({ appleDesign = false }: { appleDesign?: boolean }) {
   const previewRequested = new URLSearchParams(window.location.search).get('preview')==='1'
   const [token,setToken] = useState(()=>localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')||'')
   const [demoMode,setDemoMode] = useState(previewRequested)
   const [authUser,setAuthUser] = useState<{username:string;role:string}|null>(()=>previewRequested?{username:'访客',role:'viewer'}:null)
   const [authLoading,setAuthLoading] = useState(()=>!!(localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')))
-  const [tab,setTab] = useState(()=>normalizeTab(window.location.pathname.startsWith('/admin/integrations/ibkr')?'ibkr-test':window.location.pathname==='/ibkr'?'ibkr':window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview'))
+  const [tab,setTab] = useState(()=>{const path=appPath();return normalizeTab(path.startsWith('/admin/integrations/ibkr')?'ibkr-test':path==='/ibkr'?'ibkr':path.startsWith('/ai')?'ai':path.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')})
   const [mobileNavOpen,setMobileNavOpen] = useState(false)
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
   const [selectedModel,setSelectedModel] = useState<CrossMetric|null>(null)
@@ -476,7 +477,7 @@ export default function App() {
   },[])
 
   useEffect(()=>{
-    const onPop=()=>setTab(normalizeTab(window.location.pathname.startsWith('/admin/integrations/ibkr')?'ibkr-test':window.location.pathname==='/ibkr'?'ibkr':window.location.pathname.startsWith('/ai')?'ai':window.location.pathname.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview'))
+    const onPop=()=>{const path=appPath();setTab(normalizeTab(path.startsWith('/admin/integrations/ibkr')?'ibkr-test':path==='/ibkr'?'ibkr':path.startsWith('/ai')?'ai':path.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview'))}
     window.addEventListener('popstate',onPop)
     return ()=>window.removeEventListener('popstate',onPop)
   },[])
@@ -494,9 +495,9 @@ export default function App() {
     {title:'IBKR',items:[['ibkr','IBKR'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]},
   ]
   const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['industry','行业板块检测'],['financials','财务报表'],['crossmodel','估值'],['compare','个股横向对比'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
-  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ibkr-test')window.history.pushState({},'','/admin/integrations/ibkr');else if(key==='ibkr')window.history.pushState({},'','/ibkr');else if(key==='ai'){if(!window.location.pathname.startsWith('/ai'))window.history.pushState({},'', '/ai/new')}else if(key==='decisions')window.history.pushState({},'','/investment-decisions');else window.history.pushState({},'',`/?tab=${key}`)}
-  const askAI=(symbol:string)=>{setSelectedProfileSymbol(null);setActiveTicker(symbol);setTab('ai');window.history.pushState({},'',`/ai/new?symbol=${encodeURIComponent(symbol)}&context=company`);window.dispatchEvent(new PopStateEvent('popstate'))}
-  const compareStock=(symbol:string)=>{const peer=watchlist.data?.find(item=>item.ticker!==symbol)?.ticker;setSelectedProfileSymbol(null);setTab('compare');window.history.pushState({},'',`/?tab=compare&symbols=${[symbol,peer].filter(Boolean).join(',')}`)}
+  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ibkr-test')window.history.pushState({},'',appHref('/admin/integrations/ibkr'));else if(key==='ibkr')window.history.pushState({},'',appHref('/ibkr'));else if(key==='ai'){if(!appPath().startsWith('/ai'))window.history.pushState({},'',appHref('/ai/new'))}else if(key==='decisions')window.history.pushState({},'',appHref('/investment-decisions'));else window.history.pushState({},'',appHref(`/?tab=${key}`))}
+  const askAI=(symbol:string)=>{setSelectedProfileSymbol(null);setActiveTicker(symbol);setTab('ai');window.history.pushState({},'',appHref(`/ai/new?symbol=${encodeURIComponent(symbol)}&context=company`));window.dispatchEvent(new PopStateEvent('popstate'))}
+  const compareStock=(symbol:string)=>{const peer=watchlist.data?.find(item=>item.ticker!==symbol)?.ticker;setSelectedProfileSymbol(null);setTab('compare');window.history.pushState({},'',appHref(`/?tab=compare&symbols=${[symbol,peer].filter(Boolean).join(',')}`))}
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
   const viewIndices = demoMode ? demoIndices : indices.data
   const viewAlerts = demoMode ? demoAlerts : alerts.data
@@ -505,7 +506,7 @@ export default function App() {
     const change = (stock:typeof a) => stock.price!=null&&stock.previous_close ? Math.abs((stock.price-stock.previous_close)/stock.previous_close*100) : -1
     return change(b)-change(a)
   })
-  return <div className="app">
+  return <div className={`app${appleDesign?' apple-design-app':''}`}>
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
     <aside className={mobileNavOpen?'mobile-open':''}>
       <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div><ThemeToggle className="brand-theme-toggle"/><div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{groupInvestigations(investigations.data).length}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
@@ -534,7 +535,7 @@ export default function App() {
       {tab==='calendar'&&<InvestmentCalendar/>}
       {tab==='discovery'&&<OpportunityDiscovery/>}
       {tab==='options'&&<OptionsPage enabled={!demoMode}/>}
-      {tab==='mood'&&<AIMoodConsole enabled={!demoMode} onAskAI={()=>{setTab('ai');window.history.pushState({},'','/ai/new?context=mood');window.dispatchEvent(new PopStateEvent('popstate'))}}/>}
+      {tab==='mood'&&<AIMoodConsole enabled={!demoMode} onAskAI={()=>{setTab('ai');window.history.pushState({},'',appHref('/ai/new?context=mood'));window.dispatchEvent(new PopStateEvent('popstate'))}}/>}
       {tab==='mood-lab'&&<MoodValidationLab enabled={!demoMode} isAdmin={authUser.role==='admin'}/>}
       {tab==='alerts'&&<div className="investigations">{groupInvestigations(investigations.data).map(group=><article key={group.key}><div><span className={`status ${group.status}`}>{group.status}</span><h2>{group.ticker} 异动调查{group.items.length>1&&<em className="group-count"> ×{group.items.length}</em>}</h2><p>{formatDate(group.started_at)} — {formatDate(group.ends_at)}</p></div><strong>{group.news_count}<small> 条新闻线索</small></strong>{group.last_error&&<p className="error">{group.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}
       {tab==='reports'&&<><MoodReportSection enabled={!demoMode}/><div className="report-grid">{reports.data?.map(r=><button className={`report-tile${selectedReport===r.id?' selected':''}`} key={r.id} onClick={()=>setSelectedReport(r.id)}><span className="report-tag">{typeNames[r.report_type]||r.report_type}{r.confidence&&<><span className="report-tag-sep">|</span><span className={`report-conf conf-${r.confidence==='高'?'high':r.confidence==='中'?'mid':'low'}`}>置信度{r.confidence}</span></>}</span><b>{r.title}</b><small>{formatDate(r.created_at)}</small></button>)}{!reports.data?.length&&<div className="empty">暂无报告。</div>}</div></>}

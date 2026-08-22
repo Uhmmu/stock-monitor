@@ -2,12 +2,13 @@ import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { confirmDecision, createDecision, deleteDecision, getDecision, listDecisions, memoryKeys, transitionDecision, updateDecision } from './api'
 import type { DecisionLiveCondition, InvestmentDecision } from './types'
+import { appHref, appPath } from '../../appRoute'
 
 const typeLabels:Record<string,string>={buy:'买入',add:'加仓',hold:'持有',reduce:'减仓',sell:'卖出',avoid:'回避',watch:'观察',rebalance:'再平衡',hedge:'对冲',research:'研究',thesis:'投资逻辑'}
 const statusLabels:Record<string,string>={draft:'待确认',active:'有效',executed:'已执行',partially_executed:'部分执行',cancelled:'已取消',invalidated:'已失效',closed:'已关闭',archived:'已归档'}
 const horizonLabels:Record<string,string>={days:'数日',weeks:'数周',months:'数月',years:'数年',long_term:'长期',unspecified:'未指定'}
 const split=(value:string)=>value.split('\n').map(row=>row.trim()).filter(Boolean)
-const routeDecisionId=()=>Number(window.location.pathname.match(/^\/investment-decisions\/(\d+)/)?.[1]||0)||null
+const routeDecisionId=()=>Number(appPath().match(/^\/investment-decisions\/(\d+)/)?.[1]||0)||null
 const emptyForm={symbol:'',decision_type:'hold',action:'',thesis:'',catalysts:'',risks:'',invalidation:'',assumptions:'',open_questions:'',time_horizon:'long_term',target_review_at:'',confidence:''}
 
 function formatDate(value:string|null|undefined){return value?new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'short',day:'numeric'}).format(new Date(value)):'未指定'}
@@ -36,8 +37,8 @@ export function InvestmentDecisionsPage(){
   const action=useMutation({mutationFn:async({name,item}:{name:string;item:InvestmentDecision})=>{if(name==='confirm')return confirmDecision(item.id);if(name==='delete'){await deleteDecision(item.id);return item}return transitionDecision(item.id,name as 'cancel'|'invalidate'|'close'|'archive')},onSuccess:()=>refresh()})
   const rows=list.data?.items||[]
   const finalDecisions=useMemo(()=>{const map=new Map<string,InvestmentDecision>();rows.filter(row=>!['archived','cancelled','invalidated','closed'].includes(row.status)).forEach(row=>map.set(row.primary_symbol||`decision-${row.id}`,row));return [...map.values()].sort((a,b)=>b.decision_number-a.decision_number)},[rows])
-  const open=(item:InvestmentDecision)=>{setSelected(item.id);window.history.pushState({},'',`/investment-decisions/${item.id}`)}
-  const close=()=>{setSelected(null);window.history.pushState({},'','/investment-decisions')}
+  const open=(item:InvestmentDecision)=>{setSelected(item.id);window.history.pushState({},'',appHref(`/investment-decisions/${item.id}`))}
+  const close=()=>{setSelected(null);window.history.pushState({},'',appHref('/investment-decisions'))}
   const edit=(item:InvestmentDecision)=>{setEditing(item.id);setAdding(true);setForm({symbol:item.primary_symbol||'',decision_type:item.decision_type,action:item.action,thesis:item.thesis.join('\n'),catalysts:item.catalysts.join('\n'),risks:item.risks.join('\n'),invalidation:item.invalidation_conditions.join('\n'),assumptions:item.assumptions.join('\n'),open_questions:item.open_questions.join('\n'),time_horizon:item.time_horizon,target_review_at:item.target_review_at?.slice(0,10)||'',confidence:item.confidence==null?'':String(item.confidence)});close()}
   const submit=(event:FormEvent)=>{event.preventDefault();if(form.action.trim())save.mutate()}
   return <main className="decision-workspace">

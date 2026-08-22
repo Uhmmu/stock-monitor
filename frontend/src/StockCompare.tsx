@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { post } from './api'
 import { SecuritySearchAutocomplete, type SecuritySearchResult } from './SecuritySearchAutocomplete'
 import { Sheet } from './Sheet'
+import { appHref } from './appRoute'
 import './stock-compare.css'
 
 export type CompareDirection='higher_better'|'lower_better'|'neutral'
@@ -154,7 +155,7 @@ export function StockCompare({watchlist=[]}:{watchlist:string[]}){
   useEffect(()=>{
     const params=new URLSearchParams(window.location.search);params.set('tab','compare')
     if(symbols.length)params.set('symbols',symbols.join(','));else params.delete('symbols')
-    window.history.replaceState({},'',`/?${params}`)
+    window.history.replaceState({},'',appHref(`/?${params}`))
   },[symbols.join('|')])
   const comparison=useQuery({
     queryKey:['stock-compare',symbols],queryFn:()=>post<CompareResponse>('/compare',{symbols}),enabled:symbols.length>=2,staleTime:60_000,
