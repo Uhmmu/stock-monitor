@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { appHref } from './appRoute'
 
 export function AboutPage() {
   useEffect(() => {
@@ -9,11 +10,11 @@ export function AboutPage() {
 
   return <div className="about-page">
     <header className="about-nav">
-      <a className="about-brand" href="/" aria-label="Stock Monitor dashboard">
+      <a className="about-brand" href={appHref('/')} aria-label="Stock Monitor dashboard">
         <span aria-hidden="true">SM</span>
         <strong>Stock Monitor</strong>
       </a>
-      <a className="about-dashboard-link" href="/">Dashboard <span aria-hidden="true">→</span></a>
+      <a className="about-dashboard-link" href={appHref('/')}>Dashboard <span aria-hidden="true">→</span></a>
     </header>
 
     <main className="about-main">

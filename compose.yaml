@@ -106,6 +106,16 @@ services:
       api:
         condition: service_healthy
 
+  frontend-beta:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_BASE_PATH: /beta/
+    depends_on:
+      api:
+        condition: service_healthy
+
   frontend-ios:
     build:
       context: .
@@ -118,6 +128,7 @@ services:
     image: caddy:2-alpine
     depends_on:
       - frontend
+      - frontend-beta
       - frontend-ios
     environment:
       SITE_DOMAINS: ${SITE_DOMAINS:-${SITE_DOMAIN:-localhost}}

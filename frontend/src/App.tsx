@@ -232,6 +232,36 @@ function NavIcon({name}:{name:string}) {
   return <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
 }
 
+type NavigationGroup = {title:string;items:[string,string][]}
+
+function BetaCommandBar({groups,tab,title,market,username,demoMode,mobileOpen,onSelect,onToggleMenu,onLogout}:{
+  groups:NavigationGroup[]
+  tab:string
+  title:string|undefined
+  market:Dashboard['market']|undefined
+  username:string
+  demoMode:boolean
+  mobileOpen:boolean
+  onSelect:(key:string)=>void
+  onToggleMenu:()=>void
+  onLogout:()=>void
+}) {
+  const activeGroup=groups.find(group=>group.items.some(([key])=>key===tab))||groups[0]
+  return <header className="beta-commandbar">
+    <div className="beta-commandbar-main">
+      <button className="beta-wordmark" onClick={()=>onSelect('overview')} aria-label="返回总览"><img src="/logo.png" alt=""/><span><b>MIKA</b><small>MARKET SYSTEM</small></span></button>
+      <nav className="beta-group-nav" aria-label="工作区导航">{groups.map(group=><button className={group===activeGroup?'active':''} onClick={()=>onSelect(group.items[0][0])} key={group.title}>{group.title}</button>)}</nav>
+      <div className="beta-command-tools"><span className="beta-market-state"><i className={market?.is_open?'online':''}/>{market?.is_open?'市场开放':'市场休市'}</span><span className="beta-user">{demoMode?'预览':username.slice(0,2).toUpperCase()}</span><button className="beta-menu-button" onClick={onToggleMenu} aria-expanded={mobileOpen}>{mobileOpen?'关闭':'菜单'}</button><button className="beta-exit" onClick={onLogout}>{demoMode?'退出预览':'退出'}</button></div>
+    </div>
+    <div className="beta-commandbar-context">
+      <div><p>{activeGroup.title}</p><h1>{title}</h1></div>
+      <nav aria-label={`${activeGroup.title}功能`}>{activeGroup.items.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>onSelect(key)} key={key}><NavIcon name={key}/><span>{label}</span></button>)}</nav>
+      <time>{market?formatDate(market.checked_at):'等待同步'}</time>
+    </div>
+    {mobileOpen&&<nav className="beta-mobile-map" aria-label="全部功能">{groups.map(group=><section key={group.title}><p>{group.title}</p>{group.items.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>onSelect(key)} key={key}><NavIcon name={key}/><span>{label}</span></button>)}</section>)}</nav>}
+  </header>
+}
+
 function ProfileLogo({symbol,url,className='' }:{symbol:string;url?:string|null;className?:string}) {
   const [failed,setFailed] = useState(false)
   useEffect(()=>setFailed(false),[url])
@@ -434,7 +464,7 @@ function TechnicalAnalysisCenter() {
   </div>
 }
 
-export default function App({ appleDesign = false }: { appleDesign?: boolean }) {
+export default function App({ appleDesign = false, betaDesign = false }: { appleDesign?: boolean; betaDesign?: boolean }) {
   const previewRequested = new URLSearchParams(window.location.search).get('preview')==='1'
   const [token,setToken] = useState(()=>localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')||'')
   const [demoMode,setDemoMode] = useState(previewRequested)
@@ -442,7 +472,8 @@ export default function App({ appleDesign = false }: { appleDesign?: boolean }) 
   const [authLoading,setAuthLoading] = useState(()=>!!(localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')))
   const [tab,setTab] = useState(()=>{const path=appPath();return normalizeTab(path.startsWith('/admin/integrations/ibkr')?'ibkr-test':path==='/ibkr'?'ibkr':path.startsWith('/ai')?'ai':path.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')})
   const [mobileNavOpen,setMobileNavOpen] = useState(false)
-  const [navCollapsed,setNavCollapsed] = useState(()=>appleDesign&&localStorage.getItem('apple_nav_collapsed')==='1')
+  const navStorageKey = 'apple_nav_collapsed'
+  const [navCollapsed,setNavCollapsed] = useState(()=>appleDesign&&!betaDesign&&localStorage.getItem(navStorageKey)==='1')
   const [navFlyout,setNavFlyout] = useState<{key:string;label:string;left:number;top:number;closing:boolean}|null>(null)
   const [navFlyoutExit,setNavFlyoutExit] = useState<typeof navFlyout>(null)
   const navFlyoutTimer = useRef<ReturnType<typeof setTimeout>|null>(null)
@@ -491,7 +522,7 @@ export default function App({ appleDesign = false }: { appleDesign?: boolean }) 
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
   const mobileTabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['mood','AI 情绪台'],['mood-lab','Mood Lab'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析'],['reports','报告中心'],['journal','交易日志'],['settings','管理设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
-  const desktopNavGroups:{title:string;items:[string,string][]}[] = [
+  const desktopNavGroups:NavigationGroup[] = [
     {title:'概览与资产',items:[['overview','总览'],['watchlist','自选股'],['holdings','持仓']]},
     {title:'研究与决策',items:[['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究']]},
     {title:'市场情报',items:[['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['news','新闻中心'],['macro','美国宏观'],['industry','行业板块']]},
@@ -499,6 +530,7 @@ export default function App({ appleDesign = false }: { appleDesign?: boolean }) 
     {title:'记录与系统',items:[['reports','报告中心'],['journal','交易日志'],['settings','管理设置']]},
     {title:'IBKR',items:[['ibkr','IBKR'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试'] as [string,string]]:[])]},
   ]
+  const betaNavGroups=desktopNavGroups.map(group=>group.title==='市场情报'?{...group,items:[['alerts','异动中心'] as [string,string],...group.items]}:group.title==='公司分析'?{...group,items:[...group.items,['sec','SEC 公告'] as [string,string]]}:group)
   const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['industry','行业板块检测'],['financials','财务报表'],['crossmodel','估值'],['compare','个股横向对比'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
   const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);setNavFlyout(null);setNavFlyoutExit(null);if(key==='ibkr-test')window.history.pushState({},'',appHref('/admin/integrations/ibkr'));else if(key==='ibkr')window.history.pushState({},'',appHref('/ibkr'));else if(key==='ai'){if(!appPath().startsWith('/ai'))window.history.pushState({},'',appHref('/ai/new'))}else if(key==='decisions')window.history.pushState({},'',appHref('/investment-decisions'));else window.history.pushState({},'',appHref(`/?tab=${key}`))}
   const keepNavFlyout=()=>{if(navFlyoutTimer.current)clearTimeout(navFlyoutTimer.current);setNavFlyout(value=>value?.closing?{...value,closing:false}:value)}
@@ -515,18 +547,19 @@ export default function App({ appleDesign = false }: { appleDesign?: boolean }) 
     const change = (stock:typeof a) => stock.price!=null&&stock.previous_close ? Math.abs((stock.price-stock.previous_close)/stock.previous_close*100) : -1
     return change(b)-change(a)
   })
-  return <div className={`app${appleDesign?' apple-design-app':''}${navCollapsed?' apple-nav-collapsed':''}`}>
+  const logout=()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setDemoMode(false);setToken('');setAuthUser(null)}
+  return <div className={`app${appleDesign?' apple-design-app':''}${betaDesign?' beta-design-app':''}${navCollapsed?' apple-nav-collapsed':''}`}>
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
-    <aside className={mobileNavOpen?'mobile-open':''}>
-      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div>{appleDesign&&<button className="nav-collapse-btn" onClick={()=>setNavCollapsed(value=>{localStorage.setItem('apple_nav_collapsed',value?'0':'1');setNavFlyout(null);setNavFlyoutExit(null);return !value})} aria-label={navCollapsed?'展开侧栏':'收起侧栏'} aria-pressed={navCollapsed}><span aria-hidden="true">‹</span></button>}<div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{groupInvestigations(investigations.data).length}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
+    {betaDesign?<BetaCommandBar groups={betaNavGroups} tab={tab} title={tabTitle} market={viewDashboard?.market} username={authUser.username} demoMode={demoMode} mobileOpen={mobileNavOpen} onSelect={selectTab} onToggleMenu={()=>setMobileNavOpen(value=>!value)} onLogout={logout}/>:<aside className={mobileNavOpen?'mobile-open':''}>
+      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>{betaDesign?'BETA CONTROL ROOM':'Powered by 和泉妃爱'}</small></div>{appleDesign&&<button className="nav-collapse-btn" onClick={()=>setNavCollapsed(value=>{localStorage.setItem(navStorageKey,value?'0':'1');setNavFlyout(null);setNavFlyoutExit(null);return !value})} aria-label={navCollapsed?'展开侧栏':'收起侧栏'} aria-pressed={navCollapsed}><span aria-hidden="true">‹</span></button>}<div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{groupInvestigations(investigations.data).length}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
       <nav className="desktop-nav" aria-label="主导航">{desktopNavGroups.map(group=><div className="desktop-nav-group" key={group.title}><p>{group.title}</p>{group.items.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>selectTab(key)} onPointerEnter={event=>showNavFlyout(event.currentTarget,key,label)} onPointerLeave={closeNavFlyout} onFocus={event=>showNavFlyout(event.currentTarget,key,label)} onBlur={closeNavFlyout} key={key}><NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</div>)}</nav>
       <nav className="mobile-nav" aria-label="主导航">{mobileTabs.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>selectTab(key)} key={key}>{key==='journal'&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
       <div className="account-card"><span className="account-avatar">{authUser.username.slice(0,1)}</span><span><b>{demoMode?'演示空间':authUser.username}</b><small>{demoMode?'本地预览模式':'已安全连接'}</small></span><i className={viewDashboard?.market.is_open?'online':''}/></div>
-      <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setDemoMode(false);setToken('');setAuthUser(null)}}>{demoMode?'退出预览':'退出登录'}</button></aside>
-    {navFlyouts.map(flyout=>{const exiting=flyout===navFlyoutExit;return <button key={flyout.key} className={`nav-item-flyout${tab===flyout.key?' active':''}${flyout.closing?' closing':''}${exiting?' switching':''}`} style={{left:flyout.left,top:flyout.top}} onClick={exiting?undefined:()=>selectTab(flyout.key)} onPointerEnter={exiting?undefined:keepNavFlyout} onPointerLeave={exiting?undefined:closeNavFlyout} aria-hidden={exiting||undefined} tabIndex={exiting?-1:undefined}><NavIcon name={flyout.key}/><span>{flyout.label}</span>{tab===flyout.key&&<i className="nav-active-dot"/>}</button>})}
+      <button className="logout-btn" onClick={logout}>{demoMode?'退出预览':'退出登录'}</button></aside>}
+    {!betaDesign&&navFlyouts.map(flyout=>{const exiting=flyout===navFlyoutExit;return <button key={flyout.key} className={`nav-item-flyout${tab===flyout.key?' active':''}${flyout.closing?' closing':''}${exiting?' switching':''}`} style={{left:flyout.left,top:flyout.top}} onClick={exiting?undefined:()=>selectTab(flyout.key)} onPointerEnter={exiting?undefined:keepNavFlyout} onPointerLeave={exiting?undefined:closeNavFlyout} aria-hidden={exiting||undefined} tabIndex={exiting?-1:undefined}><NavIcon name={flyout.key}/><span>{flyout.label}</span>{tab===flyout.key&&<i className="nav-active-dot"/>}</button>})}
     {mobileNavOpen&&<button className="mobile-nav-scrim" onClick={()=>setMobileNavOpen(false)} aria-label="关闭菜单"/>}
     <main className={tab==='ai'?'ai-main':''}>
-      {tab!=='ai'&&tab!=='decisions'&&<header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tabTitle}</h1></div><div className="header-tools"><span className="market-pill"><i className={viewDashboard?.market.is_open?'online':''}/>{viewDashboard?.market.is_open?'市场开放':'市场休市'}</span><div className="clock">{viewDashboard ? formatDate(viewDashboard.market.checked_at) : '等待同步'}</div></div></header>}
+      {!betaDesign&&tab!=='ai'&&tab!=='decisions'&&<header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tabTitle}</h1></div><div className="header-tools"><span className="market-pill"><i className={viewDashboard?.market.is_open?'online':''}/>{viewDashboard?.market.is_open?'市场开放':'市场休市'}</span><div className="clock">{viewDashboard ? formatDate(viewDashboard.market.checked_at) : '等待同步'}</div></div></header>}
       {tab!=='ai'&&demoMode&&<div className="preview-banner"><span><b>演示预览</b> 当前展示本地示例行情，所有真实数据仍以服务端为准。</span><button onClick={()=>{setDemoMode(false);setAuthUser(null)}}>连接账户</button></div>}
       {tab!=='ai'&&!demoMode&&(dashboard.error||watchlist.error)&&<div className="error">后端暂不可用，请确认服务已启动。</div>}
       <div className="view-stage" key={tab}>

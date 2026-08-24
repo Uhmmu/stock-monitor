@@ -1,6 +1,10 @@
 {$SITE_DOMAINS} {
   encode zstd gzip
+  redir /beta /beta/ 308
   redir /mobile /mobile/ 308
+  handle_path /beta/* {
+    reverse_proxy frontend-beta:80
+  }
   handle_path /mobile/* {
     reverse_proxy frontend-ios:80
   }
