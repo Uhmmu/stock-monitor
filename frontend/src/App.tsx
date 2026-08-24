@@ -28,6 +28,7 @@ import { MoodValidationLab } from './MoodValidationLab'
 import { ThemeToggle } from './ThemeToggle'
 import { appHref, appPath } from './appRoute'
 import { providerValuesDiffer } from './financialComparison'
+import { syncQueryCacheUser } from './queryPersistence'
 import { subscribeTheme, getResolvedTheme, type ThemeMode } from './theme'
 import './macro.css'
 import {
@@ -499,12 +500,12 @@ export default function App({ appleDesign = false, betaDesign = false }: { apple
 
   useEffect(()=>{
     if(demoMode){setAuthLoading(false);return}
-    if(!token){setAuthUser(null);setAuthLoading(false);return}
+    if(!token){syncQueryCacheUser(client,null);setAuthUser(null);setAuthLoading(false);return}
     setAuthLoading(true)
     api<{username:string;role:string}>('/auth/me')
-      .then(u=>{setAuthUser(u);setAuthLoading(false)})
+      .then(u=>{syncQueryCacheUser(client,u.username);setAuthUser(u);setAuthLoading(false)})
       .catch(()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setToken('');setAuthUser(null);setAuthLoading(false)})
-  },[token,demoMode])
+  },[token,demoMode,client])
 
   useEffect(()=>{
     const onLogout=()=>{setToken('');setAuthUser(null)}
@@ -1065,6 +1066,7 @@ function AppearanceSettings() {
 
 // ── 登录 / 注册 ──────────────────────────────────────────────────
 function AuthGate({setToken,setAuthUser,onPreview}:{setToken:(t:string)=>void;setAuthUser:(u:{username:string;role:string}|null)=>void;onPreview:()=>void}) {
+  const client = useQueryClient()
   const [mode,setMode] = useState<'login'|'register'>('login')
   const [username,setUsername] = useState('')
   const [password,setPassword] = useState('')
@@ -1080,6 +1082,8 @@ function AuthGate({setToken,setAuthUser,onPreview}:{setToken:(t:string)=>void;se
       if(!res.ok){setMsg(data.detail||'登录失败');return}
       if(remember) localStorage.setItem('auth_token',data.token)
       else sessionStorage.setItem('auth_token',data.token)
+      // 登录瞬间先绑定客户端缓存的用户归属，避免沿用上一位账号的缓存数据
+      syncQueryCacheUser(client,data.username)
       setToken(data.token)
       setAuthUser({username:data.username,role:data.role})
     } catch{setMsg('网络错误')}
