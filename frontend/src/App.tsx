@@ -443,7 +443,8 @@ export default function App({ appleDesign = false }: { appleDesign?: boolean }) 
   const [tab,setTab] = useState(()=>{const path=appPath();return normalizeTab(path.startsWith('/admin/integrations/ibkr')?'ibkr-test':path==='/ibkr'?'ibkr':path.startsWith('/ai')?'ai':path.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')})
   const [mobileNavOpen,setMobileNavOpen] = useState(false)
   const [navCollapsed,setNavCollapsed] = useState(()=>appleDesign&&localStorage.getItem('apple_nav_collapsed')==='1')
-  const [navHint,setNavHint] = useState<{label:string;left:number;top:number}|null>(null)
+  const [navFlyout,setNavFlyout] = useState<{key:string;label:string;left:number;top:number}|null>(null)
+  const navFlyoutTimer = useRef<ReturnType<typeof setTimeout>|null>(null)
   const [selectedReport,setSelectedReport] = useState<number|null>(null)
   const [selectedModel,setSelectedModel] = useState<CrossMetric|null>(null)
   const [selectedWeight,setSelectedWeight] = useState<WeightDetail|null>(null)
@@ -488,17 +489,19 @@ export default function App({ appleDesign = false }: { appleDesign?: boolean }) 
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
   const mobileTabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['mood','AI 情绪台'],['mood-lab','Mood Lab'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析'],['reports','报告中心'],['journal','交易日志'],['settings','管理设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
-  const desktopNavGroups = [
+  const desktopNavGroups:{title:string;items:[string,string][]}[] = [
     {title:'概览与资产',items:[['overview','总览'],['watchlist','自选股'],['holdings','持仓']]},
     {title:'研究与决策',items:[['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究']]},
     {title:'市场情报',items:[['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['news','新闻中心'],['macro','美国宏观'],['industry','行业板块']]},
     {title:'公司分析',items:[['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析']]},
     {title:'记录与系统',items:[['reports','报告中心'],['journal','交易日志'],['settings','管理设置']]},
-    {title:'IBKR',items:[['ibkr','IBKR'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]},
+    {title:'IBKR',items:[['ibkr','IBKR'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试'] as [string,string]]:[])]},
   ]
   const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['industry','行业板块检测'],['financials','财务报表'],['crossmodel','估值'],['compare','个股横向对比'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
-  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);if(key==='ibkr-test')window.history.pushState({},'',appHref('/admin/integrations/ibkr'));else if(key==='ibkr')window.history.pushState({},'',appHref('/ibkr'));else if(key==='ai'){if(!appPath().startsWith('/ai'))window.history.pushState({},'',appHref('/ai/new'))}else if(key==='decisions')window.history.pushState({},'',appHref('/investment-decisions'));else window.history.pushState({},'',appHref(`/?tab=${key}`))}
-  const showNavHint=(element:HTMLElement,label:string)=>{if(!navCollapsed)return;const rect=element.getBoundingClientRect();setNavHint({label,left:rect.right+12,top:rect.top+rect.height/2})}
+  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);setNavFlyout(null);if(key==='ibkr-test')window.history.pushState({},'',appHref('/admin/integrations/ibkr'));else if(key==='ibkr')window.history.pushState({},'',appHref('/ibkr'));else if(key==='ai'){if(!appPath().startsWith('/ai'))window.history.pushState({},'',appHref('/ai/new'))}else if(key==='decisions')window.history.pushState({},'',appHref('/investment-decisions'));else window.history.pushState({},'',appHref(`/?tab=${key}`))}
+  const keepNavFlyout=()=>{if(navFlyoutTimer.current)clearTimeout(navFlyoutTimer.current)}
+  const closeNavFlyout=()=>{keepNavFlyout();navFlyoutTimer.current=setTimeout(()=>setNavFlyout(null),120)}
+  const showNavFlyout=(element:HTMLElement,key:string,label:string)=>{if(!navCollapsed)return;keepNavFlyout();const rect=element.getBoundingClientRect();setNavFlyout({key,label,left:rect.left,top:rect.top})}
   const askAI=(symbol:string)=>{setSelectedProfileSymbol(null);setActiveTicker(symbol);setTab('ai');window.history.pushState({},'',appHref(`/ai/new?symbol=${encodeURIComponent(symbol)}&context=company`));window.dispatchEvent(new PopStateEvent('popstate'))}
   const compareStock=(symbol:string)=>{const peer=watchlist.data?.find(item=>item.ticker!==symbol)?.ticker;setSelectedProfileSymbol(null);setTab('compare');window.history.pushState({},'',appHref(`/?tab=compare&symbols=${[symbol,peer].filter(Boolean).join(',')}`))}
   const viewDashboard = demoMode ? demoDashboard : dashboard.data
@@ -512,12 +515,12 @@ export default function App({ appleDesign = false }: { appleDesign?: boolean }) 
   return <div className={`app${appleDesign?' apple-design-app':''}${navCollapsed?' apple-nav-collapsed':''}`}>
     <div className="ambient ambient-one"/><div className="ambient ambient-two"/>
     <aside className={mobileNavOpen?'mobile-open':''}>
-      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div><ThemeToggle className="brand-theme-toggle"/>{appleDesign&&<button className="nav-collapse-btn" onClick={()=>setNavCollapsed(value=>{localStorage.setItem('apple_nav_collapsed',value?'0':'1');setNavHint(null);return !value})} aria-label={navCollapsed?'展开侧栏':'收起侧栏'} aria-pressed={navCollapsed}><span aria-hidden="true">‹</span></button>}<div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{groupInvestigations(investigations.data).length}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
-      <nav className="desktop-nav" aria-label="主导航">{desktopNavGroups.map(group=><div className="desktop-nav-group" key={group.title}><p>{group.title}</p>{group.items.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>selectTab(key)} onPointerEnter={event=>showNavHint(event.currentTarget,label)} onPointerLeave={()=>setNavHint(null)} onFocus={event=>showNavHint(event.currentTarget,label)} onBlur={()=>setNavHint(null)} key={key}><NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</div>)}</nav>
+      <div className="brand"><div className="brand-orb"><img src="/logo.png" className="brand-logo" alt="logo"/></div><div className="brand-copy"><strong>小日向美香</strong><small>Powered by 和泉妃爱</small></div>{appleDesign&&<button className="nav-collapse-btn" onClick={()=>setNavCollapsed(value=>{localStorage.setItem('apple_nav_collapsed',value?'0':'1');setNavFlyout(null);return !value})} aria-label={navCollapsed?'展开侧栏':'收起侧栏'} aria-pressed={navCollapsed}><span aria-hidden="true">‹</span></button>}<div className="mobile-quick-stats"><span><b>{viewDashboard?.stocks.length||0}</b><small>监控</small></span><span><b>{viewAlerts?.length||0}</b><small>异动</small></span><span><b>{groupInvestigations(investigations.data).length}</b><small>调查</small></span></div><button className="mobile-menu-btn" onClick={()=>setMobileNavOpen(v=>!v)} aria-expanded={mobileNavOpen}>{mobileNavOpen?'关闭':'菜单'}</button></div>
+      <nav className="desktop-nav" aria-label="主导航">{desktopNavGroups.map(group=><div className="desktop-nav-group" key={group.title}><p>{group.title}</p>{group.items.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>selectTab(key)} onPointerEnter={event=>showNavFlyout(event.currentTarget,key,label)} onPointerLeave={closeNavFlyout} onFocus={event=>showNavFlyout(event.currentTarget,key,label)} onBlur={closeNavFlyout} key={key}><NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</div>)}</nav>
       <nav className="mobile-nav" aria-label="主导航">{mobileTabs.map(([key,label])=><button className={tab===key?'active':''} onClick={()=>selectTab(key)} key={key}>{key==='journal'&&<span className="nav-separator"/>}<NavIcon name={key}/><span>{label}</span>{tab===key&&<i className="nav-active-dot"/>}</button>)}</nav>
       <div className="account-card"><span className="account-avatar">{authUser.username.slice(0,1)}</span><span><b>{demoMode?'演示空间':authUser.username}</b><small>{demoMode?'本地预览模式':'已安全连接'}</small></span><i className={viewDashboard?.market.is_open?'online':''}/></div>
       <button className="logout-btn" onClick={()=>{localStorage.removeItem('auth_token');sessionStorage.removeItem('auth_token');setDemoMode(false);setToken('');setAuthUser(null)}}>{demoMode?'退出预览':'退出登录'}</button></aside>
-    {navHint&&<div className="nav-bubble-hint" style={{left:navHint.left,top:navHint.top}} role="tooltip">{navHint.label}</div>}
+    {navFlyout&&<button className={`nav-item-flyout${tab===navFlyout.key?' active':''}`} style={{left:navFlyout.left,top:navFlyout.top}} onClick={()=>selectTab(navFlyout.key)} onPointerEnter={keepNavFlyout} onPointerLeave={closeNavFlyout}><NavIcon name={navFlyout.key}/><span>{navFlyout.label}</span>{tab===navFlyout.key&&<i className="nav-active-dot"/>}</button>}
     {mobileNavOpen&&<button className="mobile-nav-scrim" onClick={()=>setMobileNavOpen(false)} aria-label="关闭菜单"/>}
     <main className={tab==='ai'?'ai-main':''}>
       {tab!=='ai'&&tab!=='decisions'&&<header><div><p className="eyebrow">MARKET INTELLIGENCE</p><h1>{tabTitle}</h1></div><div className="header-tools"><span className="market-pill"><i className={viewDashboard?.market.is_open?'online':''}/>{viewDashboard?.market.is_open?'市场开放':'市场休市'}</span><div className="clock">{viewDashboard ? formatDate(viewDashboard.market.checked_at) : '等待同步'}</div></div></header>}
@@ -553,7 +556,7 @@ export default function App({ appleDesign = false }: { appleDesign?: boolean }) 
       {tab==='technical'&&<TechnicalAnalysisCenter/>}
       {tab==='sec'&&<SecCenter tickers={watchlist.data?.map(w=>w.ticker)||[]} active={activeTicker} setActive={setActiveTicker}/>}
       {tab==='journal'&&authUser&&<JournalSection username={authUser.username}/>}
-      {tab==='settings'&&<>{settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}<AdanosQuotaPanel/><CongressSettings/><RealtimeProviderHealthPanel/><MacroDataSourcePanel isAdmin={authUser.role==='admin'}/><DiscoverySettingsPanel/>{authUser.role==='admin'&&<AdminOperationsPanel/>}</> }
+      {tab==='settings'&&<><AppearanceSettings/>{settings.data&&<SettingsForm initial={settings.data} onSaved={()=>client.invalidateQueries({queryKey:['settings']})}/>}<AdanosQuotaPanel/><CongressSettings/><RealtimeProviderHealthPanel/><MacroDataSourcePanel isAdmin={authUser.role==='admin'}/><DiscoverySettingsPanel/>{authUser.role==='admin'&&<AdminOperationsPanel/>}</> }
       {tab==='ibkr-test'&&authUser.role==='admin'&&<IbkrIntegrationTest/>}
       </div>
     </main>
@@ -1017,6 +1020,10 @@ function SettingsForm({initial,onSaved}:{initial:Settings;onSaved:()=>void}) {
   const save=useMutation({mutationFn:()=>patch<Settings>('/settings',form),onSuccess:onSaved})
   const fields:[keyof Settings,string][]=[['threshold_20m','20 分钟涨跌阈值 (%)'],['threshold_1h','1 小时涨跌阈值 (%)'],['threshold_day','当日涨跌阈值 (%)'],['alert_cooldown_minutes','同类警报冷却时间 (分钟)'],['investigation_interval_minutes','异动新闻搜索间隔 (分钟)'],['investigation_duration_minutes','异动调查持续时间 (分钟)']]
   return <section className="settings-card"><h2>监控规则</h2><p>修改后将影响新触发的监控任务。API 密钥只在服务器环境变量中配置。</p><div className="settings-grid">{fields.map(([key,label])=><label key={key}>{label}<input type="number" inputMode="decimal" value={form[key]} onChange={e=>setForm({...form,[key]:Number(e.target.value)})}/></label>)}</div><div className="readonly">行情轮询间隔：{form.price_poll_minutes} 分钟（通过环境变量配置）</div><button onClick={()=>save.mutate()} disabled={save.isPending}>{save.isPending?'保存中…':'保存设置'}</button>{save.isSuccess&&<span className="saved">已保存</span>}</section>
+}
+
+function AppearanceSettings() {
+  return <section className="settings-card appearance-settings"><div><h2>外观</h2><p>切换浅色或深色界面。</p></div><ThemeToggle className="settings-theme-toggle"/></section>
 }
 
 

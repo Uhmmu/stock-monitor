@@ -37,8 +37,8 @@
 [data-interface="apple"] .apple-design-app .brand-logo{width:36px;height:36px;border-radius:9px}
 [data-interface="apple"] .apple-design-app .brand strong{font-size:16px;font-weight:700;letter-spacing:-.025em}
 [data-interface="apple"] .apple-design-app .brand small{margin-top:1px;color:var(--ink-4);font-size:9px;letter-spacing:.02em;text-transform:none}
-[data-interface="apple"] .apple-design-app .brand-theme-toggle{margin-right:0;transform:scale(.82);transform-origin:right center}
-[data-interface="apple"] .apple-design-app .nav-collapse-btn{display:grid;flex:none;width:28px;height:28px;place-items:center;padding:0;border:0;border-radius:50%;background:rgba(128,128,128,.11);color:var(--ink-4);cursor:pointer}
+[data-interface="apple"] .apple-design-app .brand-copy{min-width:0;flex:1}
+[data-interface="apple"] .apple-design-app .nav-collapse-btn{display:grid;flex:none;width:28px;height:28px;place-items:center;margin-left:auto;padding:0;border:0;border-radius:50%;background:rgba(128,128,128,.11);color:var(--ink-4);cursor:pointer}
 [data-interface="apple"] .apple-design-app .nav-collapse-btn:hover{background:rgba(128,128,128,.18);color:var(--text)}
 [data-interface="apple"] .apple-design-app .nav-collapse-btn span{font-size:24px;line-height:1;transform:translate(-1px,-1px);transition:transform .38s cubic-bezier(.32,.72,0,1)}
 [data-interface="apple"] .apple-design-app .desktop-nav{gap:1px;padding-right:2px}
@@ -59,7 +59,7 @@
 [data-interface="apple"] .apple-design-app.apple-nav-collapsed{grid-template-columns:80px minmax(0,1fr)}
 [data-interface="apple"] .apple-design-app.apple-nav-collapsed>aside{width:64px}
 [data-interface="apple"] .apple-design-app.apple-nav-collapsed .brand{min-height:92px;flex-direction:column;padding:2px 2px 14px;gap:9px}
-[data-interface="apple"] .apple-design-app.apple-nav-collapsed :is(.brand-copy,.brand-theme-toggle,.desktop-nav-group>p,.account-card,.logout-btn){display:none}
+[data-interface="apple"] .apple-design-app.apple-nav-collapsed :is(.brand-copy,.desktop-nav-group>p,.account-card,.logout-btn){display:none}
 [data-interface="apple"] .apple-design-app.apple-nav-collapsed .nav-collapse-btn span{transform:rotate(180deg) translate(1px,1px)}
 [data-interface="apple"] .apple-design-app.apple-nav-collapsed .desktop-nav{padding:0;overflow-y:auto}
 [data-interface="apple"] .apple-design-app.apple-nav-collapsed .desktop-nav-group{align-items:center}
@@ -68,9 +68,17 @@
 [data-interface="apple"] .apple-design-app.apple-nav-collapsed nav button>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 [data-interface="apple"] .apple-design-app.apple-nav-collapsed .nav-icon{width:17px;height:17px}
 [data-interface="apple"] .apple-design-app.apple-nav-collapsed .nav-active-dot{right:3px;bottom:3px;width:4px;height:4px}
-[data-interface="apple"] .nav-bubble-hint{position:fixed;z-index:210;pointer-events:none;padding:8px 13px;border:1px solid var(--apple-edge);border-radius:999px;background:color-mix(in srgb,var(--apple-card) 88%,transparent);box-shadow:0 12px 30px rgba(0,0,0,.16),inset 0 1px 0 rgba(255,255,255,.35);backdrop-filter:blur(22px) saturate(180%);color:var(--text);font-size:12px;font-weight:650;transform-origin:left center;animation:apple-nav-bubble .36s cubic-bezier(.16,1.35,.3,1) both}
-[data-interface="apple"] .nav-bubble-hint:before{content:'';position:absolute;left:-5px;top:50%;width:10px;height:10px;border-left:1px solid var(--apple-edge);border-bottom:1px solid var(--apple-edge);background:inherit;transform:translateY(-50%) rotate(45deg)}
-@keyframes apple-nav-bubble{0%{opacity:0;transform:translateY(-50%) scale(.68)}62%{opacity:1;transform:translateY(-50%) scale(1.06)}100%{opacity:1;transform:translateY(-50%) scale(1)}}
+[data-interface="apple"] .nav-item-flyout{position:fixed;z-index:210;display:flex;width:218px;min-height:36px;align-items:center;gap:11px;padding:0 10px;border:1px solid var(--apple-edge);border-radius:9px;background:color-mix(in srgb,var(--apple-card) 92%,transparent);box-shadow:0 12px 32px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.28);backdrop-filter:blur(24px) saturate(180%);color:var(--ink-3);font-size:12px;font-weight:500;text-align:left;cursor:pointer;transform-origin:left center;animation:apple-nav-item-in .28s cubic-bezier(.22,.78,.24,1) both}
+[data-interface="apple"] .nav-item-flyout:hover{background:color-mix(in srgb,var(--apple-card) 84%,var(--text) 16%);color:var(--text)}
+[data-interface="apple"] .nav-item-flyout:active{transform:scale(.98)}
+[data-interface="apple"] .nav-item-flyout.active{background:color-mix(in srgb,var(--apple-card) 82%,var(--text) 18%);color:var(--accent-ink)}
+[data-interface="apple"] .apple-design-app.apple-nav-collapsed .nav-item-flyout .nav-icon{width:16px;height:16px;flex:none}
+[data-interface="apple"] .apple-design-app.apple-nav-collapsed .nav-item-flyout .nav-active-dot{position:absolute;top:50%;right:9px;bottom:auto;width:4px;height:4px;border-radius:50%;background:var(--accent);transform:translateY(-50%)}
+@keyframes apple-nav-item-in{from{opacity:.72;clip-path:inset(0 180px 0 0 round 9px)}to{opacity:1;clip-path:inset(0 round 9px)}}
+[data-interface="apple"] .appearance-settings{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:16px;padding:20px 24px}
+[data-interface="apple"] .appearance-settings h2{margin:0;font-size:18px}
+[data-interface="apple"] .appearance-settings p{margin:4px 0 0;color:var(--ink-4);font-size:11px}
+[data-interface="apple"] .appearance-settings .settings-theme-toggle{margin-left:auto}
 
 /* Apple.com editorial scale over a data-dense application. */
 [data-interface="apple"] .apple-design-app>main{grid-column:2;width:100%;max-width:none;padding:32px 40px 80px}
@@ -154,8 +162,10 @@
   [data-interface="apple"] .apple-design-app .brand-orb,[data-interface="apple"] .apple-design-app .brand-logo{width:32px;height:32px}
   [data-interface="apple"] .apple-design-app .brand strong{font-size:14px}
   [data-interface="apple"] .apple-design-app .brand small{display:none}
-  [data-interface="apple"] .apple-design-app .brand-theme-toggle{transform:scale(.76)}
-  [data-interface="apple"] .apple-design-app .nav-collapse-btn,[data-interface="apple"] .nav-bubble-hint{display:none}
+  [data-interface="apple"] .apple-design-app.apple-nav-collapsed>aside{width:auto}
+  [data-interface="apple"] .apple-design-app.apple-nav-collapsed .brand{min-height:40px;flex-direction:row;padding:0;gap:9px}
+  [data-interface="apple"] .apple-design-app.apple-nav-collapsed .brand-copy{display:block}
+  [data-interface="apple"] .apple-design-app .nav-collapse-btn,[data-interface="apple"] .nav-item-flyout{display:none}
   [data-interface="apple"] .apple-design-app .mobile-menu-btn{display:block;min-height:36px;margin-left:4px;padding:0 14px;border-radius:999px;background:var(--accent);font-size:13px;box-shadow:none}
   [data-interface="apple"] .apple-design-app .desktop-nav{display:none}
   [data-interface="apple"] .apple-design-app .mobile-nav{
@@ -188,9 +198,9 @@
   [data-interface="apple"] .apple-design-app .view-stage{animation:none}
   [data-interface="apple"] .apple-design-app :is(*,::before,::after){scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}
   [data-interface="apple"] .apple-design-app :is(.stock-card,button):hover{transform:none}
-  [data-interface="apple"] .nav-bubble-hint{animation:apple-nav-bubble-reduced .12s ease-out both}
+  [data-interface="apple"] .nav-item-flyout{animation:apple-nav-item-reduced .12s ease-out both}
 }
-@keyframes apple-nav-bubble-reduced{from{opacity:0}to{opacity:1;transform:translateY(-50%)}}
+@keyframes apple-nav-item-reduced{from{opacity:0}to{opacity:1}}
 @media(prefers-reduced-transparency:reduce){
   [data-interface="apple"] .apple-design-app>aside,[data-interface="apple"] .apple-design-app .mobile-nav,[data-interface="apple"] .apple-design-app .ai-conversation-sidebar,
   [data-interface="apple"] :is(.sheet-panel,.ai-dialog-panel,.security-search-popover,.decision-detail-panel){background:var(--apple-card);backdrop-filter:none;-webkit-backdrop-filter:none}
