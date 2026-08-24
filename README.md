@@ -20,7 +20,9 @@ Stock Monitor 将行情、自选股、新闻、SEC 披露、基本面、估值�
 - **投资组合**：多币种持仓、交易流水、收益归因、健康检查、策略画像、压力测试、情景分析、蒙特卡洛和组合优化。
 - **AI 研究**：带引用的流式对话、只读研究工具、长期记忆、投资决策记录，以及可选的 Exa、Perplexity 和 Pi Agent。
 - **机会与舆情**：组合感知的股票机会发现、多源舆情、本地复核、成本预算和历史留存。
-- **多端访问**：桌面 Web、独立 iPhone PWA，以及实验性的 Qt Quick 原生桌面客户端。
+- **加载体验**：板块数据持久化在浏览器（IndexedDB），冷加载先渲染上次数据、后台刷新完成后自动切换为新数据；持续加载时顶部显示刷新进度条。
+- **账号管理**：注册需管理员审核激活；管理面板支持创建、审核、备注和删除用户。
+- **多端访问**：桌面 Web、Beta 市场工作台（`/beta/`）、独立 iPhone PWA，以及实验性的 Qt Quick 原生桌面客户端。
 
 当上游数据缺失或样本不足时，应用会显示“数据不足”或对应原因，不会用 0 或猜测值填补。
 
@@ -98,7 +100,7 @@ docker compose ps
 curl http://127.0.0.1:8080/api/health
 ```
 
-API 启动时会自动执行 Alembic 迁移。数据库中没有管理员时，应用会使用 `ADMIN_USERNAME` 和 `ADMIN_INIT_PASSWORD` 创建首个管理员。
+API 启动时会自动执行 Alembic 迁移。数据库中没有管理员时，应用会使用 `ADMIN_USERNAME` 和 `ADMIN_INIT_PASSWORD` 创建首个管理员。通过注册入口申请的账号需要管理员审核激活后才能登录；管理员也可以在设置面板的用户管理中直接创建账号。
 
 ## 可选集成
 
@@ -136,7 +138,7 @@ docker compose -f compose.yaml up -d --build
 docker compose -f compose.yaml ps
 ```
 
-Caddy 提供 HTTPS；桌面端位于 `/`，iPhone PWA 位于 `/mobile/`，API 位于 `/api/`。生产升级前应备份 PostgreSQL 和持久卷。
+Caddy 提供 HTTPS；桌面端位于 `/`，Beta 市场工作台位于 `/beta/`，iPhone PWA 位于 `/mobile/`，API 位于 `/api/`。生产升级前应备份 PostgreSQL 和持久卷。
 
 后端代码或依赖变化时，需一起重建共享 `backend` 构建上下文的 `api`、`worker`、`sec-worker`、`beat` 和 `market-stream`。
 
@@ -185,6 +187,7 @@ compose.yaml     完整生产拓扑
 
 ## 文档
 
+- [更新日志](CHANGELOG.md)
 - [Research Data Gateway](docs/research-data-gateway.md)
 - [Options analytics](docs/options.md)
 - [AI Orchestrator](docs/ai-orchestrator.md)
