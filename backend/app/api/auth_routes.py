@@ -2,8 +2,9 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import (
@@ -110,6 +111,20 @@ class RegisterReq(BaseModel):
     password: str
 
 
+class AdminCreateUserReq(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    username: str = Field(min_length=2, max_length=64)
+    password: SecretStr
+    note: str | None = Field(default=None, max_length=5000)
+
+
+class AdminUpdateUserReq(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    note: str | None = Field(max_length=5000)
+
+
 class RefreshReq(BaseModel):
     refresh_token: str
 
@@ -120,6 +135,27 @@ def _revoke_family(db: Session, family_id: str) -> None:
         .where(AuthSession.family_id == family_id, AuthSession.revoked_at.is_(None))
         .values(revoked_at=datetime.now(UTC))
     )
+
+
+def _user_out(user: User) -> dict[str, object]:
+    """Return the explicit public shape for administrator user operations."""
+    return {
+        'id': user.id,
+        'username': user.username,
+        'role': user.role,
+        'status': user.status,
+        'note': user.note,
+        'created_at': user.created_at.isoformat() if user.created_at else None,
+    }
+
+
+def _hash_request_password(plain: str) -> str:
+    if len(plain) < 6:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, '请求无效')
+    try:
+        return hash_password(plain)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, '请求无效') from exc
 
 
 @router.get('/reddit/callback', response_class=HTMLResponse)
@@ -210,7 +246,7 @@ def register(req: RegisterReq, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, '用户名至少2位，密码至少6位')
     if db.scalar(select(User).where(User.username == req.username)):
         raise HTTPException(status.HTTP_409_CONFLICT, '用户名已存在')
-    db.add(User(username=req.username, password_hash=hash_password(req.password)))
+    db.add(User(username=req.username, password_hash=_hash_request_password(req.password)))
     db.commit()
     return {'message': '注册申请已提交，等待管理员审核'}
 
@@ -223,8 +259,37 @@ def me(user: User = Depends(get_current_user)):
 @router.get('/admin/users')
 def list_users(admin: User = Depends(get_admin_user), db: Session = Depends(get_db)):
     rows = db.scalars(select(User).order_by(User.created_at)).all()
-    return [{'id': u.id, 'username': u.username, 'role': u.role, 'status': u.status,
-             'created_at': u.created_at.isoformat()} for u in rows]
+    return [_user_out(u) for u in rows]
+
+
+@router.post('/admin/users', status_code=201)
+def create_user(req: AdminCreateUserReq, admin: User = Depends(get_admin_user), db: Session = Depends(get_db)):
+    user = User(
+        username=req.username,
+        password_hash=_hash_request_password(req.password.get_secret_value()),
+        role='user',
+        status='active',
+        note=req.note,
+    )
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, '用户名已存在') from exc
+    db.refresh(user)
+    return _user_out(user)
+
+
+@router.patch('/admin/users/{uid}')
+def update_user(uid: int, req: AdminUpdateUserReq, admin: User = Depends(get_admin_user), db: Session = Depends(get_db)):
+    user = db.get(User, uid)
+    if not user:
+        raise HTTPException(404, '用户不存在')
+    user.note = req.note
+    db.commit()
+    db.refresh(user)
+    return _user_out(user)
 
 
 @router.post('/admin/users/{uid}/approve')

@@ -53,8 +53,20 @@ def active_user(db):
     return user
 
 
+@pytest.fixture
+def admin_user(db):
+    user = User(username="root", password_hash=auth_module.hash_password("admin-pass"), role="admin", status="active")
+    db.add(user)
+    db.commit()
+    return user
+
+
 def login(client, username="alice", password="secret-123", remember=False):
     return client.post("/api/auth/login", json={"username": username, "password": password, "remember": remember})
+
+
+def admin_headers(admin_user):
+    return {"Authorization": f"Bearer {auth_module.create_token(admin_user.id)}"}
 
 
 class TestFailClosedSecrets:
@@ -214,3 +226,123 @@ class TestLogoutAndRevokeAll:
 
     def test_revoke_all_requires_auth(self, client, active_user):
         assert client.post("/api/auth/sessions/revoke-all").status_code == 401
+
+
+class TestAdminUserManagement:
+    def test_admin_routes_require_admin(self, client, active_user):
+        payload = {"username": "created", "password": "secret-123"}
+        assert client.post("/api/auth/admin/users", json=payload).status_code == 401
+        headers = {"Authorization": f"Bearer {auth_module.create_token(active_user.id)}"}
+        assert client.post("/api/auth/admin/users", headers=headers, json=payload).status_code == 403
+        for method, path, body in [
+            ("get", "/api/auth/admin/users", None),
+            ("patch", f"/api/auth/admin/users/{active_user.id}", {"note": "x"}),
+            ("post", f"/api/auth/admin/users/{active_user.id}/approve", {}),
+            ("delete", f"/api/auth/admin/users/{active_user.id}", None),
+        ]:
+            assert client.request(method, path, json=body).status_code == 401
+            assert client.request(method, path, headers=headers, json=body).status_code == 403
+
+    def test_admin_create_returns_safe_active_user(self, client, db, admin_user):
+        response = client.post(
+            "/api/auth/admin/users",
+            headers=admin_headers(admin_user),
+            json={"username": "created", "password": "secret-123", "note": "review"},
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["username"] == "created"
+        assert body["role"] == "user" and body["status"] == "active"
+        assert body["note"] == "review"
+        assert "password" not in body and "password_hash" not in body
+        created = db.query(User).filter(User.username == "created").one()
+        assert auth_module.verify_password("secret-123", created.password_hash)
+        listed = client.get("/api/auth/admin/users", headers=admin_headers(admin_user)).json()
+        listed_created = next(row for row in listed if row["username"] == "created")
+        assert listed_created["note"] == "review"
+        assert "password" not in listed_created and "password_hash" not in listed_created
+
+    def test_duplicate_returns_409_and_admin_session_remains_usable(self, client, admin_user):
+        headers = admin_headers(admin_user)
+        payload = {"username": "duplicate", "password": "secret-123"}
+        assert client.post("/api/auth/admin/users", headers=headers, json=payload).status_code == 201
+        duplicate = client.post("/api/auth/admin/users", headers=headers, json=payload)
+        assert duplicate.status_code == 409
+        assert "secret-123" not in duplicate.text and "password_hash" not in duplicate.text
+        assert client.get("/api/auth/admin/users", headers=headers).status_code == 200
+
+    def test_password_byte_limit_and_exact_boundary(self, client, db, admin_user):
+        headers = admin_headers(admin_user)
+        short = client.post(
+            "/api/auth/admin/users",
+            headers=headers,
+            json={"username": "too-short", "password": "short"},
+        )
+        assert short.status_code == 400
+        assert db.query(User).filter(User.username == "too-short").count() == 0
+
+        exact = "p" * 72
+        accepted = client.post(
+            "/api/auth/admin/users",
+            headers=headers,
+            json={"username": "exact-bytes", "password": exact},
+        )
+        assert accepted.status_code == 201
+        assert auth_module.verify_password(exact, db.query(User).filter(User.username == "exact-bytes").one().password_hash)
+
+        too_long = "p" * 73
+        rejected = client.post(
+            "/api/auth/admin/users",
+            headers=headers,
+            json={"username": "too-long", "password": too_long},
+        )
+        assert rejected.status_code == 400
+        assert too_long not in rejected.text and "password_hash" not in rejected.text
+        assert db.query(User).filter(User.username == "too-long").count() == 0
+        multibyte = client.post(
+            "/api/auth/admin/users",
+            headers=headers,
+            json={"username": "too-long-utf8", "password": "密" * 25},
+        )
+        assert multibyte.status_code == 400
+
+    def test_note_update_clear_limit_and_privilege_fields(self, client, db, admin_user):
+        headers = admin_headers(admin_user)
+        created = client.post(
+            "/api/auth/admin/users",
+            headers=headers,
+            json={"username": "noted", "password": "secret-123", "note": "first"},
+        )
+        uid = created.json()["id"]
+        updated = client.patch(f"/api/auth/admin/users/{uid}", headers=headers, json={"note": "second"})
+        assert updated.status_code == 200 and updated.json()["note"] == "second"
+        cleared = client.patch(f"/api/auth/admin/users/{uid}", headers=headers, json={"note": None})
+        assert cleared.status_code == 200 and cleared.json()["note"] is None
+
+        too_long = client.patch(f"/api/auth/admin/users/{uid}", headers=headers, json={"note": "x" * 5001})
+        assert too_long.status_code == 422
+        extra = client.patch(f"/api/auth/admin/users/{uid}", headers=headers, json={"note": "safe", "role": "admin"})
+        assert extra.status_code == 422
+        stored = db.get(User, uid)
+        assert stored.role == "user" and stored.status == "active" and stored.note is None
+        assert client.patch("/api/auth/admin/users/999999", headers=headers, json={"note": "x"}).status_code == 404
+
+    def test_create_forbids_privilege_fields_and_public_register_stays_pending(self, client, db, admin_user):
+        headers = admin_headers(admin_user)
+        extra = client.post(
+            "/api/auth/admin/users",
+            headers=headers,
+            json={"username": "injected", "password": "secret-123", "role": "admin"},
+        )
+        assert extra.status_code == 422
+        assert db.query(User).filter(User.username == "injected").count() == 0
+
+        registered = client.post("/api/auth/register", json={"username": "self-serve", "password": "secret-123"})
+        assert registered.status_code == 201
+        assert db.query(User).filter(User.username == "self-serve").one().status == "pending"
+
+    def test_hash_password_rejects_oversized_public_registration(self, client, db):
+        password = "p" * 73
+        response = client.post("/api/auth/register", json={"username": "oversized", "password": password})
+        assert response.status_code == 400
+        assert password not in response.text and db.query(User).filter(User.username == "oversized").count() == 0

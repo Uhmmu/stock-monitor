@@ -1229,13 +1229,63 @@ function JournalSection({username}:{username:string}) {
 }
 
 type FmpStatus = {quota_day:string;requests_used:number;requests_remaining:number;usable_limit:number;last_processed_ticker:string|null;pending_profile_count:number;pending_history_count:number;pending_analysis_count:number;failed_item_count:number;quota_timezone:string}
+type UserRow = {id:number;username:string;role:string;status:string;note:string|null;created_at:string}
+
+export function AdminCreateUserForm({busy,onCreate}:{busy:boolean;onCreate:(user:{username:string;password:string;note:string|null})=>Promise<unknown>}) {
+  return <form className="settings-card admin-user-create" onSubmit={async event=>{
+    event.preventDefault()
+    const form=event.currentTarget
+    const data=new FormData(form)
+    try {
+      await onCreate({username:String(data.get('username')||''),password:String(data.get('password')||''),note:String(data.get('note')||'').trim()||null})
+      form.reset()
+    } catch { /* mutation error is rendered by the parent */ }
+  }}>
+    <h2>新建用户</h2><p>管理员创建的普通用户会立即激活。初始密码不会保存为明文或再次显示。</p>
+    <div className="settings-grid">
+      <label>用户名<input name="username" required minLength={2} maxLength={64} autoComplete="off"/></label>
+      <label>初始密码<input name="password" type="password" required minLength={6} maxLength={72} autoComplete="new-password"/></label>
+      <label>管理员备注<input name="note" maxLength={5000} placeholder="可选，仅管理员可见；不要记录密码或密钥"/></label>
+    </div>
+    <button disabled={busy}>{busy?'创建中…':'创建并激活'}</button>
+  </form>
+}
+
+export function AdminUserTable({users,onApprove,onDelete,onSaveNote}:{users:UserRow[];onApprove:(id:number)=>void;onDelete:(id:number)=>void;onSaveNote:(id:number,note:string|null)=>void}) {
+  const statusLabel:Record<string,string> = {active:'已激活',pending:'待审核'}
+  return <div className="table admin-user-table">
+    <div className="table-head"><span>用户名</span><span>角色</span><span>状态</span><span>管理员备注</span><span>注册时间</span><span/></div>
+    {users.map(u=><div className="table-row" key={u.id}>
+      <b>{u.username}</b>
+      <span>{u.role==='admin'?'管理员':'普通用户'}</span>
+      <span className={u.status==='active'?'positive':''}>{statusLabel[u.status]||u.status}</span>
+      <form className="admin-user-note" onSubmit={event=>{event.preventDefault();const note=String(new FormData(event.currentTarget).get('note')||'').trim();onSaveNote(u.id,note||null)}}><input name="note" defaultValue={u.note||''} maxLength={5000} aria-label={`${u.username} 管理员备注`}/><button>保存</button></form>
+      <span>{new Date(u.created_at).toLocaleDateString('zh-CN')}</span>
+      <span style={{display:'flex',gap:6}}>
+        {u.status==='pending'&&<button onClick={()=>onApprove(u.id)}>激活</button>}
+        {u.role!=='admin'&&<button className="danger" onClick={()=>onDelete(u.id)}>删除</button>}
+      </span>
+    </div>)}
+    {!users.length&&<div className="empty">暂无用户数据。</div>}
+  </div>
+}
 
 function AdminOperationsPanel() {
   const client = useQueryClient()
+  const users = useQuery({queryKey:['admin-users'],queryFn:()=>api<UserRow[]>('/auth/admin/users')})
   const fmp = useQuery({queryKey:['admin-fmp-status'],queryFn:()=>api<FmpStatus>('/admin/fmp/status'),refetchInterval:60_000})
   const syncFmp = useMutation({mutationFn:()=>post('/admin/fmp/sync',{}),onSuccess:()=>setTimeout(()=>client.invalidateQueries({queryKey:['admin-fmp-status']}),1500)})
+  const createUser = useMutation({mutationFn:(user:{username:string;password:string;note:string|null})=>post<UserRow>('/auth/admin/users',user),onSuccess:()=>client.invalidateQueries({queryKey:['admin-users']})})
+  const approve = useMutation({mutationFn:(id:number)=>post<unknown>(`/auth/admin/users/${id}/approve`,{}),onSuccess:()=>client.invalidateQueries({queryKey:['admin-users']})})
+  const saveNote = useMutation({mutationFn:({id,note}:{id:number;note:string|null})=>patch<UserRow>(`/auth/admin/users/${id}`,{note}),onSuccess:()=>client.invalidateQueries({queryKey:['admin-users']})})
+  const del = useMutation({mutationFn:(id:number)=>api<unknown>(`/auth/admin/users/${id}`,{method:'DELETE'}),onSuccess:()=>client.invalidateQueries({queryKey:['admin-users']})})
   return <div style={{marginTop:32}}>
     <div className="section-title"><div><p>FMP · UTC QUOTA</p><h2>资料与技术分析同步</h2></div><button onClick={()=>syncFmp.mutate()} disabled={syncFmp.isPending}>{syncFmp.isPending?'正在排队…':'排队同步'}</button></div>
     {fmp.data?<div className="technical-metrics admin-fmp"><div><span>今日已用</span><b>{fmp.data.requests_used} / {fmp.data.usable_limit}</b></div><div><span>剩余请求</span><b>{fmp.data.requests_remaining}</b></div><div><span>资料待处理</span><b>{fmp.data.pending_profile_count}</b></div><div><span>行情待处理</span><b>{fmp.data.pending_history_count}</b></div><div><span>分析待处理</span><b>{fmp.data.pending_analysis_count}</b></div><div><span>失败项目</span><b>{fmp.data.failed_item_count}</b><small>{fmp.data.last_processed_ticker&&`最近 ${fmp.data.last_processed_ticker}`}</small></div></div>:<div className="empty">正在读取 FMP 配额状态…</div>}
+    <div className="section-title"><h2>用户管理</h2></div>
+    <AdminCreateUserForm busy={createUser.isPending} onCreate={user=>createUser.mutateAsync(user)}/>
+    {createUser.error&&<p className="error" role="alert">{createUser.error.message}</p>}
+    <AdminUserTable users={users.data||[]} onApprove={id=>approve.mutate(id)} onDelete={id=>del.mutate(id)} onSaveNote={(id,note)=>saveNote.mutate({id,note})}/>
+    {saveNote.error&&<p className="error" role="alert">{saveNote.error.message}</p>}
   </div>
 }

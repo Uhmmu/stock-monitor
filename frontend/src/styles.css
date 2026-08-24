@@ -284,6 +284,7 @@ textarea{resize:vertical;min-height:140px}
 .th-view:hover{color:var(--accent-ink);border-bottom-color:var(--accent)}
 .th-edit input{width:76px;padding:5px 8px;font-size:13px}
 .danger{color:var(--down);font-weight:600}
+.admin-user-create{margin-bottom:14px}.admin-user-create .settings-grid{grid-template-columns:1fr 1fr 2fr}.admin-user-note{display:flex;gap:6px;min-width:0}.admin-user-note input{width:100%;min-width:0;padding:6px 8px;font-size:12px}.admin-user-note button{color:var(--accent-ink);font-weight:600}.admin-user-table .table-head,.admin-user-table .table-row{grid-template-columns:1fr .7fr .7fr 1.5fr .8fr 90px}
 .investigations{display:grid;gap:16px}
 .investigations article{display:grid;grid-template-columns:1fr auto;gap:12px;padding:24px;
   border:1px solid var(--line);background:var(--solid);border-radius:var(--r-m);
@@ -723,6 +724,7 @@ textarea{resize:vertical;min-height:140px}
   .table{overflow:auto}
   .table-head,.table-row{min-width:750px}
   .settings-grid{grid-template-columns:1fr}
+  .admin-user-create .settings-grid{grid-template-columns:1fr}
   .clock{display:none}
 }
 

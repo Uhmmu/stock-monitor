@@ -20,6 +20,7 @@ _ALG = "HS256"
 # Explicit dev/test environments may opt into the insecure default via APP_ENV.
 _INSECURE_SECRETS = {"", "change-me"}
 _DEV_ENVIRONMENTS = {"dev", "development", "local", "test", "testing", "pytest"}
+_MAX_PASSWORD_BYTES = 72
 _resolved_secret: str | None = None
 
 
@@ -52,7 +53,10 @@ def _access_ttl_minutes(remember: bool) -> int | None:
 
 
 def hash_password(plain: str) -> str:
-    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+    encoded = plain.encode("utf-8")
+    if len(encoded) > _MAX_PASSWORD_BYTES:
+        raise ValueError("password exceeds bcrypt's 72-byte limit")
+    return bcrypt.hashpw(encoded, bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
