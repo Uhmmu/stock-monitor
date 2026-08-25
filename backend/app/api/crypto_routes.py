@@ -12,9 +12,12 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.auth import get_current_user
 from app.database import get_db
-from app.models import CryptoAsset, CryptoInstrument, CryptoProviderMapping
+from app.models import CryptoAsset, CryptoInstrument, CryptoProviderMapping, CryptoSyncState
+from app.services.crypto import candles as candle_service
+from app.services.crypto import latest as latest_service
 from app.services.crypto.identity import (
     asset_display_label,
     instrument_display_label,
@@ -288,4 +291,156 @@ def search_identities(
         instruments=instrument_items,
         assets=asset_items,
         note="search results are hints with stable typed IDs; symbols are never identity authority",
+    )
+
+
+class CandleOut(BaseModel):
+    open_time_ms: int
+    close_time_ms: int
+    open: str
+    high: str
+    low: str
+    close: str
+    base_volume: str
+    quote_volume: str
+    taker_buy_base_volume: str | None = None
+    taker_buy_quote_volume: str | None = None
+    trades: int | None = None
+    final: bool
+    provider: str
+    feed: str
+    price_type: str
+
+
+class CandlesOut(BaseModel):
+    instrument_id: int
+    interval: str
+    items: list[CandleOut]
+    coverage: dict
+    limit: int
+
+
+class InstrumentCoverageOut(BaseModel):
+    instrument_id: int
+    display_label: str
+    intervals: dict
+
+
+class MarketStatusOut(BaseModel):
+    instruments: list[InstrumentCoverageOut]
+    note: str
+
+
+@router.get("/market/candles", response_model=CandlesOut)
+def read_market_candles(
+    instrument_id: int,
+    interval: str = Query(pattern="^(1h|4h|1d)$"),
+    start_time_ms: int | None = Query(default=None, ge=0),
+    end_time_ms: int | None = Query(default=None, ge=0),
+    limit: int = Query(default=500, ge=1, le=5000),
+    db: Session = Depends(get_db),
+):
+    """Bounded chronological read of persisted closed candles only."""
+    instrument = db.get(CryptoInstrument, instrument_id)
+    if instrument is None:
+        raise HTTPException(status_code=404, detail="instrument not found")
+    rows = candle_service.read_candles(
+        db,
+        instrument_id=instrument_id,
+        interval=interval,
+        start_time_ms=start_time_ms,
+        end_time_ms=end_time_ms,
+        limit=limit,
+    )
+    coverage = candle_service.candle_coverage(db, instrument_id=instrument_id, interval=interval)
+    return CandlesOut(
+        instrument_id=instrument_id,
+        interval=interval,
+        items=[
+            CandleOut(
+                open_time_ms=row.open_time_ms,
+                close_time_ms=row.close_time_ms,
+                open=str(row.open),
+                high=str(row.high),
+                low=str(row.low),
+                close=str(row.close),
+                base_volume=str(row.base_volume),
+                quote_volume=str(row.quote_volume),
+                taker_buy_base_volume=str(row.taker_buy_base_volume) if row.taker_buy_base_volume is not None else None,
+                taker_buy_quote_volume=str(row.taker_buy_quote_volume) if row.taker_buy_quote_volume is not None else None,
+                trades=row.trades,
+                final=row.final,
+                provider=row.provider,
+                feed=row.feed,
+                price_type=row.price_type,
+            )
+            for row in rows
+        ],
+        coverage={
+            "earliest_open_ms": coverage.earliest_open_ms,
+            "latest_open_ms": coverage.latest_open_ms,
+            "candle_count": coverage.candle_count,
+            "expected_count": coverage.expected_count,
+            "missing_count": coverage.missing_count,
+        },
+        limit=limit,
+    )
+
+
+@router.get("/market/status", response_model=MarketStatusOut)
+def market_status(db: Session = Depends(get_db)):
+    """Coverage/sync health per instrument; read-only over persisted data."""
+    instruments = db.scalars(
+        select(CryptoInstrument).where(CryptoInstrument.status == "trading").order_by(CryptoInstrument.id)
+    )
+    payload = []
+    for instrument in instruments:
+        base = db.get(CryptoAsset, instrument.base_asset_id)
+        quote = db.get(CryptoAsset, instrument.quote_asset_id)
+        intervals = {}
+        for interval in ("1h", "4h", "1d"):
+            coverage = candle_service.candle_coverage(db, instrument_id=instrument.id, interval=interval)
+            state = db.scalar(
+                select(CryptoSyncState).where(
+                    CryptoSyncState.instrument_id == instrument.id,
+                    CryptoSyncState.data_kind == "candles",
+                    CryptoSyncState.interval == interval,
+                )
+            )
+            intervals[interval] = {
+                "candle_count": coverage.candle_count,
+                "expected_count": coverage.expected_count,
+                "missing_count": coverage.missing_count,
+                "earliest_open_ms": coverage.earliest_open_ms,
+                "latest_open_ms": coverage.latest_open_ms,
+                "last_success_at": _iso(state.last_success_at) if state else None,
+                "last_error": state.last_error if state else None,
+            }
+        payload.append(
+            InstrumentCoverageOut(
+                instrument_id=instrument.id,
+                display_label=instrument_display_label(instrument, base, quote),
+                intervals=intervals,
+            )
+        )
+    return MarketStatusOut(
+        instruments=payload,
+        note="coverage reflects persisted closed candles only; gaps stay explicit",
+    )
+
+
+@router.get("/market/latest")
+def latest_market(
+    instrument_id: int,
+    interval: str = Query(default="1h", pattern="^(1h|4h|1d)$"),
+    db: Session = Depends(get_db),
+):
+    """Latest view with explicit source/age/staleness; cache first, closed-candle fallback."""
+    instrument = db.get(CryptoInstrument, instrument_id)
+    if instrument is None:
+        raise HTTPException(status_code=404, detail="instrument not found")
+    settings = get_settings()
+    return latest_service.latest_market_payload(
+        db, instrument=instrument, interval=interval,
+        stale_seconds=settings.crypto_latest_stale_seconds,
     )

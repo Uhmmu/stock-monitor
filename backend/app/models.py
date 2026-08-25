@@ -23,8 +23,37 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
+from sqlalchemy.types import TypeDecorator
 
 from app.database import Base
+
+
+class PreciseNumeric(TypeDecorator):
+    """Numeric(38, 18) that survives SQLite tests without float round-trips.
+
+    PostgreSQL uses the native NUMERIC type; SQLite (tests only) stores the
+    decimal as text so precision assertions are exact.
+    """
+
+    impl = Numeric(38, 18)
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "sqlite":
+            from sqlalchemy import String
+
+            return dialect.type_descriptor(String(80))
+        return dialect.type_descriptor(Numeric(38, 18))
+
+    def process_bind_param(self, value, dialect):
+        if dialect.name == "sqlite":
+            return str(value) if value is not None else None
+        return value
+
+    def process_result_value(self, value, dialect):
+        if dialect.name == "sqlite":
+            return Decimal(value) if value is not None else None
+        return value
 
 
 class InvestigationStatus(str, enum.Enum):
@@ -2959,6 +2988,132 @@ class CryptoInstrument(Base):
     listing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     delisting_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     calendar: Mapped[str] = mapped_column(String(8), default="utc")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CryptoCollectionRun(Base):
+    """Durable job claim/status/counts for a crypto provider domain sync."""
+
+    __tablename__ = "crypto_collection_runs"
+    __table_args__ = (
+        UniqueConstraint("provider", "domain", "bucket", name="uq_crypto_collection_runs_claim"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'success', 'partial', 'failed')",
+            name="ck_crypto_collection_runs_status",
+        ),
+        Index("ix_crypto_collection_runs_status", "status"),
+        Index("ix_crypto_collection_runs_provider_domain", "provider", "domain", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    domain: Mapped[str] = mapped_column(String(64))
+    # time bucket for the claim key (UTC date or hour depending on cadence)
+    bucket: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    items_seen: Mapped[int] = mapped_column(Integer, default=0)
+    items_created: Mapped[int] = mapped_column(Integer, default=0)
+    items_updated: Mapped[int] = mapped_column(Integer, default=0)
+    unresolved_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class CryptoSyncState(Base):
+    """Per instrument/provider/data-kind watermark with due/gap/error state."""
+
+    __tablename__ = "crypto_sync_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id", "provider", "data_kind", "interval",
+            name="uq_crypto_sync_states_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("crypto_instruments.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(32))
+    data_kind: Mapped[str] = mapped_column(String(32))
+    interval: Mapped[str] = mapped_column(String(8), default="")
+    watermark_ms: Mapped[int | None] = mapped_column(BigInteger)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    missing_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class MarketCandle(Base):
+    """Closed UTC OHLCV candle for any crypto instrument and price authority.
+
+    Identity is ``(instrument_id, interval, open_time_ms, provider,
+    price_type)``; ``feed`` records how the row arrived (REST backfill is
+    history authority, stream rows only supplement). Prices/volumes keep
+    high-precision numerics — never floats.
+    """
+
+    __tablename__ = "market_candles"
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id", "interval", "open_time_ms", "provider", "price_type",
+            name="uq_market_candles_key",
+        ),
+        CheckConstraint("interval IN ('1h', '4h', '1d')", name="ck_market_candles_interval"),
+        CheckConstraint("price_type IN ('trade', 'mark', 'index', 'premium')", name="ck_market_candles_price_type"),
+        CheckConstraint("feed IN ('rest', 'stream')", name="ck_market_candles_feed"),
+        # CAST keeps the comparisons numeric on SQLite's text-backed decimals;
+        # on PostgreSQL NUMERIC the cast is a no-op.
+        CheckConstraint("CAST(high AS NUMERIC) >= CAST(low AS NUMERIC)", name="ck_market_candles_high_low"),
+        CheckConstraint(
+            "CAST(high AS NUMERIC) >= CAST(open AS NUMERIC) AND CAST(high AS NUMERIC) >= CAST(close AS NUMERIC)",
+            name="ck_market_candles_high_extremes",
+        ),
+        CheckConstraint(
+            "CAST(low AS NUMERIC) <= CAST(open AS NUMERIC) AND CAST(low AS NUMERIC) <= CAST(close AS NUMERIC)",
+            name="ck_market_candles_low_extremes",
+        ),
+        CheckConstraint(
+            "CAST(base_volume AS NUMERIC) >= 0 AND CAST(quote_volume AS NUMERIC) >= 0",
+            name="ck_market_candles_volume_nonnegative",
+        ),
+        Index(
+            "ix_market_candles_instrument_interval_time",
+            "instrument_id", "interval", "open_time_ms",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("crypto_instruments.id", ondelete="CASCADE"))
+    interval: Mapped[str] = mapped_column(String(8))
+    open_time_ms: Mapped[int] = mapped_column(BigInteger)
+    close_time_ms: Mapped[int] = mapped_column(BigInteger)
+    price_type: Mapped[str] = mapped_column(String(8), default="trade")
+    provider: Mapped[str] = mapped_column(String(16))
+    feed: Mapped[str] = mapped_column(String(8), default="rest")
+    open: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    high: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    low: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    close: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    base_volume: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    quote_volume: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    taker_buy_base_volume: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    taker_buy_quote_volume: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    trades: Mapped[int | None] = mapped_column(Integer)
+    source_hash: Mapped[str] = mapped_column(String(64))
+    final: Mapped[bool] = mapped_column(Boolean, default=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

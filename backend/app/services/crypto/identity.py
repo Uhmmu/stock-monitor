@@ -556,6 +556,38 @@ def retarget_provider_mapping(
     return existing
 
 
+def _seed_provider_mapping(
+    db: Session,
+    *,
+    provider: str,
+    provider_id: str,
+    asset: CryptoAsset | None = None,
+    instrument=None,
+    method: str = "verified_seed",
+) -> tuple[CryptoProviderMapping | None, bool]:
+    """Create the audited seed mapping if absent; never retargets an existing row."""
+    if asset is not None:
+        object_type, target_id, column = "asset", asset.id, "asset_id"
+    elif instrument is not None:
+        object_type, target_id, column = "instrument", instrument.id, "instrument_id"
+    else:
+        raise ValueError("seed mapping requires an asset or instrument target")
+    existing = get_provider_mapping(db, provider=provider, object_type=object_type, provider_id=provider_id)
+    if existing is not None:
+        return existing, False
+    mapping = CryptoProviderMapping(
+        provider=provider,
+        object_type=object_type,
+        provider_id=provider_id,
+        method=method,
+        verified_at=_utcnow(),
+    )
+    setattr(mapping, column, target_id)
+    db.add(mapping)
+    db.flush()
+    return mapping, True
+
+
 def verify_provider_mapping(db: Session, mapping: CryptoProviderMapping) -> CryptoProviderMapping:
     """Mark a mapping as manually verified; never changes its target."""
     mapping.verified_at = _utcnow()

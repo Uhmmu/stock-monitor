@@ -133,6 +133,20 @@ celery_app.conf.beat_schedule = {
     "sync-earnings": {"task": "app.tasks.celery_app.sync_earnings", "schedule": 21600},
     # The database-backed due check survives beat container recreation. A raw
     # 12-hour interval restarts its clock after every deployment and can starve.
+    # Crypto public collectors: cheap due checks only; the durable
+    # crypto_collection_runs claim makes the real cadence restart-safe.
+    "sync-crypto-spot-exchange-info": {
+        "task": "app.tasks.celery_app.ensure_crypto_spot_exchange_info_fresh",
+        "schedule": 1800,
+    },
+    "sync-crypto-candles": {
+        "task": "app.tasks.celery_app.ensure_crypto_candles_fresh",
+        "schedule": 1800,
+    },
+    "refresh-crypto-latest": {
+        "task": "app.tasks.celery_app.refresh_crypto_latest",
+        "schedule": 60,
+    },
     "sync-investment-calendar": {
         "task": "app.tasks.celery_app.ensure_investment_calendar_fresh",
         "schedule": 600,
@@ -800,6 +814,103 @@ def sync_earnings():
 def sync_investment_calendar():
     with SessionLocal() as db:
         return sync_calendar(db)
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_crypto_spot_exchange_info_fresh", queue="crypto_public")
+def ensure_crypto_spot_exchange_info_fresh():
+    """Cheap due check; the durable run claim throttles the real cadence."""
+    from app.services.crypto import jobs as crypto_jobs
+    from app.services.crypto.providers.binance import BinancePublicClient
+
+    if not settings.crypto_public_enabled:
+        return {"skipped": "crypto_public_disabled"}
+    with SessionLocal() as db:
+        if not crypto_jobs.spot_exchange_info_due(db):
+            return {"skipped": "not_due"}
+        client = BinancePublicClient(
+            spot_base_url=settings.crypto_binance_spot_base_url,
+            usdm_base_url=settings.crypto_binance_usdm_base_url,
+            timeout_seconds=settings.crypto_binance_timeout_seconds,
+            max_retries=settings.crypto_binance_max_retries,
+        )
+        result = crypto_jobs.sync_spot_exchange_info(
+            db, client=client, universe=crypto_jobs.parse_spot_universe(settings.crypto_spot_universe)
+        )
+        if result is None:
+            return {"skipped": "bucket_already_claimed"}
+        return {
+            "status": result.status,
+            "items_seen": result.items_seen,
+            "items_created": result.items_created,
+            "items_updated": result.items_updated,
+            "unresolved_count": result.unresolved_count,
+            "excluded": result.excluded,
+            "unresolved": result.unresolved,
+            "error": result.error,
+        }
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_crypto_candles_fresh", queue="crypto_public")
+def ensure_crypto_candles_fresh():
+    """Due-driven candle top-up; per-instrument isolation, restart-safe watermarks."""
+    from app.services.crypto import backfill as crypto_backfill
+    from app.services.crypto import jobs as crypto_jobs
+    from app.services.crypto.providers.binance import BinancePublicClient
+
+    if not settings.crypto_public_enabled:
+        return {"skipped": "crypto_public_disabled"}
+    with SessionLocal() as db:
+        instruments = crypto_jobs.instrument_universe(db, kind="spot")
+        if not instruments:
+            return {"skipped": "no_instruments"}
+        intervals = [i.strip() for i in settings.crypto_candle_sync_intervals.split(",") if i.strip()]
+        due = crypto_backfill.due_candle_work(db, instruments=instruments, intervals=intervals)
+        if not due:
+            return {"skipped": "not_due"}
+        client = BinancePublicClient(
+            spot_base_url=settings.crypto_binance_spot_base_url,
+            usdm_base_url=settings.crypto_binance_usdm_base_url,
+            timeout_seconds=settings.crypto_binance_timeout_seconds,
+            max_retries=settings.crypto_binance_max_retries,
+        )
+        payloads = []
+        for instrument, interval in due:
+            try:
+                result = crypto_backfill.backfill_instrument_candles(
+                    db, client=client, instrument=instrument, interval=interval,
+                    history_days=settings.crypto_candle_history_days,
+                )
+                payloads.append(result.to_payload())
+            except Exception as exc:  # isolation: one instrument never aborts the rest
+                payloads.append(
+                    {"instrument_id": instrument.id, "interval": interval, "status": "failed", "error": str(exc)[:300]}
+                )
+        return {"items": payloads}
+
+
+@celery_app.task(name="app.tasks.celery_app.refresh_crypto_latest", queue="crypto_public")
+def refresh_crypto_latest():
+    """Short-TTL Redis ticker refresh for the bounded universe (REST-first)."""
+    from app.services.crypto import jobs as crypto_jobs
+    from app.services.crypto import latest as crypto_latest
+    from app.services.crypto.providers.binance import BinancePublicClient
+
+    if not settings.crypto_public_enabled:
+        return {"skipped": "crypto_public_disabled"}
+    with SessionLocal() as db:
+        instruments = crypto_jobs.instrument_universe(db, kind="spot")
+        if not instruments:
+            return {"skipped": "no_instruments"}
+        client = BinancePublicClient(
+            spot_base_url=settings.crypto_binance_spot_base_url,
+            usdm_base_url=settings.crypto_binance_usdm_base_url,
+            timeout_seconds=settings.crypto_binance_timeout_seconds,
+            max_retries=settings.crypto_binance_max_retries,
+        )
+        summary = crypto_latest.refresh_latest_tickers(
+            db, client=client, instruments=instruments, ttl_seconds=settings.crypto_latest_ttl_seconds
+        )
+        return {"refreshed": summary.refreshed, "failed": summary.failed}
 
 
 @celery_app.task(name="app.tasks.celery_app.ensure_investment_calendar_fresh")

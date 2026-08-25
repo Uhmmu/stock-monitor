@@ -184,6 +184,24 @@ class Settings(BaseSettings):
     adanos_proxy_url: str = ""
     adanos_request_timeout_seconds: float = 5.0
 
+    # Crypto public market data (Binance Spot/USD-M). Public endpoints only;
+    # there is no API-key setting by design. Collection jobs are additionally
+    # gated by crypto_public_enabled so nothing runs before explicit setup.
+    crypto_binance_spot_base_url: str = "https://api.binance.com"
+    crypto_binance_usdm_base_url: str = "https://fapi.binance.com"
+    crypto_binance_timeout_seconds: float = 15.0
+    crypto_binance_max_retries: int = 2
+    crypto_public_enabled: bool = False
+    # Bounded collection universe: only these Binance symbols are synced as
+    # instruments/candles (spot markets). Comma-separated venue symbols.
+    crypto_spot_universe: str = "BTCUSDT,ETHUSDT"
+    # Candle backfill window and intervals for the bounded universe.
+    crypto_candle_history_days: int = 365
+    crypto_candle_sync_intervals: str = "1h,4h,1d"
+    # Latest ticker cache (Redis, short TTL) with closed-candle fallback.
+    crypto_latest_ttl_seconds: int = 60
+    crypto_latest_stale_seconds: int = 180
+
     # Isolated, administrator-only, read-only IBKR integration test module.
     # Flex traffic is fail-closed through the loopback Xray/VLESS SOCKS5 proxy.
     ibkr_cp_enabled: bool = False
