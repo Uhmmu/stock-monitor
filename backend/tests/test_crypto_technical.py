@@ -168,3 +168,37 @@ class TestTechnicalApi:
     def test_unknown_instrument_404(self, db):
         response = _client(db).get("/api/crypto/market/technical", params={"instrument_id": 999})
         assert response.status_code == 404
+
+
+class TestFrozenExpectedValues:
+    def test_1d_indicators_match_frozen_fixture_values(self, db):
+        """WP 3.3 validation: frozen 1d indicator expectations on a fixed series."""
+        # deterministic linear series: close = 100 + i for i in 0..59
+        count = 60
+        klines = [
+            Kline(
+                market="spot", symbol="BTCUSDT", interval="1d",
+                open_time_ms=(1_750_000_000_000 // (24 * HOUR)) * (24 * HOUR) + index * 24 * HOUR,
+                close_time_ms=(1_750_000_000_000 // (24 * HOUR)) * (24 * HOUR) + (index + 1) * 24 * HOUR - 1,
+                open=Decimal(100 + index), high=Decimal(102 + index), low=Decimal(99 + index),
+                close=Decimal(100 + index + 1) if index < count - 1 else Decimal(100 + index),
+                base_volume=Decimal("10"), quote_volume=Decimal("1000"), trades=10,
+                taker_buy_base_volume=Decimal("4"), taker_buy_quote_volume=Decimal("400"),
+                received_at="2100-01-01T00:00:00+00:00",
+            )
+            for index in range(count)
+        ]
+        candle_repo.persist_klines(db, instrument_id=1, provider="binance_spot", klines=klines)
+        db.commit()
+        payload = crypto_technical.crypto_technical_payload(db, instrument_id=1, interval="1d")
+        assert payload["status"] == "ready"
+        last = payload["last"]
+        # golden values frozen from the shared equity engine math on this series
+        assert last["close"] == "159"
+        assert round(last["rsi"], 6) == round(100.0, 6)  # strictly rising series
+        assert round(last["bollinger_middle"], 6) == 150.45  # mean of last 20 closes (141..159 plus final 159)
+        assert last["bollinger_upper"] > last["bollinger_middle"] > last["bollinger_lower"]
+        assert last["macd"] is not None
+        frozen_hash = payload["input_hash"]
+        again = crypto_technical.crypto_technical_payload(db, instrument_id=1, interval="1d")
+        assert again["input_hash"] == frozen_hash and again["last"] == last

@@ -287,3 +287,33 @@ def test_market_candles_migration_round_trip_on_sqlite():
             migration.upgrade()
         finally:
             migration.op = original
+
+
+class TestFixtureRoundtrip:
+    def test_all_three_intervals_roundtrip_exactly(self, db):
+        """WP 2.3 validation: BTCUSDT 1h/4h/1d fixtures persist and read back exactly."""
+        for interval in ("1h", "4h", "1d"):
+            rows = json.loads((FIXTURE_DIR / f"binance_spot_klines_{interval}.json").read_text())
+            klines = [
+                Kline(
+                    market="spot", symbol="BTCUSDT", interval=interval,
+                    open_time_ms=r[0], close_time_ms=r[6],
+                    open=Decimal(r[1]), high=Decimal(r[2]), low=Decimal(r[3]), close=Decimal(r[4]),
+                    base_volume=Decimal(r[5]), quote_volume=Decimal(r[7]), trades=r[8],
+                    taker_buy_base_volume=Decimal(r[9]), taker_buy_quote_volume=Decimal(r[10]),
+                    received_at="2100-01-01T00:00:00+00:00",
+                )
+                for r in rows
+            ]
+            summary = candle_repo.persist_klines(db, instrument_id=1, provider="binance_spot", klines=klines)
+            assert summary.inserted == len(klines) and summary.rejected == [], interval
+            stored = candle_repo.read_candles(db, instrument_id=1, interval=interval, limit=100)
+            assert [c.open_time_ms for c in stored] == sorted(r[0] for r in rows), interval
+            for candle, row in zip(stored, sorted(rows, key=lambda r: r[0])):
+                assert Decimal(candle.open) == Decimal(row[1]), interval
+                assert Decimal(candle.close) == Decimal(row[4]), interval
+                assert Decimal(candle.base_volume) == Decimal(row[5]), interval
+                assert Decimal(candle.quote_volume) == Decimal(row[7]), interval
+                assert Decimal(candle.taker_buy_base_volume) == Decimal(row[9]), interval
+            replay = candle_repo.persist_klines(db, instrument_id=1, provider="binance_spot", klines=klines)
+            assert replay.unchanged == len(klines) and replay.inserted == 0 and replay.updated == 0, interval
