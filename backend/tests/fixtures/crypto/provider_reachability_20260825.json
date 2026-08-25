@@ -1,0 +1,65 @@
+{
+  "_fixture_note": "WP 0.2 reachability/limits evidence captured 2026-08-25 from the production VPS (jialenb.com) over a single controlled SSH session. Public endpoints only; no API key was configured or sent on any request.",
+  "probe_date_utc": "2026-08-25T15:32:31Z",
+  "probe_location": "production VPS jialenb.com (direct egress; no proxy for Binance)",
+  "local_workstation": {
+    "result": "api.binance.com and fapi.binance.com unreachable (curl timeout after 12s)",
+    "conclusion": "local development cannot reach Binance directly; implementation and tests must rely on recorded fixtures, and live verification must run from the VPS"
+  },
+  "binance": {
+    "spot": {
+      "base_url": "https://api.binance.com",
+      "endpoints": {
+        "GET /api/v3/time": {"status": 200, "weight_header": "x-mbx-used-weight-1m: 1"},
+        "GET /api/v3/exchangeInfo?symbol=BTCUSDT": {"status": 200, "weight_header": "x-mbx-used-weight-1m: 2"},
+        "GET /api/v3/exchangeInfo?symbol=ETHUSDT": {"status": 200, "weight_header": "x-mbx-used-weight-1m: 3"},
+        "GET /api/v3/klines?symbol=BTCUSDT&interval=1h|4h|1d": {"status": 200},
+        "GET /api/v3/ticker/24hr?symbol=BTCUSDT": {"status": 200, "weight_header": "x-mbx-used-weight-1m: 1"},
+        "GET /api/v3/ticker/bookTicker?symbol=BTCUSDT": {"status": 200}
+      },
+      "history_window": "1d klines available back to open time 1502928000000 (2017-08-17T00:00:00Z) via startTime=0 paging",
+      "web_socket": {
+        "url": "wss://stream.binance.com:9443/ws/btcusdt@kline_1h",
+        "handshake": "HTTP/1.1 101 Switching Protocols observed with curl upgrade request; kline events began streaming immediately"
+      }
+    },
+    "usdm_futures": {
+      "base_url": "https://fapi.binance.com",
+      "endpoints": {
+        "GET /fapi/v1/exchangeInfo": {"status": 200, "weight_header": "x-mbx-used-weight: 51", "note": "877 symbols in live response; fixture keeps BTCUSDT/ETHUSDT"},
+        "GET /fapi/v1/premiumIndex?symbol=BTCUSDT": {"status": 200, "weight_header": "x-mbx-used-weight-1m: 45"},
+        "GET /fapi/v1/fundingRate?symbol=BTCUSDT": {"status": 200, "weight_header": "x-mbx-used-weight-1m: 49"},
+        "GET /fapi/v1/openInterest?symbol=BTCUSDT": {"status": 200, "weight_header": "x-mbx-used-weight-1m: 43"},
+        "GET /futures/data/openInterestHist?symbol=BTCUSDT&period=1h": {"status": 200, "weight_header": "x-mbx-used-weight-1m: 47"}
+      },
+      "history_window": {
+        "openInterestHist": "startTime older than ~30 days rejected with HTTP 400 code -1130 ('parameter startTime is invalid'); 25 days ago still accepted. Treat provider history as ~30 days and persist promptly.",
+        "fundingRate": "records exist back to 2020-09-12 at least (probed via endTime=1600000000000); older records have empty markPrice strings - parser must tolerate this",
+        "rateLimits_reported": "REQUEST_WEIGHT 2400/min, ORDERS 1200/min, ORDERS 300/10s (from exchangeInfo)"
+      },
+      "web_socket": {
+        "url": "wss://fstream.binance.com/ws/btcusdt@kline_1h",
+        "handshake": "HTTP/1.1 101 Switching Protocols observed"
+      }
+    },
+    "weight_header_note": "Both x-mbx-used-weight and x-mbx-used-weight-1m headers observed; adapters should read both and expose the maximum observed weight."
+  },
+  "coingecko": {
+    "base_url": "https://api.coingecko.com/api/v3",
+    "probe": {"GET /ping": "200", "GET /coins/markets?vs_currency=usd&ids=bitcoin,ethereum": "200 (no key)"},
+    "plan_gate": "public endpoints work keyless from the VPS; Demo/Pro credit limits and WebSocket remain plan-dependent. Paid/persistent sync needs a provider spike (WP 5.1) before enabling."
+  },
+  "defillama": {
+    "base_url": "https://api.llama.fi",
+    "probe": {"GET /protocols": "200 (8.6MB live payload)", "GET coins.llama.fi/prices/current": "200"},
+    "plan_gate": "free REST endpoints reachable; official subscription distinguishes free/pro/API entitlements - verify specific metric endpoints before relying on them (WP 6.1)."
+  },
+  "coin_metrics": {
+    "community_base_url": "https://community-api.coinmetrics.io/v4",
+    "probe": {
+      "GET /timeseries/asset-metrics?assets=btc&metrics=AdrActCnt&frequency=1d": "200",
+      "GET /catalog/asset-metrics?assets=btc": "400 unsupported_parameter 'assets' (catalog uses different parameters than timeseries)"
+    },
+    "plan_gate": "community HTTP subset reachable without a key; professional metrics require paid licensing (WP 7.1 spike decides scope or deferral)."
+  }
+}

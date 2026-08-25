@@ -1,0 +1,16 @@
+{
+ "coins": {
+  "coingecko:bitcoin": {
+   "price": 79227.26484720781,
+   "symbol": "BTC",
+   "timestamp": 1787671900,
+   "confidence": 0.99
+  },
+  "coingecko:weth": {
+   "price": 2475.337332719016,
+   "symbol": "WETH",
+   "timestamp": 1787671900,
+   "confidence": 0.99
+  }
+ }
+}

@@ -1,0 +1,45 @@
+{
+ "_fixture_note": "Synthetic sanitized error envelopes matching documented Binance shapes; timeout has no body",
+ "http_429_rate_limit": {
+  "status_code": 429,
+  "headers": {
+   "Retry-After": "60",
+   "X-MBX-USED-WEIGHT-1M": "6000"
+  },
+  "body": {
+   "code": -1003,
+   "msg": "Way too many requests; blocked until timestamp. Please use the websocket for live updates."
+  }
+ },
+ "http_418_ip_ban": {
+  "status_code": 418,
+  "headers": {
+   "Retry-After": "120"
+  },
+  "body": {
+   "code": -1003,
+   "msg": "IP auto-banned until timestamp due to request rate limit."
+  }
+ },
+ "http_400_invalid_param": {
+  "status_code": 400,
+  "headers": {},
+  "body": {
+   "msg": "parameter 'startTime' is invalid.",
+   "code": -1130
+  }
+ },
+ "http_500_server_error": {
+  "status_code": 500,
+  "headers": {},
+  "body": {
+   "code": -1000,
+   "msg": "An unknown error occurred while processing the request."
+  }
+ },
+ "network_timeout": {
+  "status_code": null,
+  "headers": {},
+  "body": null
+ }
+}

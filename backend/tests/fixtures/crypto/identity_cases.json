@@ -1,0 +1,154 @@
+{
+  "fixture_version": "1",
+  "notes": "WP 0.3 executable examples freezing identity/time/volume semantics before any schema exists. Phase 1 migrations must be judged against every case here: a case either resolves to exactly one canonical target or is explicitly unresolved. Ticker-only heuristics are never accepted as resolution authority.",
+  "providers": {
+    "binance_spot": {
+      "vendor": "binance",
+      "market": "spot",
+      "id_semantics": "venue exchange symbol exactly as returned by exchangeInfo, e.g. BTCUSDT"
+    },
+    "binance_usdm": {
+      "vendor": "binance",
+      "market": "usdm_futures",
+      "id_semantics": "venue contract symbol, e.g. BTCUSDT (PERPETUAL) or BTCUSDT_260926 (delivery)"
+    },
+    "coingecko": {
+      "vendor": "coingecko",
+      "market": null,
+      "id_semantics": "coin id slug, e.g. bitcoin"
+    }
+  },
+  "assets": [
+    {"slug": "bitcoin", "symbol": "BTC", "display_name": "Bitcoin", "asset_kind": "coin"},
+    {"slug": "xbt", "symbol": "XBT", "display_name": "XBT (alias placeholder, must never be created)", "asset_kind": "alias_placeholder"},
+    {"slug": "ethereum", "symbol": "ETH", "display_name": "Ether", "asset_kind": "coin"},
+    {"slug": "wrapped-ether", "symbol": "WETH", "display_name": "Wrapped Ether", "asset_kind": "token", "wraps_asset_slug": "ethereum"},
+    {"slug": "tether-usd", "symbol": "USDT", "display_name": "Tether USD", "asset_kind": "token"},
+    {"slug": "hivemapper", "symbol": "HONEY", "display_name": "Hivemapper", "asset_kind": "token"},
+    {"slug": "honey-alt", "symbol": "HONEY", "display_name": "Honey (distinct asset sharing the HONEY symbol)", "asset_kind": "token"}
+  ],
+  "chains": [
+    {"slug": "ethereum", "namespace": "eip155", "reference": "1", "address_rule": "lowercase hex with 0x prefix, case-insensitive input"},
+    {"slug": "arbitrum-one", "namespace": "eip155", "reference": "42161", "address_rule": "lowercase hex with 0x prefix, case-insensitive input"}
+  ],
+  "tokens": [
+    {
+      "asset_slug": "wrapped-ether",
+      "chain_slug": "ethereum",
+      "normalized_address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      "decimals": 18,
+      "wrapped": true
+    },
+    {
+      "asset_slug": "wrapped-ether",
+      "chain_slug": "arbitrum-one",
+      "normalized_address": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+      "decimals": 18,
+      "wrapped": true
+    }
+  ],
+  "instruments": [
+    {
+      "instrument_key": {"venue": "binance", "provider_symbol": "BTCUSDT", "kind": "spot"},
+      "market": "spot",
+      "base_asset_slug": "bitcoin",
+      "quote_asset_slug": "tether-usd",
+      "settlement_asset_slug": null
+    },
+    {
+      "instrument_key": {"venue": "binance", "provider_symbol": "BTCUSDT", "kind": "perpetual"},
+      "market": "usdm_futures",
+      "base_asset_slug": "bitcoin",
+      "quote_asset_slug": "tether-usd",
+      "settlement_asset_slug": "tether-usd"
+    }
+  ],
+  "provider_mappings": [
+    {"provider": "binance_spot", "object_type": "instrument", "provider_id": "BTCUSDT", "target": {"object_type": "instrument", "venue": "binance", "provider_symbol": "BTCUSDT", "kind": "spot"}},
+    {"provider": "binance_usdm", "object_type": "instrument", "provider_id": "BTCUSDT", "target": {"object_type": "instrument", "venue": "binance", "provider_symbol": "BTCUSDT", "kind": "perpetual"}},
+    {"provider": "coingecko", "object_type": "asset", "provider_id": "bitcoin", "target": {"object_type": "asset", "slug": "bitcoin"}},
+    {"provider": "coingecko", "object_type": "asset", "provider_id": "ethereum", "target": {"object_type": "asset", "slug": "ethereum"}},
+    {"provider": "coingecko", "object_type": "asset", "provider_id": "weth", "target": {"object_type": "asset", "slug": "wrapped-ether"}},
+    {"provider": "coingecko", "object_type": "asset", "provider_id": "tether", "target": {"object_type": "asset", "slug": "tether-usd"}}
+  ],
+  "symbol_aliases": [
+    {"symbol": "XBT", "target_asset_slug": "bitcoin", "reason": "ISO 4217-style historical ticker for bitcoin; an alias, never a distinct asset"}
+  ],
+  "resolution_cases": [
+    {
+      "case_id": "binance_spot_btcusdt",
+      "input": {"provider": "binance_spot", "object_type": "instrument", "provider_id": "BTCUSDT"},
+      "expected": {"status": "resolved", "object_type": "instrument", "venue": "binance", "provider_symbol": "BTCUSDT", "kind": "spot", "base_asset_slug": "bitcoin", "quote_asset_slug": "tether-usd"}
+    },
+    {
+      "case_id": "binance_usdm_btcusdt_perpetual",
+      "input": {"provider": "binance_usdm", "object_type": "instrument", "provider_id": "BTCUSDT"},
+      "expected": {"status": "resolved", "object_type": "instrument", "venue": "binance", "provider_symbol": "BTCUSDT", "kind": "perpetual", "base_asset_slug": "bitcoin", "quote_asset_slug": "tether-usd", "settlement_asset_slug": "tether-usd"}
+    },
+    {
+      "case_id": "binance_symbol_without_market_namespace",
+      "input": {"provider": "binance", "object_type": "instrument", "provider_id": "BTCUSDT"},
+      "expected": {"status": "unresolved", "reason": "provider namespace must include the market (binance_spot vs binance_usdm); the raw symbol BTCUSDT exists on both markets with different semantics"}
+    },
+    {
+      "case_id": "coingecko_bitcoin",
+      "input": {"provider": "coingecko", "object_type": "asset", "provider_id": "bitcoin"},
+      "expected": {"status": "resolved", "object_type": "asset", "slug": "bitcoin"}
+    },
+    {
+      "case_id": "coingecko_weth_is_not_eth",
+      "input": {"provider": "coingecko", "object_type": "asset", "provider_id": "weth"},
+      "expected": {"status": "resolved", "object_type": "asset", "slug": "wrapped-ether", "distinct_from": "ethereum"}
+    },
+    {
+      "case_id": "weth_token_on_ethereum",
+      "input": {"chain_slug": "ethereum", "normalized_address": "0xC02AAA39B223FE8D0A0E5C4F27EAD9083C756CC2"},
+      "expected": {"status": "resolved", "object_type": "token", "asset_slug": "wrapped-ether", "chain_slug": "ethereum", "normalized_address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"}
+    },
+    {
+      "case_id": "weth_token_on_arbitrum_same_asset",
+      "input": {"chain_slug": "arbitrum-one", "normalized_address": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"},
+      "expected": {"status": "resolved", "object_type": "token", "asset_slug": "wrapped-ether", "chain_slug": "arbitrum-one", "same_asset_as_case": "weth_token_on_ethereum"}
+    },
+    {
+      "case_id": "xbt_alias_resolves_to_bitcoin",
+      "input": {"symbol": "XBT"},
+      "expected": {"status": "resolved_via_alias", "object_type": "asset", "slug": "bitcoin", "must_not_create_asset": "xbt"}
+    },
+    {
+      "case_id": "same_symbol_honey_ambiguous",
+      "input": {"symbol": "HONEY"},
+      "expected": {"status": "unresolved", "reason": "two canonical assets share symbol HONEY; symbol-only lookup must return ambiguity, never a ranked pick", "candidates": ["hivemapper", "honey-alt"]}
+    },
+    {
+      "case_id": "symbol_only_btc_not_authority",
+      "input": {"symbol": "BTC"},
+      "expected": {"status": "search_hint_only", "reason": "symbols are search hints; identity requires a provider mapping, chain+address, or manual verification"}
+    },
+    {
+      "case_id": "unknown_token_address",
+      "input": {"chain_slug": "ethereum", "normalized_address": "0x000000000000000000000000000000000000dEaD"},
+      "expected": {"status": "unresolved", "reason": "no token row matches; never create an asset or token by guess from the address alone"}
+    }
+  ],
+  "utc_candle_rules": {
+    "timezone": "UTC",
+    "no_exchange_calendar": "crypto trades 24/7; XNYS session logic must never gate crypto collection or freshness",
+    "interval_open_time_modulo_ms": {"1h": 3600000, "4h": 14400000, "1d": 86400000},
+    "closed_candle_definition": "a candle is closed/final only when its close_time is strictly in the past; the current forming candle must be excluded from history persistence",
+    "alignment_source": "Binance klines are already UTC-aligned; never re-align to local or exchange timezone"
+  },
+  "volume_rules": {
+    "kline_base_volume": "column 5 is base-asset volume accumulated within that single candle window",
+    "kline_quote_volume": "column 7 is quote-asset volume for the same window",
+    "taker_buy_volume": "columns 9/10 are the taker-buy subset of base/quote volume; taker_buy_base <= base volume must hold",
+    "ticker_24h_volume": "ticker/24hr volume is a rolling 24h cumulative figure; it must never be summed across polls",
+    "perpetual_open_interest": "openInterest is a point-in-time stock (contracts outstanding), not a flow; sumOpenInterest in statistics is the venue aggregate at that timestamp"
+  },
+  "display_labels": {
+    "binance_btcusdt_spot": "BTC/USDT · Binance · Spot",
+    "binance_btcusdt_perpetual": "BTC/USDT · Binance · Perpetual",
+    "asset_bitcoin": "BTC · Bitcoin",
+    "asset_weth": "WETH · Wrapped Ether"
+  }
+}

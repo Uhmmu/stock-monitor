@@ -1,0 +1,23 @@
+[
+ {
+  "symbol": "BTCUSDT",
+  "sumOpenInterest": "106830.48000000",
+  "sumOpenInterestValue": "8434352268.35251000",
+  "CMCCirculatingSupply": "20074734.00000000",
+  "timestamp": 1787662800000
+ },
+ {
+  "symbol": "BTCUSDT",
+  "sumOpenInterest": "108067.29700000",
+  "sumOpenInterestValue": "8495656520.00650000",
+  "CMCCirculatingSupply": "20074734.00000000",
+  "timestamp": 1787666400000
+ },
+ {
+  "symbol": "BTCUSDT",
+  "sumOpenInterest": "107946.41200000",
+  "sumOpenInterestValue": "8549531944.18856600",
+  "CMCCirculatingSupply": "20074734.00000000",
+  "timestamp": 1787670000000
+ }
+]
