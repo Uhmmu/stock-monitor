@@ -207,6 +207,7 @@ function NavIcon({name}:{name:string}) {
     holdings:<><path d="M3 7h18v13H3z"/><path d="M3 7l3-4h12l3 4"/><path d="M9 11a3 3 0 0 0 6 0"/></>,
     discovery:<><circle cx="12" cy="12" r="8"/><path d="m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9z"/><circle cx="12" cy="12" r="1"/></>,
     options:<><path d="M3 12h18"/><path d="M4 17c2.5 0 3.5-10 6-10s3.5 10 6 10 3.5-5 4-5"/><circle cx="12" cy="12" r="2"/></>,
+    crypto:<><circle cx="12" cy="12" r="9"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7"/><path d="M9.5 12l2.5 2.5 2.5-2.5"/></>,
     ai:<><path d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 9h8M8 13h5"/></>,
     memory:<><path d="M8 5a4 4 0 0 1 7-2 4 4 0 0 1 4 4 4 4 0 0 1 1 7 4 4 0 0 1-5 6l-3 2-3-2a4 4 0 0 1-5-6 4 4 0 0 1 1-7 4 4 0 0 1 3-2z"/><path d="M9 9h6M9 13h4"/></>,
     decisions:<><path d="M5 3h14v18H5z"/><path d="m8 8 2 2 4-4M8 15h8"/></>,
@@ -472,7 +473,7 @@ export default function App({ appleDesign = false, betaDesign = false }: { apple
   const [demoMode,setDemoMode] = useState(previewRequested)
   const [authUser,setAuthUser] = useState<{username:string;role:string}|null>(()=>previewRequested?{username:'访客',role:'viewer'}:null)
   const [authLoading,setAuthLoading] = useState(()=>!!(localStorage.getItem('auth_token')||sessionStorage.getItem('auth_token')))
-  const [tab,setTab] = useState(()=>{const path=appPath();return normalizeTab(path.startsWith('/admin/integrations/ibkr')?'ibkr-test':path==='/ibkr'?'ibkr':path.startsWith('/ai')?'ai':path.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')})
+  const [tab,setTab] = useState(()=>{const path=appPath();return normalizeTab(path.startsWith('/admin/integrations/ibkr')?'ibkr-test':path==='/ibkr'?'ibkr':path.startsWith('/crypto')?'crypto':path.startsWith('/ai')?'ai':path.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview')})
   const [mobileNavOpen,setMobileNavOpen] = useState(false)
   const navStorageKey = 'apple_nav_collapsed'
   const [navCollapsed,setNavCollapsed] = useState(()=>appleDesign&&!betaDesign&&localStorage.getItem(navStorageKey)==='1')
@@ -515,7 +516,7 @@ export default function App({ appleDesign = false, betaDesign = false }: { apple
   },[])
 
   useEffect(()=>{
-    const onPop=()=>{const path=appPath();setTab(normalizeTab(path.startsWith('/admin/integrations/ibkr')?'ibkr-test':path==='/ibkr'?'ibkr':path.startsWith('/ai')?'ai':path.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview'))}
+    const onPop=()=>{const path=appPath();setTab(normalizeTab(path.startsWith('/admin/integrations/ibkr')?'ibkr-test':path==='/ibkr'?'ibkr':path.startsWith('/crypto')?'crypto':path.startsWith('/ai')?'ai':path.startsWith('/investment-decisions')?'decisions':new URLSearchParams(window.location.search).get('tab')||'overview'))}
     window.addEventListener('popstate',onPop)
     return ()=>window.removeEventListener('popstate',onPop)
   },[])
@@ -534,7 +535,7 @@ export default function App({ appleDesign = false, betaDesign = false }: { apple
   ]
   const betaNavGroups=desktopNavGroups.map(group=>group.title==='市场情报'?{...group,items:[['alerts','异动中心'] as [string,string],...group.items]}:group.title==='公司分析'?{...group,items:[...group.items,['sec','SEC 公告'] as [string,string]]}:group)
   const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['crypto','加密研究'],['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['industry','行业板块检测'],['financials','财务报表'],['crossmodel','估值'],['compare','个股横向对比'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
-  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);setNavFlyout(null);setNavFlyoutExit(null);if(key==='ibkr-test')window.history.pushState({},'',appHref('/admin/integrations/ibkr'));else if(key==='ibkr')window.history.pushState({},'',appHref('/ibkr'));else if(key==='ai'){if(!appPath().startsWith('/ai'))window.history.pushState({},'',appHref('/ai/new'))}else if(key==='decisions')window.history.pushState({},'',appHref('/investment-decisions'));else window.history.pushState({},'',appHref(`/?tab=${key}`))}
+  const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);setNavFlyout(null);setNavFlyoutExit(null);if(key==='ibkr-test')window.history.pushState({},'',appHref('/admin/integrations/ibkr'));else if(key==='ibkr')window.history.pushState({},'',appHref('/ibkr'));else if(key==='crypto')window.history.pushState({},'',appHref('/crypto'));else if(key==='ai'){if(!appPath().startsWith('/ai'))window.history.pushState({},'',appHref('/ai/new'))}else if(key==='decisions')window.history.pushState({},'',appHref('/investment-decisions'));else window.history.pushState({},'',appHref(`/?tab=${key}`))}
   const keepNavFlyout=()=>{if(navFlyoutTimer.current)clearTimeout(navFlyoutTimer.current);setNavFlyout(value=>value?.closing?{...value,closing:false}:value)}
   const closeNavFlyout=()=>{keepNavFlyout();navFlyoutTimer.current=setTimeout(()=>{setNavFlyout(value=>value?{...value,closing:true}:value);navFlyoutTimer.current=setTimeout(()=>setNavFlyout(null),300)},120)}
   const showNavFlyout=(element:HTMLElement,key:string,label:string)=>{if(!navCollapsed)return;keepNavFlyout();const rect=element.getBoundingClientRect();if(navFlyout&&navFlyout.key!==key){if(navFlyoutExitTimer.current)clearTimeout(navFlyoutExitTimer.current);setNavFlyoutExit({...navFlyout,closing:true});navFlyoutExitTimer.current=setTimeout(()=>setNavFlyoutExit(null),300)}setNavFlyout({key,label,left:rect.left,top:rect.top,closing:false})}

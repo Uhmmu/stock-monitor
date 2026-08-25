@@ -298,8 +298,9 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
 
   const selectInstrument = (id: number) => {
     setInstrumentId(id)
+    // dedicated /crypto route: instrument selection stays in the query string
     const search = new URLSearchParams(window.location.search)
-    search.set('tab', 'crypto')
+    search.delete('tab')
     search.set('instrument', String(id))
     window.history.replaceState({}, '', `${window.location.pathname}?${search.toString()}`)
   }

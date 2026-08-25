@@ -67,27 +67,34 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    # Self-heal after OOM kills (the api process previously died silently);
+    # the cap keeps one leaking role from starving postgres/redis on the 4.8G host.
+    restart: unless-stopped
+    mem_limit: 1536m
 
   worker:
     <<: *backend
+    restart: unless-stopped
     environment:
       OPENBLAS_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       NUMEXPR_NUM_THREADS: "1"
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 -Q celery,ibkr,crypto_public
     healthcheck:
       disable: true
 
   sec-worker:
     <<: *backend
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 --prefetch-multiplier=1 -Q ibkr,sec_heavy -n sec@%h
+    restart: unless-stopped
     healthcheck:
       disable: true
 
   beat:
     <<: *backend
     command: celery -A app.tasks.celery_app beat --loglevel=info
+    restart: unless-stopped
     healthcheck:
       disable: true
 
