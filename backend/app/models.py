@@ -2701,6 +2701,270 @@ class MoodValidationResult(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# ---------------------------------------------------------------------------
+# Crypto canonical identity (crypto/quant program Phase 1).
+#
+# Deliberately separate from equity `Security`: one economic asset can have
+# many chain deployments, protocols and venue products, and crypto symbols
+# are never unique (see backend/tests/fixtures/crypto/identity_cases.json and
+# docs/plans/crypto-quant-architecture-assessment.md ADR-02). Provider
+# namespaces carry the market (binance_spot vs binance_usdm); a raw venue
+# symbol such as BTCUSDT is ambiguous across markets by design.
+# ---------------------------------------------------------------------------
+
+
+class CryptoAsset(Base):
+    """Canonical economic crypto asset; BTC and WBTC are distinct rows."""
+
+    __tablename__ = "crypto_assets"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_crypto_assets_slug"),
+        CheckConstraint("asset_kind IN ('coin', 'token')", name="ck_crypto_assets_kind"),
+        CheckConstraint("status IN ('active', 'inactive', 'delisted')", name="ck_crypto_assets_status"),
+        CheckConstraint("id <> wraps_asset_id", name="ck_crypto_assets_no_self_wrap"),
+        Index("ix_crypto_assets_symbol", "symbol"),
+        Index("ix_crypto_assets_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str] = mapped_column(String(32))
+    display_name: Mapped[str] = mapped_column(String(256))
+    asset_kind: Mapped[str] = mapped_column(String(16), default="coin")
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    wraps_asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crypto_assets.id", ondelete="SET NULL"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CryptoSymbolAlias(Base):
+    """Historical/alternative ticker explicitly linked to one asset (XBT -> bitcoin)."""
+
+    __tablename__ = "crypto_symbol_aliases"
+    __table_args__ = (UniqueConstraint("symbol", name="uq_crypto_symbol_aliases_symbol"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    asset_id: Mapped[int] = mapped_column(ForeignKey("crypto_assets.id", ondelete="CASCADE"), index=True)
+    reason: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CryptoProviderMapping(Base):
+    """Vendor namespace id mapped to exactly one typed crypto object.
+
+    The single-target and type-match checks enforce exactly one non-null
+    target column matching ``object_type``; provider namespaces carry the
+    market (binance_spot vs binance_usdm). Retargeting an existing mapping
+    is never implicit; use the explicit service path.
+    """
+
+    __tablename__ = "crypto_provider_mappings"
+    __table_args__ = (
+        UniqueConstraint("provider", "object_type", "provider_id", name="uq_crypto_provider_mappings_key"),
+        CheckConstraint(
+            "object_type IN ('asset', 'token', 'protocol', 'instrument')",
+            name="ck_crypto_provider_mappings_object_type",
+        ),
+        CheckConstraint(
+            "(CASE WHEN asset_id IS NULL THEN 0 ELSE 1 END)"
+            " + (CASE WHEN token_id IS NULL THEN 0 ELSE 1 END)"
+            " + (CASE WHEN protocol_id IS NULL THEN 0 ELSE 1 END)"
+            " + (CASE WHEN instrument_id IS NULL THEN 0 ELSE 1 END) = 1",
+            name="ck_crypto_provider_mappings_single_target",
+        ),
+        CheckConstraint(
+            "((object_type = 'asset') = (asset_id IS NOT NULL))"
+            " AND ((object_type = 'token') = (token_id IS NOT NULL))"
+            " AND ((object_type = 'protocol') = (protocol_id IS NOT NULL))"
+            " AND ((object_type = 'instrument') = (instrument_id IS NOT NULL))",
+            name="ck_crypto_provider_mappings_type_match",
+        ),
+        Index("ix_crypto_provider_mappings_asset", "asset_id"),
+        Index("ix_crypto_provider_mappings_token", "token_id"),
+        Index("ix_crypto_provider_mappings_protocol", "protocol_id"),
+        Index("ix_crypto_provider_mappings_instrument", "instrument_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    object_type: Mapped[str] = mapped_column(String(16))
+    provider_id: Mapped[str] = mapped_column(String(128))
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("crypto_assets.id", ondelete="CASCADE"))
+    token_id: Mapped[int | None] = mapped_column(ForeignKey("crypto_tokens.id", ondelete="CASCADE"))
+    protocol_id: Mapped[int | None] = mapped_column(ForeignKey("crypto_protocols.id", ondelete="CASCADE"))
+    instrument_id: Mapped[int | None] = mapped_column(ForeignKey("crypto_instruments.id", ondelete="CASCADE"))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    method: Mapped[str] = mapped_column(String(32), default="manual")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    valid_from: Mapped[date | None] = mapped_column(Date)
+    valid_to: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Blockchain(Base):
+    """Chain identity with a CAIP-2-style namespace/reference and native asset."""
+
+    __tablename__ = "blockchains"
+    __table_args__ = (
+        UniqueConstraint("namespace", "reference", name="uq_blockchains_namespace_reference"),
+        CheckConstraint("status IN ('active', 'inactive')", name="ck_blockchains_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(128))
+    namespace: Mapped[str] = mapped_column(String(32))
+    reference: Mapped[str] = mapped_column(String(128))
+    native_asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crypto_assets.id", ondelete="SET NULL"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CryptoToken(Base):
+    """One deployment of an asset on a chain; native coins have no token row.
+
+    Addresses are stored normalized per chain rule (EVM chains lowercase).
+    Wrapped relations live on the asset; bridged origin links token rows.
+    """
+
+    __tablename__ = "crypto_tokens"
+    __table_args__ = (
+        UniqueConstraint("chain_id", "normalized_address", name="uq_crypto_tokens_chain_address"),
+        CheckConstraint(
+            "verification_status IN ('verified', 'unverified', 'mismatch')",
+            name="ck_crypto_tokens_verification",
+        ),
+        Index("ix_crypto_tokens_asset", "asset_id"),
+        Index("ix_crypto_tokens_chain", "chain_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("crypto_assets.id", ondelete="CASCADE"))
+    chain_id: Mapped[int] = mapped_column(ForeignKey("blockchains.id", ondelete="CASCADE"))
+    normalized_address: Mapped[str] = mapped_column(String(128))
+    decimals: Mapped[int | None] = mapped_column(Integer)
+    bridged_from_token_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crypto_tokens.id", ondelete="SET NULL"), index=True
+    )
+    verification_status: Mapped[str] = mapped_column(String(16), default="unverified")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CryptoProtocol(Base):
+    """Protocol/project identity separate from any tradable token."""
+
+    __tablename__ = "crypto_protocols"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_crypto_protocols_slug"),
+        CheckConstraint("status IN ('active', 'inactive')", name="ck_crypto_protocols_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(256))
+    category: Mapped[str | None] = mapped_column(String(64), index=True)
+    website: Mapped[str | None] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CryptoProtocolAsset(Base):
+    """Many-to-many protocol/asset role such as governance or fee token."""
+
+    __tablename__ = "crypto_protocol_assets"
+    __table_args__ = (
+        UniqueConstraint("protocol_id", "asset_id", "role", name="uq_crypto_protocol_assets_role"),
+        CheckConstraint("role <> ''", name="ck_crypto_protocol_assets_role_nonempty"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    protocol_id: Mapped[int] = mapped_column(ForeignKey("crypto_protocols.id", ondelete="CASCADE"), index=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("crypto_assets.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CryptoInstrument(Base):
+    """Tradable venue product; BTCUSDT spot and perpetual are distinct rows.
+
+    Unique identity is ``(venue, provider_symbol, kind)`` — the WP 0.3
+    fixture proves ``(venue, provider_symbol)`` alone collides across
+    markets. Inactive/delisted rows are preserved for historical identity.
+    """
+
+    __tablename__ = "crypto_instruments"
+    __table_args__ = (
+        UniqueConstraint("venue", "provider_symbol", "kind", name="uq_crypto_instruments_venue_symbol_kind"),
+        CheckConstraint(
+            "kind IN ('spot', 'perpetual', 'future')",
+            name="ck_crypto_instruments_kind",
+        ),
+        CheckConstraint(
+            "market IN ('spot', 'usdm_futures', 'coinm_futures')",
+            name="ck_crypto_instruments_market",
+        ),
+        CheckConstraint(
+            "status IN ('trading', 'halted', 'delisted', 'inactive')",
+            name="ck_crypto_instruments_status",
+        ),
+        CheckConstraint("calendar = 'utc'", name="ck_crypto_instruments_utc_calendar"),
+        Index(
+            "ix_crypto_instruments_assets_kind_status",
+            "base_asset_id",
+            "quote_asset_id",
+            "kind",
+            "status",
+        ),
+        Index("ix_crypto_instruments_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    venue: Mapped[str] = mapped_column(String(32))
+    market: Mapped[str] = mapped_column(String(16))
+    provider_symbol: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(16))
+    base_asset_id: Mapped[int] = mapped_column(ForeignKey("crypto_assets.id", ondelete="RESTRICT"))
+    quote_asset_id: Mapped[int] = mapped_column(ForeignKey("crypto_assets.id", ondelete="RESTRICT"))
+    settlement_asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crypto_assets.id", ondelete="SET NULL"), index=True
+    )
+    contract_size: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    tick_size: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    step_size: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    min_notional: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    price_precision: Mapped[int | None] = mapped_column(Integer)
+    quantity_precision: Mapped[int | None] = mapped_column(Integer)
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="trading")
+    listing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delisting_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    calendar: Mapped[str] = mapped_column(String(8), default="utc")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 # Register integration-owned tables in the same metadata whenever core models
 # are imported (tests, application runtime, and Alembic must see one graph).
 from app.integrations.ibkr import db_models as _ibkr_db_models  # noqa: E402,F401
