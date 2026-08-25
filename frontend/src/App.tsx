@@ -23,6 +23,7 @@ import { MacroDataSourcePanel, MacroFundamentals } from './MacroFundamentals'
 import { StockCompare } from './StockCompare'
 import { IndustryPulse } from './IndustryPulse'
 import { OptionsPage } from './Options'
+import { CryptoResearchPage } from './CryptoResearch'
 import { AIMoodConsole, MoodReportSection } from './AIMoodConsole'
 import { MoodValidationLab } from './MoodValidationLab'
 import { ThemeToggle } from './ThemeToggle'
@@ -522,17 +523,17 @@ export default function App({ appleDesign = false, betaDesign = false }: { apple
   if(authLoading) return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',color:'var(--text-muted)'}}>加载中…</div>
   if(!authUser) return <AuthGate setToken={setToken} setAuthUser={setAuthUser} onPreview={()=>{setDemoMode(true);setAuthUser({username:'访客',role:'viewer'})}}/>
 
-  const mobileTabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['mood','AI 情绪台'],['mood-lab','Mood Lab'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析'],['reports','报告中心'],['journal','交易日志'],['settings','管理设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
+  const mobileTabs = [['overview','总览'],['watchlist','自选股'],['holdings','持仓'],['ibkr','IBKR'],['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['crypto','加密研究'],['mood','AI 情绪台'],['mood-lab','Mood Lab'],['alerts','异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析'],['reports','报告中心'],['journal','交易日志'],['settings','管理设置'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试']]:[])]
   const desktopNavGroups:NavigationGroup[] = [
     {title:'概览与资产',items:[['overview','总览'],['watchlist','自选股'],['holdings','持仓']]},
-    {title:'研究与决策',items:[['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究']]},
+    {title:'研究与决策',items:[['ai','Chat'],['decisions','投资决策'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['crypto','加密研究']]},
     {title:'市场情报',items:[['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['news','新闻中心'],['macro','美国宏观'],['industry','行业板块']]},
     {title:'公司分析',items:[['fundamentals','基本面'],['financials','财务报表'],['crossmodel','估值'],['compare','个股对比'],['technical','技术分析']]},
     {title:'记录与系统',items:[['reports','报告中心'],['journal','交易日志'],['settings','管理设置']]},
     {title:'IBKR',items:[['ibkr','IBKR'],...(authUser.role==='admin'?[['ibkr-test','IBKR 测试'] as [string,string]]:[])]},
   ]
   const betaNavGroups=desktopNavGroups.map(group=>group.title==='市场情报'?{...group,items:[['alerts','异动中心'] as [string,string],...group.items]}:group.title==='公司分析'?{...group,items:[...group.items,['sec','SEC 公告'] as [string,string]]}:group)
-  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['industry','行业板块检测'],['financials','财务报表'],['crossmodel','估值'],['compare','个股横向对比'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
+  const tabTitle = tab==='overview'?'投资组合雷达':[['watchlist','自选股管理'],['holdings','持仓'],['ibkr','IBKR 账户'],['ai','Chat'],['decisions','投资决策日志'],['calendar','投资日历'],['discovery','机会发现'],['options','期权研究'],['crypto','加密研究'],['mood','AI 情绪台'],['mood-lab','Mood 验证实验室'],['alerts','价格异动中心'],['news','新闻中心'],['fundamentals','基本面'],['macro','美国宏观'],['industry','行业板块检测'],['financials','财务报表'],['crossmodel','估值'],['compare','个股横向对比'],['technical','技术分析'],['sec','SEC 官方公告'],['reports','智能报告'],['journal','交易日志'],['settings','管理设置'],['ibkr-test','IBKR 集成测试']].find(x=>x[0]===tab)?.[1]
   const selectTab=(key:string)=>{setTab(key);setMobileNavOpen(false);setNavFlyout(null);setNavFlyoutExit(null);if(key==='ibkr-test')window.history.pushState({},'',appHref('/admin/integrations/ibkr'));else if(key==='ibkr')window.history.pushState({},'',appHref('/ibkr'));else if(key==='ai'){if(!appPath().startsWith('/ai'))window.history.pushState({},'',appHref('/ai/new'))}else if(key==='decisions')window.history.pushState({},'',appHref('/investment-decisions'));else window.history.pushState({},'',appHref(`/?tab=${key}`))}
   const keepNavFlyout=()=>{if(navFlyoutTimer.current)clearTimeout(navFlyoutTimer.current);setNavFlyout(value=>value?.closing?{...value,closing:false}:value)}
   const closeNavFlyout=()=>{keepNavFlyout();navFlyoutTimer.current=setTimeout(()=>{setNavFlyout(value=>value?{...value,closing:true}:value);navFlyoutTimer.current=setTimeout(()=>setNavFlyout(null),300)},120)}
@@ -579,6 +580,7 @@ export default function App({ appleDesign = false, betaDesign = false }: { apple
       {tab==='calendar'&&<InvestmentCalendar/>}
       {tab==='discovery'&&<OpportunityDiscovery/>}
       {tab==='options'&&<OptionsPage enabled={!demoMode}/>}
+      {tab==='crypto'&&<CryptoResearchPage enabled={!demoMode}/>}
       {tab==='mood'&&<AIMoodConsole enabled={!demoMode} onAskAI={()=>{setTab('ai');window.history.pushState({},'',appHref('/ai/new?context=mood'));window.dispatchEvent(new PopStateEvent('popstate'))}}/>}
       {tab==='mood-lab'&&<MoodValidationLab enabled={!demoMode} isAdmin={authUser.role==='admin'}/>}
       {tab==='alerts'&&<div className="investigations">{groupInvestigations(investigations.data).map(group=><article key={group.key}><div><span className={`status ${group.status}`}>{group.status}</span><h2>{group.ticker} 异动调查{group.items.length>1&&<em className="group-count"> ×{group.items.length}</em>}</h2><p>{formatDate(group.started_at)} — {formatDate(group.ends_at)}</p></div><strong>{group.news_count}<small> 条新闻线索</small></strong>{group.last_error&&<p className="error">{group.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}

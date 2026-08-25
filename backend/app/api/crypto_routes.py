@@ -444,3 +444,23 @@ def latest_market(
         db, instrument=instrument, interval=interval,
         stale_seconds=settings.crypto_latest_stale_seconds,
     )
+
+
+@router.get("/market/technical")
+def crypto_technical(
+    instrument_id: int,
+    interval: str = Query(default="1d", pattern="^(1h|4h|1d)$"),
+    db: Session = Depends(get_db),
+):
+    """Deterministic indicators over persisted closed candles; gaps stay explicit."""
+    from app.services.crypto import technical as crypto_technical_service
+
+    instrument = db.get(CryptoInstrument, instrument_id)
+    if instrument is None:
+        raise HTTPException(status_code=404, detail="instrument not found")
+    payload = crypto_technical_service.crypto_technical_payload(
+        db, instrument_id=instrument_id, interval=interval
+    )
+    if payload.get("status") == "invalid":
+        raise HTTPException(status_code=422, detail=payload["reason"])
+    return payload
