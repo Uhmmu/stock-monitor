@@ -193,8 +193,9 @@ class Settings(BaseSettings):
     crypto_binance_max_retries: int = 2
     crypto_public_enabled: bool = False
     # Bounded collection universe: only these Binance symbols are synced as
-    # instruments/candles (spot markets). Comma-separated venue symbols.
+    # instruments/candles. Comma-separated venue symbols per exact market.
     crypto_spot_universe: str = "BTCUSDT,ETHUSDT"
+    crypto_usdm_universe: str = "BTCUSDT,ETHUSDT"
     # Candle backfill window and intervals for the bounded universe.
     crypto_candle_history_days: int = 365
     crypto_candle_sync_intervals: str = "1h,4h,1d"

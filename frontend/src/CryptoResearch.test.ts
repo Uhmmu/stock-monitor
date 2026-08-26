@@ -3,12 +3,17 @@ import {
   cryptoIntervalLabel,
   formatCryptoAge,
   formatCryptoNumber,
+  formatCryptoRate,
   formatUtcTime,
+  latestDerivativeValue,
   latestSourceLabel,
   parseInstrumentFromSearch,
   prepareCryptoCandles,
+  regimeLabel,
+  sparklineSegments,
   technicalStatusLabel,
   type CryptoCandleRow,
+  type CryptoDerivativeMetric,
 } from './CryptoResearch'
 
 const closed = (openTimeMs: number, overrides: Partial<CryptoCandleRow> = {}): CryptoCandleRow => ({
@@ -92,5 +97,26 @@ describe('展示与缺口文案', () => {
   it('UTC 时间戳格式化', () => {
     expect(formatUtcTime(1_787_662_800_000)).toBe('2026-08-25 13:00 UTC')
     expect(formatUtcTime(null)).toBe('未知')
+  })
+
+  it('衍生品比率与 regime 文案不夸大语义', () => {
+    expect(formatCryptoRate('0.0005')).toBe('0.050%')
+    expect(regimeLabel('BALANCED')).toBe('未触发联合阈值')
+    expect(regimeLabel('INSUFFICIENT_DATA')).toBe('数据不足')
+  })
+
+  it('sparkline 保留缺口，不连接缺失数据', () => {
+    const segments = sparklineSegments(['1', '2', null, '3', '4'])
+    expect(segments).toHaveLength(2)
+  })
+
+  it('卡片读取各指标最后一个非空值，不把供应商一小时错位显示成缺失', () => {
+    const metrics = [
+      { basis_rate: '0.001', open_interest_usd: '100', taker_buy_sell_ratio: '1.2' },
+      { basis_rate: null, open_interest_usd: '110', taker_buy_sell_ratio: null },
+    ] as CryptoDerivativeMetric[]
+    expect(latestDerivativeValue(metrics, 'basis_rate')).toBe('0.001')
+    expect(latestDerivativeValue(metrics, 'open_interest_usd')).toBe('110')
+    expect(latestDerivativeValue(metrics, 'taker_buy_sell_ratio')).toBe('1.2')
   })
 })

@@ -7,6 +7,8 @@ IDs), never symbol-based resolution authority.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, or_, select
@@ -335,6 +337,7 @@ class MarketStatusOut(BaseModel):
 def read_market_candles(
     instrument_id: int,
     interval: str = Query(pattern="^(1h|4h|1d)$"),
+    price_type: str = Query(default="trade", pattern="^(trade|mark|index|premium)$"),
     start_time_ms: int | None = Query(default=None, ge=0),
     end_time_ms: int | None = Query(default=None, ge=0),
     limit: int = Query(default=500, ge=1, le=5000),
@@ -344,6 +347,8 @@ def read_market_candles(
     instrument = db.get(CryptoInstrument, instrument_id)
     if instrument is None:
         raise HTTPException(status_code=404, detail="instrument not found")
+    if price_type != "trade" and instrument.kind != "perpetual":
+        raise HTTPException(status_code=422, detail="non-trade price types require a perpetual instrument")
     rows = candle_service.read_candles(
         db,
         instrument_id=instrument_id,
@@ -351,8 +356,11 @@ def read_market_candles(
         start_time_ms=start_time_ms,
         end_time_ms=end_time_ms,
         limit=limit,
+        price_type=price_type,
     )
-    coverage = candle_service.candle_coverage(db, instrument_id=instrument_id, interval=interval)
+    coverage = candle_service.candle_coverage(
+        db, instrument_id=instrument_id, interval=interval, price_type=price_type
+    )
     return CandlesOut(
         instrument_id=instrument_id,
         interval=interval,
@@ -464,3 +472,67 @@ def crypto_technical(
     if payload.get("status") == "invalid":
         raise HTTPException(status_code=422, detail=payload["reason"])
     return payload
+
+
+def _perpetual(db: Session, instrument_id: int) -> CryptoInstrument:
+    instrument = db.get(CryptoInstrument, instrument_id)
+    if instrument is None:
+        raise HTTPException(status_code=404, detail="instrument not found")
+    if instrument.kind != "perpetual" or instrument.market != "usdm_futures":
+        raise HTTPException(status_code=422, detail="USD-M perpetual instrument required")
+    return instrument
+
+
+@router.get("/derivatives")
+def crypto_derivatives(
+    instrument_id: int,
+    interval: str = Query(default="1h", pattern="^1h$"),
+    hours: int = Query(default=168, ge=24, le=720),
+    db: Session = Depends(get_db),
+):
+    """Persisted USD-M facts only; this endpoint never calls Binance."""
+    from app.services.crypto import derivatives
+
+    _perpetual(db, instrument_id)
+    now = datetime.now(UTC)
+    metric_rows = derivatives.read_derivatives_history(
+        db, instrument_id=instrument_id, interval=interval,
+        start_at=now - timedelta(hours=hours), limit=hours + 1,
+    )
+    funding_rows = derivatives.read_funding_history(
+        db, instrument_id=instrument_id,
+        start_at=now - timedelta(days=max(7, hours // 24 + 1)), limit=1000,
+    )
+    metric_payload = derivatives.derivatives_history_payload(metric_rows)
+    funding_payload = derivatives.funding_history_payload(funding_rows)
+    return {
+        "instrument_id": instrument_id,
+        "interval": interval,
+        "metrics": metric_payload["items"],
+        "funding_rates": funding_payload["items"],
+        "coverage": {
+            "metric_count": metric_payload["count"],
+            "funding_count": funding_payload["count"],
+            "metrics": metric_payload["coverage"],
+            "funding": funding_payload["coverage"],
+        },
+        "definitions": derivatives.METRIC_DEFINITIONS,
+    }
+
+
+@router.get("/derivatives/regime")
+def crypto_derivatives_regime(instrument_id: int, db: Session = Depends(get_db)):
+    """Versioned descriptive regime beside Mood; never a trading signal."""
+    from app.services.crypto import derivatives, regime
+
+    _perpetual(db, instrument_id)
+    evaluated_at = datetime.now(UTC)
+    metrics = derivatives.read_derivatives_history(
+        db, instrument_id=instrument_id, interval="1h",
+        start_at=evaluated_at - timedelta(days=9), limit=500,
+    )
+    funding = derivatives.read_funding_history(
+        db, instrument_id=instrument_id,
+        start_at=evaluated_at - timedelta(days=8), limit=100,
+    )
+    return regime.evaluate_regime(metrics, funding, evaluated_at=evaluated_at)

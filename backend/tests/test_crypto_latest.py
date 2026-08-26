@@ -125,6 +125,30 @@ class TestRefresh:
         assert payload["event_time_ms"] is not None
         assert latest_service._health_key("binance_spot") in isolated_redis
 
+    def test_usdm_perpetual_uses_provider_market_name(self, db, isolated_redis):
+        instrument = CryptoInstrument(
+            id=2, venue="binance", market="usdm_futures", provider_symbol="BTCUSDT", kind="perpetual",
+            base_asset_id=1, quote_asset_id=2, filters={},
+        )
+        db.add(instrument)
+        db.commit()
+        calls = []
+
+        class Client:
+            def ticker_24h(self, market, symbol):
+                calls.append((market, symbol))
+                ticker = fake_ticker(symbol)
+                object.__setattr__(ticker, "bid_price", None)
+                object.__setattr__(ticker, "ask_price", None)
+                return ticker
+
+        summary = latest_service.refresh_latest_tickers(db, client=Client(), instruments=[instrument])
+        assert summary.refreshed == 1
+        assert calls == [("usdm", "BTCUSDT")]
+        payload = json.loads(isolated_redis[latest_service._cache_key(2)])
+        assert payload["provider"] == "binance_usdm"
+        assert payload["bid_price"] is None and payload["ask_price"] is None
+
     def test_provider_failure_isolated_per_instrument(self, db):
         second = CryptoInstrument(
             id=2, venue="binance", market="spot", provider_symbol="ETHUSDT", kind="spot",

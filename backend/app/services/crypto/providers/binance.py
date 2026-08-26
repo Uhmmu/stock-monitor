@@ -34,8 +34,17 @@ _MARKET_PATHS: dict[str, dict[str, str]] = {
         "time": "/fapi/v1/time",
         "exchange_info": "/fapi/v1/exchangeInfo",
         "klines": "/fapi/v1/klines",
+        "mark_klines": "/fapi/v1/markPriceKlines",
+        "index_klines": "/fapi/v1/indexPriceKlines",
+        "premium_klines": "/fapi/v1/premiumIndexKlines",
         "ticker_24h": "/fapi/v1/ticker/24hr",
         "book_ticker": "/fapi/v1/ticker/bookTicker",
+        "premium_index": "/fapi/v1/premiumIndex",
+        "funding_rate": "/fapi/v1/fundingRate",
+        "open_interest": "/fapi/v1/openInterest",
+        "open_interest_hist": "/futures/data/openInterestHist",
+        "global_long_short_ratio": "/futures/data/globalLongShortAccountRatio",
+        "taker_long_short_ratio": "/futures/data/takerlongshortRatio",
     },
 }
 
@@ -43,8 +52,14 @@ _STATUS_NORMALIZATION = {
     "TRADING": "trading",
     "BREAK": "halted",
     "PENDING_TRADING": "halted",
+    "PRE_DELIVERING": "halted",
     "SETTLING": "halted",
     "DELIVERING": "halted",
+    "PRE_SETTLE": "halted",
+    "ENACTING": "halted",
+    "ADJUST": "halted",
+    "DELIVERED": "delisted",
+    "EXPIRED": "delisted",
     "CLOSE": "delisted",
     "DELISTED": "delisted",
 }
@@ -111,6 +126,7 @@ class Kline:
     taker_buy_base_volume: Decimal
     taker_buy_quote_volume: Decimal
     received_at: str
+    price_type: str = "trade"
 
     @property
     def closed(self) -> bool:
@@ -124,8 +140,8 @@ class Ticker24h:
     market: str
     symbol: str
     last_price: Decimal
-    bid_price: Decimal
-    ask_price: Decimal
+    bid_price: Decimal | None
+    ask_price: Decimal | None
     high_price: Decimal
     low_price: Decimal
     base_volume: Decimal  # rolling 24h cumulative; never sum across polls
@@ -162,6 +178,7 @@ class ExchangeInfoSymbol:
     onboard_date_ms: int | None = None
     delivery_date_ms: int | None = None
     contract_type: str | None = None
+    contract_size: Decimal | None = None
     filters: dict = field(default_factory=dict)
 
 
@@ -171,6 +188,77 @@ class ExchangeInfo:
     timezone: str
     symbols: list[ExchangeInfoSymbol]
     rate_limits: list[dict]
+
+
+@dataclass(frozen=True)
+class PremiumIndex:
+    market: str
+    symbol: str
+    mark_price: Decimal
+    index_price: Decimal
+    estimated_settle_price: Decimal | None
+    last_funding_rate: Decimal | None
+    interest_rate: Decimal | None
+    next_funding_time_ms: int | None
+    event_time_ms: int | None
+    received_at: str
+
+
+@dataclass(frozen=True)
+class FundingRate:
+    market: str
+    symbol: str
+    funding_time_ms: int
+    funding_rate: Decimal
+    mark_price: Decimal | None
+    rate_type: str | None
+    received_at: str
+
+
+@dataclass(frozen=True)
+class OpenInterest:
+    market: str
+    symbol: str
+    open_interest: Decimal
+    event_time_ms: int
+    received_at: str
+
+
+@dataclass(frozen=True)
+class OpenInterestHistory:
+    market: str
+    symbol: str
+    sum_open_interest: Decimal
+    sum_open_interest_value: Decimal
+    circulating_supply: Decimal | None
+    event_time_ms: int
+    received_at: str
+
+
+@dataclass(frozen=True)
+class GlobalLongShortRatio:
+    market: str
+    symbol: str
+    period: str
+    long_short_ratio: Decimal
+    long_account: Decimal
+    short_account: Decimal
+    event_time_ms: int
+    received_at: str
+
+
+@dataclass(frozen=True)
+class TakerBuySellVolume:
+    market: str
+    symbol: str
+    period: str
+    buy_volume: Decimal
+    sell_volume: Decimal
+    buy_sell_ratio: Decimal | None
+    event_time_ms: int
+    pair: str | None
+    contract_type: str | None
+    received_at: str
 
 
 def _utcnow_iso() -> str:
@@ -183,13 +271,33 @@ def _decimal(value: Any, field_name: str) -> Decimal:
     return Decimal(str(value))
 
 
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    return Decimal(str(value))
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
 def _int_ms(value: Any, field_name: str) -> int:
     if value is None:
         raise BinancePublicError("permanent", f"missing timestamp field {field_name!r} in provider payload")
     return int(value)
 
 
-def parse_kline_row(market: str, symbol: str, interval: str, row: list, received_at: str | None = None) -> Kline:
+def parse_kline_row(
+    market: str,
+    symbol: str,
+    interval: str,
+    row: list,
+    received_at: str | None = None,
+    *,
+    price_type: str = "trade",
+) -> Kline:
     """Parse one 12-column kline row (shape frozen by the WP 0.2 fixtures)."""
     if not isinstance(row, list) or len(row) < 12:
         raise BinancePublicError("permanent", "kline row does not match the documented 12-column shape")
@@ -209,6 +317,7 @@ def parse_kline_row(market: str, symbol: str, interval: str, row: list, received
         taker_buy_base_volume=_decimal(row[9], "takerBuyBaseVolume"),
         taker_buy_quote_volume=_decimal(row[10], "takerBuyQuoteVolume"),
         received_at=received_at or _utcnow_iso(),
+        price_type=price_type,
     )
 
 
@@ -216,9 +325,10 @@ def parse_exchange_info(market: str, payload: dict) -> ExchangeInfo:
     symbols: list[ExchangeInfoSymbol] = []
     for raw in payload.get("symbols", []):
         contract_type = raw.get("contractType")
+        normalized_contract_type = str(contract_type or "").upper()
         if market == "spot":
             kind = "spot"
-        elif contract_type == "PERPETUAL":
+        elif normalized_contract_type == "PERPETUAL":
             kind = "perpetual"
         else:
             kind = "future"
@@ -226,10 +336,10 @@ def parse_exchange_info(market: str, payload: dict) -> ExchangeInfo:
             ExchangeInfoSymbol(
                 market=market,
                 provider_symbol=raw["symbol"],
-                status=_STATUS_NORMALIZATION.get(raw.get("status", ""), "inactive"),
+                status=_STATUS_NORMALIZATION.get(str(raw.get("status", "")).upper(), "inactive"),
                 base_asset=raw["baseAsset"],
                 quote_asset=raw["quoteAsset"],
-                margin_asset=raw.get("marginAsset"),
+                margin_asset=raw.get("marginAsset") or raw.get("settlementAsset"),
                 kind=kind,
                 base_asset_precision=raw.get("baseAssetPrecision"),
                 quote_asset_precision=raw.get("quoteAssetPrecision") or raw.get("quotePrecision"),
@@ -238,6 +348,7 @@ def parse_exchange_info(market: str, payload: dict) -> ExchangeInfo:
                 onboard_date_ms=raw.get("onboardDate"),
                 delivery_date_ms=raw.get("deliveryDate"),
                 contract_type=contract_type,
+                contract_size=_optional_decimal(raw.get("contractSize")),
                 filters={f["filterType"]: {k: v for k, v in f.items() if k != "filterType"} for f in raw.get("filters", [])},
             )
         )
@@ -365,6 +476,54 @@ class BinancePublicClient:
         params = {"symbol": symbol} if symbol else None
         return parse_exchange_info(market, self._request(market, "exchange_info", params))
 
+    @staticmethod
+    def _time_params(
+        symbol: str,
+        *,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int | None = None,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"symbol": symbol, **extra}
+        if start_time_ms is not None:
+            params["startTime"] = start_time_ms
+        if end_time_ms is not None:
+            params["endTime"] = end_time_ms
+        if limit is not None:
+            params["limit"] = limit
+        return params
+
+    def _kline_endpoint(
+        self,
+        market: str,
+        symbol: str,
+        interval: str,
+        *,
+        endpoint: str,
+        price_type: str,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 500,
+    ) -> list[Kline]:
+        params = self._time_params(
+            symbol,
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+            limit=limit,
+            interval=interval,
+        )
+        if endpoint == "index_klines":
+            params["pair"] = params.pop("symbol")
+        received_at = _utcnow_iso()
+        payload = self._request(market, endpoint, params)
+        if not isinstance(payload, list):
+            raise BinancePublicError("permanent", "klines payload is not a list")
+        return [
+            parse_kline_row(market, symbol, interval, row, received_at, price_type=price_type)
+            for row in payload
+        ]
+
     def klines(
         self,
         market: str,
@@ -374,17 +533,279 @@ class BinancePublicClient:
         start_time_ms: int | None = None,
         end_time_ms: int | None = None,
         limit: int = 500,
+        price_type: str = "trade",
     ) -> list[Kline]:
-        params: dict[str, Any] = {"symbol": symbol, "interval": interval, "limit": limit}
-        if start_time_ms is not None:
-            params["startTime"] = start_time_ms
-        if end_time_ms is not None:
-            params["endTime"] = end_time_ms
-        received_at = _utcnow_iso()
-        payload = self._request(market, "klines", params)
+        endpoint_by_price_type = {
+            "trade": "klines",
+            "mark": "mark_klines",
+            "index": "index_klines",
+            "premium": "premium_klines",
+        }
+        if price_type not in endpoint_by_price_type:
+            raise ValueError("price_type must be trade, mark, index or premium")
+        if market == "spot" and price_type != "trade":
+            raise ValueError("spot market only supports trade klines")
+        return self._kline_endpoint(
+            market,
+            symbol,
+            interval,
+            endpoint=endpoint_by_price_type[price_type],
+            price_type=price_type,
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+            limit=limit,
+        )
+
+    def mark_price_klines(
+        self,
+        symbol: str,
+        interval: str,
+        *,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 500,
+        market: str = "usdm",
+    ) -> list[Kline]:
+        self._require_usdm(market)
+        return self.klines(
+            market,
+            symbol,
+            interval,
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+            limit=limit,
+            price_type="mark",
+        )
+
+    def index_price_klines(
+        self,
+        symbol: str,
+        interval: str,
+        *,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 500,
+        market: str = "usdm",
+    ) -> list[Kline]:
+        self._require_usdm(market)
+        return self.klines(
+            market,
+            symbol,
+            interval,
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+            limit=limit,
+            price_type="index",
+        )
+
+    def premium_index_klines(
+        self,
+        symbol: str,
+        interval: str,
+        *,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 500,
+        market: str = "usdm",
+    ) -> list[Kline]:
+        self._require_usdm(market)
+        return self.klines(
+            market,
+            symbol,
+            interval,
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+            limit=limit,
+            price_type="premium",
+        )
+
+    @staticmethod
+    def _require_usdm(market: str) -> None:
+        if market != "usdm":
+            raise ValueError("USD-M derivative endpoint requires market='usdm'")
+
+    def premium_index(self, symbol: str, *, market: str = "usdm") -> PremiumIndex:
+        self._require_usdm(market)
+        payload = self._request(market, "premium_index", {"symbol": symbol})
+        return PremiumIndex(
+            market=market,
+            symbol=payload["symbol"],
+            mark_price=_decimal(payload.get("markPrice"), "markPrice"),
+            index_price=_decimal(payload.get("indexPrice"), "indexPrice"),
+            estimated_settle_price=_optional_decimal(payload.get("estimatedSettlePrice")),
+            last_funding_rate=_optional_decimal(payload.get("lastFundingRate")),
+            interest_rate=_optional_decimal(payload.get("interestRate")),
+            next_funding_time_ms=_optional_int(payload.get("nextFundingTime")),
+            event_time_ms=_optional_int(payload.get("time")),
+            received_at=_utcnow_iso(),
+        )
+
+    def funding_rate_history(
+        self,
+        symbol: str,
+        *,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 1000,
+        market: str = "usdm",
+    ) -> list[FundingRate]:
+        self._require_usdm(market)
+        payload = self._request(
+            market,
+            "funding_rate",
+            self._time_params(symbol, start_time_ms=start_time_ms, end_time_ms=end_time_ms, limit=limit),
+        )
         if not isinstance(payload, list):
-            raise BinancePublicError("permanent", "klines payload is not a list")
-        return [parse_kline_row(market, symbol, interval, row, received_at) for row in payload]
+            raise BinancePublicError("permanent", "funding rate payload is not a list")
+        received_at = _utcnow_iso()
+        return [
+            FundingRate(
+                market=market,
+                symbol=row["symbol"],
+                funding_time_ms=_int_ms(row.get("fundingTime"), "fundingTime"),
+                funding_rate=_decimal(row.get("fundingRate"), "fundingRate"),
+                mark_price=_optional_decimal(row.get("markPrice")),
+                rate_type=row.get("rateType"),
+                received_at=received_at,
+            )
+            for row in payload
+        ]
+
+    def open_interest(self, symbol: str, *, market: str = "usdm") -> OpenInterest:
+        self._require_usdm(market)
+        payload = self._request(market, "open_interest", {"symbol": symbol})
+        return OpenInterest(
+            market=market,
+            symbol=payload["symbol"],
+            open_interest=_decimal(payload.get("openInterest"), "openInterest"),
+            event_time_ms=_int_ms(payload.get("time"), "time"),
+            received_at=_utcnow_iso(),
+        )
+
+    def open_interest_history(
+        self,
+        symbol: str,
+        *,
+        period: str = "1h",
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 500,
+        market: str = "usdm",
+    ) -> list[OpenInterestHistory]:
+        self._require_usdm(market)
+        payload = self._request(
+            market,
+            "open_interest_hist",
+            self._time_params(
+                symbol,
+                start_time_ms=start_time_ms,
+                end_time_ms=end_time_ms,
+                limit=limit,
+                period=period,
+            ),
+        )
+        if not isinstance(payload, list):
+            raise BinancePublicError("permanent", "open interest history payload is not a list")
+        received_at = _utcnow_iso()
+        return [
+            OpenInterestHistory(
+                market=market,
+                symbol=row["symbol"],
+                sum_open_interest=_decimal(row.get("sumOpenInterest"), "sumOpenInterest"),
+                sum_open_interest_value=_decimal(
+                    row.get("sumOpenInterestValue"), "sumOpenInterestValue"
+                ),
+                circulating_supply=_optional_decimal(row.get("CMCCirculatingSupply")),
+                event_time_ms=_int_ms(row.get("timestamp"), "timestamp"),
+                received_at=received_at,
+            )
+            for row in payload
+        ]
+
+    def global_long_short_ratio(
+        self,
+        symbol: str,
+        *,
+        period: str = "1h",
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 500,
+        market: str = "usdm",
+    ) -> list[GlobalLongShortRatio]:
+        self._require_usdm(market)
+        payload = self._request(
+            market,
+            "global_long_short_ratio",
+            self._time_params(
+                symbol,
+                start_time_ms=start_time_ms,
+                end_time_ms=end_time_ms,
+                limit=limit,
+                period=period,
+            ),
+        )
+        if not isinstance(payload, list):
+            raise BinancePublicError("permanent", "global long-short payload is not a list")
+        received_at = _utcnow_iso()
+        return [
+            GlobalLongShortRatio(
+                market=market,
+                symbol=row["symbol"],
+                period=row.get("period", period),
+                long_short_ratio=_decimal(row.get("longShortRatio"), "longShortRatio"),
+                long_account=_decimal(row.get("longAccount"), "longAccount"),
+                short_account=_decimal(row.get("shortAccount"), "shortAccount"),
+                event_time_ms=_int_ms(row.get("timestamp"), "timestamp"),
+                received_at=received_at,
+            )
+            for row in payload
+        ]
+
+    def taker_buy_sell_volume(
+        self,
+        symbol: str,
+        *,
+        period: str = "1h",
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 500,
+        market: str = "usdm",
+    ) -> list[TakerBuySellVolume]:
+        self._require_usdm(market)
+        payload = self._request(
+            market,
+            "taker_long_short_ratio",
+            self._time_params(
+                symbol,
+                start_time_ms=start_time_ms,
+                end_time_ms=end_time_ms,
+                limit=limit,
+                period=period,
+            ),
+        )
+        if not isinstance(payload, list):
+            raise BinancePublicError("permanent", "taker buy/sell payload is not a list")
+        received_at = _utcnow_iso()
+        rows: list[TakerBuySellVolume] = []
+        for row in payload:
+            buy = _decimal(row.get("buyVol", row.get("takerBuyVol")), "buyVol")
+            sell = _decimal(row.get("sellVol", row.get("takerSellVol")), "sellVol")
+            ratio = _optional_decimal(row.get("buySellRatio"))
+            rows.append(
+                TakerBuySellVolume(
+                    market=market,
+                    symbol=row.get("symbol", symbol),
+                    period=row.get("period", period),
+                    buy_volume=buy,
+                    sell_volume=sell,
+                    buy_sell_ratio=ratio,
+                    event_time_ms=_int_ms(row.get("timestamp"), "timestamp"),
+                    pair=row.get("pair"),
+                    contract_type=row.get("contractType"),
+                    received_at=received_at,
+                )
+            )
+        return rows
 
     def ticker_24h(self, market: str, symbol: str) -> Ticker24h:
         payload = self._request(market, "ticker_24h", {"symbol": symbol})
@@ -392,8 +813,8 @@ class BinancePublicClient:
             market=market,
             symbol=payload["symbol"],
             last_price=_decimal(payload.get("lastPrice"), "lastPrice"),
-            bid_price=_decimal(payload.get("bidPrice"), "bidPrice"),
-            ask_price=_decimal(payload.get("askPrice"), "askPrice"),
+            bid_price=_optional_decimal(payload.get("bidPrice")),
+            ask_price=_optional_decimal(payload.get("askPrice")),
             high_price=_decimal(payload.get("highPrice"), "highPrice"),
             low_price=_decimal(payload.get("lowPrice"), "lowPrice"),
             base_volume=_decimal(payload.get("volume"), "volume"),

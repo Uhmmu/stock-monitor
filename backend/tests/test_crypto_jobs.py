@@ -180,6 +180,66 @@ class TestSpotExchangeInfoSync:
         assert jobs.spot_exchange_info_due(db) is False
 
 
+class TestUsdmExchangeInfoSync:
+    def test_perpetual_is_distinct_from_spot_and_keeps_settlement_metadata(self, db):
+        spot = jobs.sync_spot_exchange_info(
+            db,
+            client=fixture_client("binance_spot_exchange_info.json"),
+            universe=["BTCUSDT"],
+            bucket="spot-b1",
+        )
+        perpetual = jobs.sync_usdm_exchange_info(
+            db,
+            client=fixture_client("binance_fapi_exchange_info.json"),
+            universe=["BTCUSDT"],
+            bucket="usdm-b1",
+        )
+        assert spot.status == "success" and perpetual.status == "success"
+        spot_instrument = identity.get_instrument(
+            db, venue="binance", provider_symbol="BTCUSDT", kind="spot"
+        )
+        perp_instrument = identity.get_instrument(
+            db, venue="binance", provider_symbol="BTCUSDT", kind="perpetual"
+        )
+        assert spot_instrument.id != perp_instrument.id
+        assert perp_instrument.market == "usdm_futures"
+        assert perp_instrument.settlement_asset_id == perp_instrument.quote_asset_id
+        assert perp_instrument.filters["MIN_NOTIONAL"]["notional"] == "50"
+        assert identity.resolve_provider_id(
+            db,
+            provider="binance_usdm",
+            object_type="instrument",
+            provider_id="BTCUSDT",
+        ).instrument.id == perp_instrument.id
+
+    def test_non_perpetual_and_unresolved_assets_are_reported(self, db):
+        payload = json.loads(
+            (FIXTURE_DIR / "binance_fapi_exchange_info.json").read_text()
+        )
+        payload["symbols"][0]["contractType"] = "CURRENT_QUARTER"
+        payload["symbols"].append({
+            "symbol": "SOLUSDT",
+            "status": "TRADING",
+            "contractType": "PERPETUAL",
+            "baseAsset": "SOL",
+            "quoteAsset": "USDT",
+            "marginAsset": "USDT",
+            "filters": [],
+        })
+        result = jobs.sync_usdm_exchange_info(
+            db,
+            client=FakeClient(payload),
+            universe=["BTCUSDT", "SOLUSDT"],
+            bucket="usdm-b2",
+        )
+        assert result.status == "partial"
+        assert {row["reason"] for row in result.excluded} == {"not_perpetual"}
+        assert result.unresolved[0]["symbol"] == "SOLUSDT"
+        assert identity.get_instrument(
+            db, venue="binance", provider_symbol="BTCUSDT", kind="perpetual"
+        ) is None
+
+
 def test_collection_runs_migration_round_trip_on_sqlite():
     import importlib.util
     from alembic.migration import MigrationContext

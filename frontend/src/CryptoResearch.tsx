@@ -113,7 +113,59 @@ export type CryptoTechnical = {
   note?: string
 }
 
+export type CryptoDerivativeMetric = {
+  observed_at: string
+  mark_price: string | null
+  index_price: string | null
+  basis_rate: string | null
+  open_interest_base: string | null
+  open_interest_usd: string | null
+  long_short_ratio: string | null
+  taker_buy_sell_ratio: string | null
+  taker_buy_volume: string | null
+  taker_sell_volume: string | null
+  futures_volume_base: string | null
+  provider: string
+  quality: string
+}
+
+export type CryptoFundingEvent = {
+  funding_time: string
+  funding_rate: string
+  mark_price: string | null
+  provider: string
+  quality: string
+}
+
+export type CryptoDerivativesHistory = {
+  instrument_id: number
+  interval: string
+  metrics: CryptoDerivativeMetric[]
+  funding_rates: CryptoFundingEvent[]
+  coverage: Record<string, unknown>
+  definitions: Record<string, { metric_name: string; definition: string; scope: string; unit: string }>
+}
+
+export type CryptoRegime = {
+  state: 'INSUFFICIENT_DATA' | 'BALANCED' | 'LEVERAGE_BUILDUP' | 'DELEVERAGING' | 'LONG_CROWDING' | 'SHORT_CROWDING'
+  version: string
+  threshold_hash: string
+  input_hash: string
+  as_of: string
+  valid_until: string
+  stale: boolean
+  confidence: string
+  coverage: string
+  features: Record<string, string | null>
+  sample_counts: Record<string, number>
+  evidence: string[]
+  omissions: string[]
+  warnings: string[]
+  note: string
+}
+
 export type CryptoInterval = '1h' | '4h' | '1d'
+export type CryptoPriceType = 'trade' | 'mark' | 'index'
 
 // ---------------------------------------------------------------------------
 // pure helpers (exported for tests)
@@ -148,6 +200,55 @@ export function formatCryptoNumber(value: string | null | undefined, maxDigits =
 export function formatUtcTime(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms)) return '未知'
   return new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+}
+
+export function formatUtcIso(value: string | null | undefined): string {
+  if (!value) return '未知'
+  const time = new Date(value)
+  return Number.isNaN(time.getTime()) ? '未知' : time.toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+}
+
+export function formatCryptoRate(value: string | null | undefined, digits = 3): string {
+  if (value === null || value === undefined || value === '') return '数据不足'
+  const rate = Number(value)
+  return Number.isFinite(rate) ? `${(rate * 100).toFixed(digits)}%` : '数据不足'
+}
+
+export function regimeLabel(state: CryptoRegime['state']): string {
+  return ({
+    INSUFFICIENT_DATA: '数据不足', BALANCED: '未触发联合阈值', LEVERAGE_BUILDUP: '杠杆累积',
+    DELEVERAGING: '去杠杆', LONG_CROWDING: '多头拥挤', SHORT_CROWDING: '空头拥挤',
+  } as const)[state]
+}
+
+export function sparklineSegments(values: (string | null)[]): string[] {
+  const parsed = values.map(value => value === null ? null : Number(value))
+  const finite = parsed.filter((value): value is number => value !== null && Number.isFinite(value))
+  if (finite.length < 2) return []
+  const min = Math.min(...finite)
+  const span = Math.max(Math.max(...finite) - min, Number.EPSILON)
+  const segments: string[] = []
+  let points: string[] = []
+  parsed.forEach((value, index) => {
+    if (value === null || !Number.isFinite(value)) {
+      if (points.length > 1) segments.push(points.join(' '))
+      points = []
+      return
+    }
+    points.push(`${(index / Math.max(1, parsed.length - 1) * 100).toFixed(2)},${(30 - (value - min) / span * 26).toFixed(2)}`)
+  })
+  if (points.length > 1) segments.push(points.join(' '))
+  return segments
+}
+
+export function latestDerivativeValue(
+  items: CryptoDerivativeMetric[],
+  key: 'open_interest_usd' | 'basis_rate' | 'taker_buy_sell_ratio',
+): string | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index][key] !== null) return items[index][key]
+  }
+  return null
 }
 
 export type PreparedCryptoChart = {
@@ -281,6 +382,14 @@ function CryptoCandleChart({ prepared, movingAverages }: { prepared: PreparedCry
   return <div className="crypto-chart-host" ref={hostRef} role="img" aria-label="加密货币 K 线图" />
 }
 
+function DerivativeSparkline({ values, label }: { values: (string | null)[]; label: string }) {
+  const segments = sparklineSegments(values)
+  if (segments.length === 0) return <div className="crypto-sparkline-empty">数据不足</div>
+  return <svg className="crypto-sparkline" viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label={label}>
+    {segments.map((points, index) => <polyline key={index} points={points}/>) }
+  </svg>
+}
+
 // ---------------------------------------------------------------------------
 // page
 // ---------------------------------------------------------------------------
@@ -288,6 +397,7 @@ function CryptoCandleChart({ prepared, movingAverages }: { prepared: PreparedCry
 export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
   const [instrumentId, setInstrumentId] = useState<number | null>(() => parseInstrumentFromSearch(window.location.search))
   const [interval, setIntervalState] = useState<CryptoInterval>('1d')
+  const [priceType, setPriceType] = useState<CryptoPriceType>('trade')
   const [query, setQuery] = useState('')
 
   useEffect(() => {
@@ -331,8 +441,8 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
     refetchInterval: 60_000,
   })
   const candles = useQuery({
-    queryKey: ['crypto-candles', instrumentId, interval],
-    queryFn: () => api<CryptoCandlesResponse>(`/crypto/market/candles?instrument_id=${instrumentId}&interval=${interval}&limit=1000`),
+    queryKey: ['crypto-candles', instrumentId, interval, priceType],
+    queryFn: () => api<CryptoCandlesResponse>(`/crypto/market/candles?instrument_id=${instrumentId}&interval=${interval}&price_type=${priceType}&limit=1000`),
     enabled: enabled && instrumentId !== null,
     staleTime: 60_000,
   })
@@ -342,9 +452,26 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
     enabled: enabled && instrumentId !== null,
     staleTime: 5 * 60_000,
   })
+  const derivatives = useQuery({
+    queryKey: ['crypto-derivatives', instrumentId],
+    queryFn: () => api<CryptoDerivativesHistory>(`/crypto/derivatives?instrument_id=${instrumentId}&hours=168`),
+    enabled: enabled && instrumentId !== null && detail.data?.kind === 'perpetual',
+    staleTime: 5 * 60_000,
+  })
+  const regime = useQuery({
+    queryKey: ['crypto-regime', instrumentId],
+    queryFn: () => api<CryptoRegime>(`/crypto/derivatives/regime?instrument_id=${instrumentId}`),
+    enabled: enabled && instrumentId !== null && detail.data?.kind === 'perpetual',
+    staleTime: 5 * 60_000,
+  })
+
+  useEffect(() => {
+    if (detail.data?.kind !== 'perpetual' && priceType !== 'trade') setPriceType('trade')
+  }, [detail.data?.kind, priceType])
 
   const prepared = useMemo(() => prepareCryptoCandles(candles.data?.items ?? []), [candles.data])
   const movingAverages = useMemo(() => {
+    if (priceType !== 'trade') return []
     const series = technical.data?.series
     if (!series || !Array.isArray(series.time_ms)) return []
     const result: { time: UTCTimestamp; value: number }[][] = []
@@ -354,7 +481,7 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
       result.push(values.map(point => ({ time: (point.time_ms / 1000) as UTCTimestamp, value: point.value })))
     }
     return result
-  }, [technical.data])
+  }, [technical.data, priceType])
 
   const options = query.trim().length > 0 && search.data ? search.data.instruments : instruments.data?.items ?? []
   const coverage = candles.data?.coverage
@@ -365,7 +492,7 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
       <div>
         <p className="crypto-eyebrow">CRYPTO RESEARCH · 加密研究</p>
         <h2>链上资产，同样的证据标准</h2>
-        <p>使用稳定标识浏览 Binance 现货币对：身份由供应商映射决定，行情只来自已收盘 K 线与短缓存，缺口如实标注。</p>
+        <p>专属 Crypto 研究面板：现货、永续合约、技术指标与衍生品证据都在这里，和 Stock 工作区保持分离。</p>
       </div>
       <div className="crypto-hero-meta">
         <span>数据来源</span>
@@ -448,6 +575,12 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
                 </button>
               ))}
             </div>
+            {detail.data?.kind === 'perpetual' && <div className="segmented compact" role="tablist" aria-label="价格类型">
+              {(['trade', 'mark', 'index'] as CryptoPriceType[]).map(value => <button
+                key={value} role="tab" aria-selected={priceType === value}
+                className={priceType === value ? 'active' : ''} onClick={() => setPriceType(value)}
+              >{value === 'trade' ? '成交价' : value === 'mark' ? '标记价' : '指数价'}</button>)}
+            </div>}
           </header>
           <CryptoCandleChart prepared={prepared} movingAverages={movingAverages} />
           <footer className="crypto-coverage">
@@ -465,10 +598,33 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
           </footer>
         </section>
 
+        {detail.data?.kind === 'perpetual' && <section className="crypto-derivatives" aria-label="衍生品研究">
+          <header>
+            <div><p className="crypto-eyebrow">USD-M DERIVATIVES</p><h3>衍生品研究</h3></div>
+            {regime.data && <span className={`crypto-regime-badge state-${regime.data.state.toLowerCase()}`}>{regimeLabel(regime.data.state)}</span>}
+          </header>
+          {(derivatives.isLoading || regime.isLoading) && <p className="crypto-loading">正在读取已持久化衍生品证据…</p>}
+          {(derivatives.isError || regime.isError) && <p className="crypto-warning" role="status">衍生品证据读取失败；没有用旧值或推断值替代。</p>}
+          {regime.data && <div className="crypto-regime-summary">
+            <div><span>Regime v1</span><strong>{regimeLabel(regime.data.state)}</strong><small>置信度 {Math.round(Number(regime.data.confidence) * 100)}% · 仅表示覆盖与规则一致度</small></div>
+            <div><span>覆盖率</span><strong>{Math.round(Number(regime.data.coverage) * 100)}%</strong><small>有效至 {formatUtcIso(regime.data.valid_until)}{regime.data.stale ? ' · 已过期' : ''}</small></div>
+          </div>}
+          {regime.data?.note && <p className="crypto-regime-note">{regime.data.note}</p>}
+          {regime.data && regime.data.evidence.length > 0 && <ul className="crypto-evidence-list">{regime.data.evidence.map(item => <li key={item}>{item.replaceAll('_', ' ')}</li>)}</ul>}
+          {regime.data && regime.data.omissions.length > 0 && <p className="crypto-warning" role="status">缺口：{regime.data.omissions.join(' · ')}</p>}
+          {derivatives.data && <div className="crypto-derivative-grid">
+            <article><span>资金费率</span><strong>{formatCryptoRate(derivatives.data.funding_rates.at(-1)?.funding_rate)}</strong><DerivativeSparkline label="资金费率历史" values={derivatives.data.funding_rates.map(row => row.funding_rate)}/><small>{derivatives.data.funding_rates.length} 个实际结算事件</small></article>
+            <article><span>未平仓量</span><strong>{formatCryptoNumber(latestDerivativeValue(derivatives.data.metrics, 'open_interest_usd'), 0)}</strong><DerivativeSparkline label="未平仓量历史" values={derivatives.data.metrics.map(row => row.open_interest_usd)}/><small>USD 名义值；缺失不补值</small></article>
+            <article><span>标记/指数基差</span><strong>{formatCryptoRate(latestDerivativeValue(derivatives.data.metrics, 'basis_rate'))}</strong><DerivativeSparkline label="基差历史" values={derivatives.data.metrics.map(row => row.basis_rate)}/><small>仅同时间标记价与指数价</small></article>
+            <article><span>Taker 买卖比</span><strong>{formatCryptoNumber(latestDerivativeValue(derivatives.data.metrics, 'taker_buy_sell_ratio'), 3)}</strong><DerivativeSparkline label="Taker 买卖比历史" values={derivatives.data.metrics.map(row => row.taker_buy_sell_ratio)}/><small>买方成交量 / 卖方成交量</small></article>
+          </div>}
+          {derivatives.data && <footer className="crypto-coverage"><span>{derivatives.data.metrics.length} 个 1h 指标点</span><span>{derivatives.data.funding_rates.length} 个资金费率事件</span><span>来源 Binance USD-M 公共接口</span></footer>}
+        </section>}
+
         <section className="crypto-technical" aria-label="技术指标">
           <header>
             <h3>技术指标</h3>
-            <span className="crypto-source-badge">{technicalStatusLabel(technical.data?.status ?? 'invalid')}</span>
+            <span className="crypto-source-badge">成交价 · {technicalStatusLabel(technical.data?.status ?? 'invalid')}</span>
           </header>
           {technical.isLoading && <p className="crypto-loading">正在计算指标…</p>}
           {technical.data?.status === 'insufficient' && <p className="crypto-warning" role="status">{technical.data.reason}</p>}

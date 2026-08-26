@@ -132,6 +132,49 @@ class TestRequests:
         assert book.ask_price >= book.bid_price
         assert isinstance(book.bid_qty, Decimal)
 
+    def test_usdm_price_authorities_and_derivative_methods(self):
+        responses = [
+            httpx.Response(200, json=fixture_json("binance_spot_klines_1h.json")),
+            httpx.Response(200, json=fixture_json("binance_spot_klines_1h.json")),
+            httpx.Response(200, json=fixture_json("binance_fapi_premium_index.json")),
+            httpx.Response(200, json=fixture_json("binance_fapi_funding_rate_2020.json")),
+            httpx.Response(200, json=fixture_json("binance_fapi_open_interest.json")),
+            httpx.Response(200, json=fixture_json("binance_fapi_open_interest_hist.json")),
+            httpx.Response(200, json=[{
+                "symbol": "BTCUSDT", "longShortRatio": "1.2", "longAccount": "0.55",
+                "shortAccount": "0.45", "timestamp": 1_787_671_960_000,
+            }]),
+            httpx.Response(200, json=[{
+                "symbol": "BTCUSDT", "buyVol": "120", "sellVol": "100",
+                "buySellRatio": "1.2", "timestamp": 1_787_671_960_000,
+            }]),
+        ]
+        recorder = Recorder(responses)
+        client = client_with(recorder)
+        mark = client.mark_price_klines("BTCUSDT", "1h", limit=1)[0]
+        assert mark.price_type == "mark" and recorder.requests[0].url.path == "/fapi/v1/markPriceKlines"
+        index = client.index_price_klines("BTCUSDT", "1h", limit=1)[0]
+        assert index.price_type == "index"
+        assert recorder.requests[1].url.params.get("pair") == "BTCUSDT"
+        assert "symbol" not in recorder.requests[1].url.params
+        premium = client.premium_index("BTCUSDT")
+        assert premium.mark_price > 0 and premium.index_price > 0
+        funding = client.funding_rate_history("BTCUSDT")
+        assert funding[0].mark_price is None  # old Binance rows legitimately omit it
+        assert client.open_interest("BTCUSDT").open_interest > 0
+        assert client.open_interest_history("BTCUSDT")[0].sum_open_interest > 0
+        assert client.global_long_short_ratio("BTCUSDT")[0].long_account == Decimal("0.55")
+        assert client.taker_buy_sell_volume("BTCUSDT")[0].buy_volume == Decimal("120")
+        assert all("authorization" not in request.headers for request in recorder.requests)
+
+    def test_usdm_24h_ticker_allows_absent_bid_and_ask(self):
+        recorder = Recorder([httpx.Response(200, json={
+            "symbol": "BTCUSDT", "lastPrice": "100", "highPrice": "110", "lowPrice": "90",
+            "volume": "12", "quoteVolume": "1200", "openTime": 1, "closeTime": 2,
+        })])
+        ticker = client_with(recorder).ticker_24h("usdm", "BTCUSDT")
+        assert ticker.bid_price is None and ticker.ask_price is None
+
 
 class TestErrorHandling:
     def test_429_retries_and_respects_retry_after(self):

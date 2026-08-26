@@ -3120,6 +3120,116 @@ class MarketCandle(Base):
     )
 
 
+class CryptoFundingRate(Base):
+    """One provider funding event for an exact perpetual instrument.
+
+    Funding events are kept separate from periodic derivatives snapshots: the
+    event clock is provider-defined (usually every eight hours), while metric
+    snapshots use a configured interval.  Decimal values never pass through a
+    binary float, and a changed provider payload increments ``revision`` in
+    the repository layer.
+    """
+
+    __tablename__ = "crypto_funding_rates"
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id", "funding_time", "provider",
+            name="uq_crypto_funding_rates_key",
+        ),
+        CheckConstraint("revision >= 0", name="ck_crypto_funding_rates_revision"),
+        Index("ix_crypto_funding_rates_instrument_time", "instrument_id", "funding_time"),
+        Index("ix_crypto_funding_rates_provider_time", "provider", "funding_time"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE")
+    )
+    provider: Mapped[str] = mapped_column(String(32))
+    funding_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    funding_rate: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    predicted_rate: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    mark_price: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_hash: Mapped[str] = mapped_column(String(64))
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    coverage_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    coverage_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    quality: Mapped[str] = mapped_column(String(24), default="ok", server_default="ok")
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+class CryptoDerivativesMetric(Base):
+    """Typed periodic derivatives snapshot.
+
+    The row is intentionally wide for the core research fields.  Metadata
+    columns keep each provider definition/scope/unit explicit, while null
+    typed fields represent unavailable endpoint data rather than inferred
+    values.  Ratios with different denominators have separate columns and
+    definitions instead of being silently collapsed.
+    """
+
+    __tablename__ = "crypto_derivatives_metrics"
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id", "interval", "observed_at", "provider",
+            name="uq_crypto_derivatives_metrics_key",
+        ),
+        CheckConstraint("revision >= 0", name="ck_crypto_derivatives_metrics_revision"),
+        Index(
+            "ix_crypto_derivatives_metrics_instrument_interval_time",
+            "instrument_id", "interval", "observed_at",
+        ),
+        Index("ix_crypto_derivatives_metrics_provider_time", "provider", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE")
+    )
+    provider: Mapped[str] = mapped_column(String(32))
+    interval: Mapped[str] = mapped_column(String(8))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    mark_price: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    index_price: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    basis: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    basis_rate: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    premium: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    mark_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    index_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    open_interest_base: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    open_interest_quote: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    open_interest_usd: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    long_short_ratio: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    top_trader_account_ratio: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    top_trader_position_ratio: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    taker_buy_sell_ratio: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    taker_buy_volume: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    taker_sell_volume: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    futures_volume_base: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    futures_volume_quote: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    futures_volume_usd: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+
+    provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    coverage_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    coverage_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_hash: Mapped[str] = mapped_column(String(64))
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    quality: Mapped[str] = mapped_column(String(24), default="ok", server_default="ok")
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+
 # Register integration-owned tables in the same metadata whenever core models
 # are imported (tests, application runtime, and Alembic must see one graph).
 from app.integrations.ibkr import db_models as _ibkr_db_models  # noqa: E402,F401

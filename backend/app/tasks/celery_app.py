@@ -139,8 +139,20 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.celery_app.ensure_crypto_spot_exchange_info_fresh",
         "schedule": 1800,
     },
+    "sync-crypto-usdm-exchange-info": {
+        "task": "app.tasks.celery_app.ensure_crypto_usdm_exchange_info_fresh",
+        "schedule": 1800,
+    },
     "sync-crypto-candles": {
         "task": "app.tasks.celery_app.ensure_crypto_candles_fresh",
+        "schedule": 1800,
+    },
+    "sync-crypto-derivatives-candles": {
+        "task": "app.tasks.celery_app.ensure_crypto_derivatives_candles_fresh",
+        "schedule": 1800,
+    },
+    "sync-crypto-derivatives-metrics": {
+        "task": "app.tasks.celery_app.ensure_crypto_derivatives_metrics_fresh",
         "schedule": 1800,
     },
     "refresh-crypto-latest": {
@@ -850,6 +862,36 @@ def ensure_crypto_spot_exchange_info_fresh():
         }
 
 
+@celery_app.task(name="app.tasks.celery_app.ensure_crypto_usdm_exchange_info_fresh", queue="crypto_public")
+def ensure_crypto_usdm_exchange_info_fresh():
+    """Durable USD-M metadata due check, isolated from Spot identity."""
+    from app.services.crypto import jobs as crypto_jobs
+    from app.services.crypto.providers.binance import BinancePublicClient
+
+    if not settings.crypto_public_enabled:
+        return {"skipped": "crypto_public_disabled"}
+    with SessionLocal() as db:
+        if not crypto_jobs.usdm_exchange_info_due(db):
+            return {"skipped": "not_due"}
+        client = BinancePublicClient(
+            spot_base_url=settings.crypto_binance_spot_base_url,
+            usdm_base_url=settings.crypto_binance_usdm_base_url,
+            timeout_seconds=settings.crypto_binance_timeout_seconds,
+            max_retries=settings.crypto_binance_max_retries,
+        )
+        result = crypto_jobs.sync_usdm_exchange_info(
+            db, client=client, universe=crypto_jobs.parse_usdm_universe(settings.crypto_usdm_universe)
+        )
+        if result is None:
+            return {"skipped": "bucket_already_claimed"}
+        return {
+            "status": result.status, "items_seen": result.items_seen,
+            "items_created": result.items_created, "items_updated": result.items_updated,
+            "unresolved_count": result.unresolved_count, "excluded": result.excluded,
+            "unresolved": result.unresolved, "error": result.error,
+        }
+
+
 @celery_app.task(name="app.tasks.celery_app.ensure_crypto_candles_fresh", queue="crypto_public")
 def ensure_crypto_candles_fresh():
     """Due-driven candle top-up; per-instrument isolation, restart-safe watermarks."""
@@ -888,6 +930,94 @@ def ensure_crypto_candles_fresh():
         return {"items": payloads}
 
 
+@celery_app.task(name="app.tasks.celery_app.ensure_crypto_derivatives_candles_fresh", queue="crypto_public")
+def ensure_crypto_derivatives_candles_fresh():
+    """Due-driven trade/mark/index history for the bounded perpetual universe."""
+    from app.services.crypto import backfill as crypto_backfill
+    from app.services.crypto import jobs as crypto_jobs
+    from app.services.crypto.providers.binance import BinancePublicClient
+
+    if not settings.crypto_public_enabled:
+        return {"skipped": "crypto_public_disabled"}
+    with SessionLocal() as db:
+        instruments = crypto_jobs.instrument_universe(db, kind="perpetual", market="usdm_futures")
+        intervals = [i.strip() for i in settings.crypto_candle_sync_intervals.split(",") if i.strip()]
+        due = crypto_backfill.due_candle_work(
+            db, instruments=instruments, intervals=intervals,
+            price_types=("trade", "mark", "index"),
+        )
+        if not due:
+            return {"skipped": "not_due" if instruments else "no_instruments"}
+        client = BinancePublicClient(
+            spot_base_url=settings.crypto_binance_spot_base_url,
+            usdm_base_url=settings.crypto_binance_usdm_base_url,
+            timeout_seconds=settings.crypto_binance_timeout_seconds,
+            max_retries=settings.crypto_binance_max_retries,
+        )
+        items = []
+        for instrument, interval, price_type in due:
+            try:
+                items.append(crypto_backfill.backfill_instrument_candles(
+                    db, client=client, instrument=instrument, interval=interval,
+                    history_days=settings.crypto_candle_history_days, price_type=price_type,
+                ).to_payload())
+            except Exception as exc:
+                items.append({
+                    "instrument_id": instrument.id, "interval": interval,
+                    "price_type": price_type, "status": "failed", "error": str(exc)[:300],
+                })
+        return {"items": items}
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_crypto_derivatives_metrics_fresh", queue="crypto_public")
+def ensure_crypto_derivatives_metrics_fresh():
+    """Collect public 1h funding/OI/basis/ratio/taker facts with last-good preservation."""
+    from app.services.crypto import backfill as crypto_backfill
+    from app.services.crypto import derivatives, jobs as crypto_jobs
+    from app.services.crypto.providers.binance import BinancePublicClient
+
+    if not settings.crypto_public_enabled:
+        return {"skipped": "crypto_public_disabled"}
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        instruments = crypto_jobs.instrument_universe(db, kind="perpetual", market="usdm_futures")
+        client = BinancePublicClient(
+            spot_base_url=settings.crypto_binance_spot_base_url,
+            usdm_base_url=settings.crypto_binance_usdm_base_url,
+            timeout_seconds=settings.crypto_binance_timeout_seconds,
+            max_retries=settings.crypto_binance_max_retries,
+        )
+        items = []
+        for instrument in instruments:
+            state = crypto_backfill.get_or_create_sync_state(
+                db, instrument_id=instrument.id, provider="binance_usdm",
+                data_kind="derivatives_metrics", interval="1h",
+            )
+            due_at = state.next_due_at
+            if due_at and (due_at.replace(tzinfo=UTC) if due_at.tzinfo is None else due_at) > now:
+                continue
+            state.last_attempt_at = now
+            try:
+                result = derivatives.collect_public_derivatives(db, client=client, instrument=instrument)
+                state.last_success_at = now
+                state.next_due_at = now + timedelta(hours=1)
+                state.last_error = "; ".join(f"{key}: {value}" for key, value in result["errors"].items()) or None
+                db.commit()
+                items.append(result)
+            except Exception as exc:
+                db.rollback()
+                state = crypto_backfill.get_or_create_sync_state(
+                    db, instrument_id=instrument.id, provider="binance_usdm",
+                    data_kind="derivatives_metrics", interval="1h",
+                )
+                state.last_attempt_at = now
+                state.next_due_at = now + timedelta(minutes=15)
+                state.last_error = str(exc)[:300]
+                db.commit()
+                items.append({"instrument_id": instrument.id, "status": "failed", "error": state.last_error})
+        return {"items": items, "skipped": len(instruments) - len(items)}
+
+
 @celery_app.task(name="app.tasks.celery_app.refresh_crypto_latest", queue="crypto_public")
 def refresh_crypto_latest():
     """Short-TTL Redis ticker refresh for the bounded universe (REST-first)."""
@@ -898,7 +1028,9 @@ def refresh_crypto_latest():
     if not settings.crypto_public_enabled:
         return {"skipped": "crypto_public_disabled"}
     with SessionLocal() as db:
-        instruments = crypto_jobs.instrument_universe(db, kind="spot")
+        instruments = crypto_jobs.instrument_universe(db, kind="spot") + crypto_jobs.instrument_universe(
+            db, kind="perpetual", market="usdm_futures"
+        )
         if not instruments:
             return {"skipped": "no_instruments"}
         client = BinancePublicClient(

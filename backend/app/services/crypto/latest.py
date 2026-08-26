@@ -23,7 +23,8 @@ from app.services.crypto.providers.binance import BinancePublicClient, BinancePu
 
 logger = logging.getLogger(__name__)
 
-PROVIDER_BY_MARKET = {"spot": "binance_spot", "usdm": "binance_usdm"}
+PROVIDER_BY_MARKET = {"spot": "binance_spot", "usdm_futures": "binance_usdm"}
+CLIENT_MARKET_BY_MARKET = {"spot": "spot", "usdm_futures": "usdm"}
 DEFAULT_TTL_SECONDS = 60
 DEFAULT_STALE_SECONDS = 180
 
@@ -85,7 +86,10 @@ def refresh_latest_tickers(
     for instrument in instruments:
         provider = PROVIDER_BY_MARKET.get(instrument.market, f"binance_{instrument.market}")
         try:
-            ticker = client.ticker_24h(instrument.market, instrument.provider_symbol)
+            ticker = client.ticker_24h(
+                CLIENT_MARKET_BY_MARKET.get(instrument.market, instrument.market),
+                instrument.provider_symbol,
+            )
         except BinancePublicError as exc:
             summary.failed.append(
                 {"instrument_id": instrument.id, "symbol": instrument.provider_symbol, "error": f"{exc.kind}: {exc.message}"}
@@ -96,8 +100,8 @@ def refresh_latest_tickers(
             "provider": provider,
             "symbol": ticker.symbol,
             "last_price": str(ticker.last_price),
-            "bid_price": str(ticker.bid_price),
-            "ask_price": str(ticker.ask_price),
+            "bid_price": str(ticker.bid_price) if ticker.bid_price is not None else None,
+            "ask_price": str(ticker.ask_price) if ticker.ask_price is not None else None,
             "high_price_24h": str(ticker.high_price),
             "low_price_24h": str(ticker.low_price),
             "base_volume_24h": str(ticker.base_volume),

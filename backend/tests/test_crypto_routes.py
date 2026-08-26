@@ -28,6 +28,8 @@ IDENTITY_TABLES = [
     "crypto_protocol_assets",
     "crypto_instruments",
     "crypto_provider_mappings",
+    "crypto_funding_rates",
+    "crypto_derivatives_metrics",
 ]
 
 
@@ -142,6 +144,29 @@ def test_instrument_detail_returns_assets_and_mapping_evidence(client):
 
 def test_instrument_detail_404(client):
     assert client.get("/api/crypto/instruments/99999").status_code == 404
+
+
+def test_spot_candles_reject_derivative_price_authority(client):
+    spot_id = client.get("/api/crypto/instruments", params={"kind": "spot"}).json()["items"][0]["id"]
+    response = client.get(
+        "/api/crypto/market/candles",
+        params={"instrument_id": spot_id, "interval": "1h", "price_type": "mark"},
+    )
+    assert response.status_code == 422
+
+
+def test_derivatives_routes_are_perpetual_only_and_truthful_when_empty(client):
+    listing = client.get("/api/crypto/instruments").json()["items"]
+    spot_id = next(item["id"] for item in listing if item["kind"] == "spot")
+    perpetual_id = next(item["id"] for item in listing if item["kind"] == "perpetual")
+    assert client.get("/api/crypto/derivatives", params={"instrument_id": spot_id}).status_code == 422
+
+    history = client.get("/api/crypto/derivatives", params={"instrument_id": perpetual_id})
+    assert history.status_code == 200
+    assert history.json()["metrics"] == []
+    regime = client.get("/api/crypto/derivatives/regime", params={"instrument_id": perpetual_id})
+    assert regime.status_code == 200
+    assert regime.json()["state"] == "INSUFFICIENT_DATA"
 
 
 def test_search_returns_typed_stable_ids(client):
