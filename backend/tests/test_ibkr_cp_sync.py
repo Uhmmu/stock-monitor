@@ -182,6 +182,16 @@ def test_normalization_handles_stocks_etfs_options_and_unknown_types():
     assert any("conid" in warning for warning in warnings)
 
 
+def test_normalization_maps_gateway_local_symbol_alias():
+    prepared, _ = normalize_cp_positions([
+        row("124963245", "1578", 10, asset_class="STK", currency="JPY"),
+        row("1", "NVDA", 10, asset_class="STK", currency="USD"),
+    ], account_id="DU1")
+    symbols = {item["conid"]: item["symbol"] for item in prepared}
+    assert symbols["124963245"] == "1578.T"   # Gateway bare symbol merged with Flex/Yahoo form
+    assert symbols["1"] == "NVDA"
+
+
 def test_normalization_flags_duplicate_conid_and_bad_numbers():
     prepared, warnings = normalize_cp_positions([
         row("9", "AAPL", "1.5"), row("9", "AAPL", 2), row("10", "BAD", "not-a-number"),

@@ -41,6 +41,10 @@ KNOWN_ASSET_CLASSES = {
     "STK", "ETF", "ADR", "OPT", "FUT", "FOP", "CASH", "BOND", "MF", "IND", "CMDTY", "CRYPTO", "WAR",
 }
 
+# Gateway returns bare local symbols for some foreign listings; map the known
+# one to its project/Yahoo form so both sources display the same ticker.
+GATEWAY_SYMBOL_ALIASES = {"1578": "1578.T"}
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -126,6 +130,8 @@ def normalize_cp_positions(rows: list[dict[str, Any]], *, account_id: str) -> tu
         conid = str(conid) if conid is not None and str(conid).strip() else None
         quantity = _decimal(row.get("position"))
         symbol = (row.get("symbol") or None)
+        if symbol:
+            symbol = GATEWAY_SYMBOL_ALIASES.get(symbol, symbol)
         if conid is None:
             warnings.append(f"跳过缺少 conid 的仓位记录（symbol={symbol or '未知'}）")
             continue
