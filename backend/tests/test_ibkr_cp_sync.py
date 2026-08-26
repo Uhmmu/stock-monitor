@@ -16,7 +16,7 @@ from app.integrations.ibkr.cp_sync import (
 )
 from app.integrations.ibkr.db_models import IbkrCpPosition, IbkrCpSyncRun
 from app.integrations.ibkr.exceptions import (
-    IbkrConfigurationError, IbkrGatewayTimeoutError, IbkrError,
+    IbkrAuthenticationRequiredError, IbkrConfigurationError, IbkrGatewayTimeoutError, IbkrError,
 )
 from app.integrations.ibkr.flex_client import IbkrFlexClient
 from app.integrations.ibkr.formal_routes import (
@@ -513,3 +513,116 @@ def test_cp_positions_migration_round_trip_on_sqlite():
             assert not {"ibkr_cp_sync_runs", "ibkr_cp_positions"} & tables
         finally:
             migration.op = original
+
+
+# ---------------------------------------------------------------- gateway -> portfolio propagation
+
+
+def _setup_propagation_world(db: Session, username: str):
+    from app.models import Portfolio, PortfolioPosition, Security
+
+    user = User(username=username, password_hash="x", role="user", status="active")
+    db.add(user); db.flush()
+    portfolio = Portfolio(user_id=user.id, slug="default", name="Default", base_currency="USD")
+    db.add(portfolio); db.flush()
+    sec_1578 = Security(display_symbol="1578.T", yahoo_symbol="1578.T", currency="JPY", ibkr_conid="124963245")
+    sec_sofi = Security(display_symbol="SOFI", yahoo_symbol="SOFI", currency="USD", ibkr_conid="494162724")
+    sec_iren = Security(display_symbol="IREN", yahoo_symbol="IREN", currency="USD", ibkr_conid="526906130")
+    sec_nvo = Security(display_symbol="NVO", yahoo_symbol="NVO", currency="USD")  # conid unknown yet
+    sec_absent = Security(display_symbol="ABSENT", yahoo_symbol="ABSENT", currency="USD", ibkr_conid="999")
+    sec_manual = Security(display_symbol="MANUAL", yahoo_symbol="MANUAL", currency="USD")
+    db.add_all([sec_1578, sec_sofi, sec_iren, sec_nvo, sec_absent, sec_manual]); db.flush()
+    positions = [
+        PortfolioPosition(portfolio_id=portfolio.id, security_id=sec_1578.id, symbol="1578.T",
+                          total_quantity=10, average_cost=2800, total_cost=28000, currency="JPY", authority_source="ibkr_flex"),
+        PortfolioPosition(portfolio_id=portfolio.id, security_id=sec_sofi.id, symbol="SOFI",
+                          total_quantity=15, average_cost=10, total_cost=150, currency="USD", authority_source="ibkr_flex"),
+        PortfolioPosition(portfolio_id=portfolio.id, security_id=sec_iren.id, symbol="IREN",
+                          total_quantity=3, average_cost=20, total_cost=60, currency="USD", authority_source="ibkr_flex"),
+        PortfolioPosition(portfolio_id=portfolio.id, security_id=sec_absent.id, symbol="ABSENT",
+                          total_quantity=2, average_cost=5, total_cost=10, currency="USD", authority_source="ibkr_flex"),
+        PortfolioPosition(portfolio_id=portfolio.id, security_id=sec_manual.id, symbol="MANUAL",
+                          total_quantity=5, average_cost=1, total_cost=5, currency="USD", authority_source="manual"),
+    ]
+    db.add_all(positions); db.commit()
+    return user, portfolio
+
+
+def test_gateway_sync_propagates_to_portfolio_with_priority(factory, monkeypatch):
+    with factory() as db:
+        user, _ = _setup_propagation_world(db, "prop-user")
+        monkeypatch.setattr("app.integrations.ibkr.cp_sync.SessionLocal", factory)
+        monkeypatch.setattr("app.integrations.ibkr.cp_sync.get_settings", lambda: settings())
+        sync_run, _ = request_cp_sync(db, user_id=user.id)
+        run_id = sync_run.id
+
+    result = run(execute_cp_sync(run_id, FakeService(positions=[
+        row("124963245", "1578", 10, asset_class="STK", currency="JPY", average_cost=2800),   # conid match, symbol differs
+        row("494162724", "SOFI", 11, asset_class="STK", currency="USD", average_cost=10),     # qty 15 -> 11
+        row("526906130", "IREN", 0, asset_class="STK", currency="USD"),                       # closed today
+        row("208813719", "GOOGL", 0.5, asset_class="STK", currency="USD", average_cost=200),  # brand new
+        row("777", "NVO", 3, asset_class="STK", currency="USD", average_cost=42),             # symbol fallback, conid attaches
+    ])))
+    assert result["status"] == "completed"
+    prop = result["propagation"]
+    assert prop["applied"] is True
+    assert prop["created_symbols"] == ["GOOGL", "NVO"]
+    assert set(prop["closed_symbols"]) == {"IREN", "ABSENT"}
+    assert prop["quantity_conflicts"] >= 3  # SOFI change, IREN zero, ABSENT absent-closure
+
+    with factory() as db:
+        from app.models import PortfolioPosition, Security
+
+        rows = {p.symbol: p for p in db.scalars(select(PortfolioPosition)).all()}
+        assert rows["1578.T"].total_quantity == 10 and rows["1578.T"].authority_source == "client_portal_gateway"
+        assert rows["SOFI"].total_quantity == 11 and rows["SOFI"].authority_source == "client_portal_gateway"
+        assert rows["IREN"].total_quantity == 0            # gateway reported zero today
+        assert rows["ABSENT"].total_quantity == 0          # complete fetch did not list it
+        assert rows["GOOGL"].total_quantity == 0.5 and rows["GOOGL"].average_cost == 200
+        assert rows["NVO"].total_quantity == 3
+        assert rows["MANUAL"].total_quantity == 5 and rows["MANUAL"].authority_source == "manual"  # never touched
+        googl_security = db.scalar(select(Security).where(Security.yahoo_symbol == "GOOGL"))
+        assert googl_security.ibkr_conid == "208813719"    # minimal security created with conid
+        nvo_security = db.scalar(select(Security).where(Security.yahoo_symbol == "NVO"))
+        assert nvo_security.ibkr_conid == "777"            # conid attached by symbol fallback
+
+
+def test_gateway_avg_cost_zero_keeps_existing_cost(factory, monkeypatch):
+    with factory() as db:
+        user, _ = _setup_propagation_world(db, "cost-user")
+        monkeypatch.setattr("app.integrations.ibkr.cp_sync.SessionLocal", factory)
+        monkeypatch.setattr("app.integrations.ibkr.cp_sync.get_settings", lambda: settings())
+        sync_run, _ = request_cp_sync(db, user_id=user.id)
+
+    run(execute_cp_sync(sync_run.id, FakeService(positions=[
+        row("494162724", "SOFI", 20, asset_class="STK", currency="USD", average_cost=0),  # gateway sometimes reports 0
+    ])))
+    with factory() as db:
+        from app.models import PortfolioPosition
+
+        sofi = db.scalar(select(PortfolioPosition).where(PortfolioPosition.symbol == "SOFI"))
+        assert sofi.total_quantity == 20
+        assert sofi.average_cost == 10          # kept
+        assert sofi.total_cost == 200           # qty * kept avg cost
+        # everything else with an IBKR authority and a conid got closed (absent from fetch)
+        assert db.scalar(select(PortfolioPosition).where(PortfolioPosition.symbol == "IREN")).total_quantity == 0
+
+
+def test_gateway_failure_leaves_portfolio_untouched(factory, monkeypatch):
+    with factory() as db:
+        user, _ = _setup_propagation_world(db, "prop-fail-user")
+        monkeypatch.setattr("app.integrations.ibkr.cp_sync.SessionLocal", factory)
+        monkeypatch.setattr("app.integrations.ibkr.cp_sync.get_settings", lambda: settings())
+        sync_run, _ = request_cp_sync(db, user_id=user.id)
+
+    result = run(execute_cp_sync(sync_run.id, FakeService(
+        fail_at="auth", exc=IbkrAuthenticationRequiredError("not logged in"),
+    )))
+    assert result["status"] == "failed"
+    assert result["propagation"] == {}
+    with factory() as db:
+        from app.models import PortfolioPosition
+
+        sofi = db.scalar(select(PortfolioPosition).where(PortfolioPosition.symbol == "SOFI"))
+        assert sofi.total_quantity == 15 and sofi.authority_source == "ibkr_flex"
+        assert db.scalar(select(PortfolioPosition).where(PortfolioPosition.symbol == "IREN")).total_quantity == 3

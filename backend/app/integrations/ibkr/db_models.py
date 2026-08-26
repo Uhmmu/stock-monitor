@@ -284,6 +284,7 @@ class IbkrCpSyncRun(Base):
     removed_count: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     warnings: Mapped[list] = mapped_column(JSON, default=list)
+    propagation: Mapped[dict] = mapped_column(JSON, default=dict)
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)
     error_stage: Mapped[str | None] = mapped_column(String(24))

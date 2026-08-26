@@ -254,12 +254,20 @@ async def execute_cp_sync(sync_run_id: int, service: IbkrReadOnlyService | None 
             _stage(db, run, "persisting", warnings=warnings)
             stage = "persisting"
             counts = _persist_positions(db, run, prepared)
+            # Gateway is the highest-priority source for current position
+            # quantities: propagate immediately in the same transaction.
+            from .cp_propagation import propagate_cp_positions_to_portfolio
+            propagation = propagate_cp_positions_to_portfolio(db, user_id=run.user_id, run_id=run.id, prepared=prepared)
+            run.propagation = propagation
             run.status = "completed"
             run.stage = "completed"
             run.completed_at = _now()
             run.heartbeat_at = _now()
             run.duration_ms = round((time.perf_counter() - began) * 1000)
             db.commit()
+            if propagation.get("applied"):
+                from .propagation import invalidate_portfolio_consumers
+                invalidate_portfolio_consumers(run.user_id)
             return cp_sync_result(run)
         except Exception as exc:
             db.rollback()
@@ -290,6 +298,7 @@ def cp_sync_result(run: IbkrCpSyncRun) -> dict[str, Any]:
             "inserted": run.inserted_count, "updated": run.updated_count, "removed": run.removed_count,
         },
         "warnings": run.warnings or [],
+        "propagation": run.propagation or {},
         "error": ({"stage": run.error_stage, "code": run.error_code, "message": run.error_message}
                   if run.error_code else None),
     }

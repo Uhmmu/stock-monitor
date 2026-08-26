@@ -63,6 +63,11 @@ export function IbkrAccount(){
   useEffect(()=>{
     if(!activeCpSync||!['completed','failed'].includes(activeCpSync.status))return
     client.invalidateQueries({queryKey:['ibkr-cp-status']});client.invalidateQueries({queryKey:['ibkr-cp-positions']})
+    if(activeCpSync.status==='completed'){
+      client.invalidateQueries({queryKey:['portfolio-summary']});client.invalidateQueries({queryKey:['portfolio-health']})
+      client.invalidateQueries({queryKey:['portfolio-performance']});client.invalidateQueries({queryKey:['portfolio-attribution']})
+      client.invalidateQueries({queryKey:['portfolio-position-ledger']});client.invalidateQueries({queryKey:['holdings']})
+    }
   },[activeCpSync?.status,client])
   useEffect(()=>{
     if(!activeSync||!['completed','failed','partial_failed'].includes(activeSync.status))return
@@ -101,8 +106,7 @@ export function IbkrAccount(){
         {activeCpSync&&<p className={`ibkr-cp-result ${activeCpSync.status}`}>{activeCpSync.status==='completed'
           ?`同步完成：${activeCpSync.position_count} 个仓位 · 新增 ${activeCpSync.counts.inserted} · 更新 ${activeCpSync.counts.updated} · 移除 ${activeCpSync.counts.removed}${activeCpSync.warnings.length?` · ${activeCpSync.warnings.length} 项说明`:''}`
           :activeCpSync.status==='failed'?`同步失败：${activeCpSync.error?.message||'未知错误'}（阶段：${cpStageLabel[activeCpSync.error?.stage||'']||activeCpSync.error?.stage||'—'}）`
-          :`${cpStageLabel[activeCpSync.stage]||activeCpSync.stage} · 运行 #${activeCpSync.sync_run_id}`}</p>}
-        {!cp?.enabled&&<p className="ibkr-cp-hint">服务端未启用 IBKR_CP_ENABLED，无法同步。</p>}
+          :`${cpStageLabel[activeCpSync.stage]||activeCpSync.stage} · 运行 #${activeCpSync.sync_run_id}`}</p>}        {!cp?.enabled&&<p className="ibkr-cp-hint">服务端未启用 IBKR_CP_ENABLED，无法同步。</p>}
         {cpOpen&&<div className="ibkr-cp-positions">
           {cpPositions.isLoading&&<div className="empty">正在读取 Gateway 仓位…</div>}
           {(cpPositions.data&&!cpPositions.data.items.length)&&<div className="empty">Gateway 当前没有仓位；空结果只在会话验证成功后写入。</div>}
