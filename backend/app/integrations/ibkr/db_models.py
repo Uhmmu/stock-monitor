@@ -255,3 +255,78 @@ class IbkrPortfolioAuthorityAudit(Base):
     application_status: Mapped[str] = mapped_column(String(24))
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IbkrCpSyncRun(Base):
+    """One manual Client Portal Gateway position sync attempt.
+
+    Deliberately separate from IbkrFlexSyncRun: Flex rows are immutable
+    statement snapshots keyed by source_hash, while Gateway runs describe a
+    short live fetch that replaces the current-state position table.
+    """
+
+    __tablename__ = "ibkr_cp_sync_runs"
+    __table_args__ = (
+        Index("uq_ibkr_cp_one_active_user", "user_id", unique=True,
+              postgresql_where=text("status IN ('queued','running')"),
+              sqlite_where=text("status IN ('queued','running')")),
+        Index("ix_ibkr_cp_run_user_completed", "user_id", "completed_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    trigger_type: Mapped[str] = mapped_column(String(24), default="manual")
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    stage: Mapped[str] = mapped_column(String(24), default="requested", index=True)
+    account_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    position_count: Mapped[int] = mapped_column(Integer, default=0)
+    inserted_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, default=0)
+    removed_count: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    error_stage: Mapped[str | None] = mapped_column(String(24))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IbkrCpPosition(Base):
+    """Current-state position from the Client Portal Gateway.
+
+    One row per (user, account, conid). Rows absent from a successful sync
+    are soft-marked ``removed`` instead of deleted so the history stays
+    auditable; "current positions" queries must filter ``status='active'``.
+    """
+
+    __tablename__ = "ibkr_cp_positions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "account_id", "conid", name="uq_ibkr_cp_position_key"),
+        Index("ix_ibkr_cp_position_user_status", "user_id", "status"),
+        Index("ix_ibkr_cp_position_account", "account_id"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[str] = mapped_column(String(80))
+    conid: Mapped[str] = mapped_column(String(32))
+    symbol: Mapped[str | None] = mapped_column(String(48))
+    asset_class: Mapped[str | None] = mapped_column(String(32))
+    currency: Mapped[str | None] = mapped_column(String(16))
+    exchange: Mapped[str | None] = mapped_column(String(32))
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    average_cost: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    market_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    market_value: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    unrealized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 12))
+    source: Mapped[str] = mapped_column(String(32), default="client_portal_gateway")
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    raw_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    last_sync_run_id: Mapped[int] = mapped_column(ForeignKey("ibkr_cp_sync_runs.id", ondelete="CASCADE"), index=True)
+    first_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_run_id: Mapped[int | None] = mapped_column(ForeignKey("ibkr_cp_sync_runs.id", ondelete="SET NULL"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -438,6 +438,18 @@ def sync_ibkr_flex_account(sync_run_id: int):
     return asyncio.run(execute_sync(sync_run_id))
 
 
+@celery_app.task(
+    name="app.tasks.celery_app.sync_ibkr_client_portal_positions",
+    queue="ibkr",
+    soft_time_limit=270,
+    time_limit=300,
+)
+def sync_ibkr_client_portal_positions(sync_run_id: int):
+    """Manual-only Client Portal Gateway current-position sync (no schedule)."""
+    from app.integrations.ibkr.cp_sync import execute_cp_sync
+    return asyncio.run(execute_cp_sync(sync_run_id))
+
+
 @celery_app.task(name="app.tasks.celery_app.ensure_ibkr_flex_fresh")
 def ensure_ibkr_flex_fresh():
     settings = get_settings()

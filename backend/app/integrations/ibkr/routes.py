@@ -52,6 +52,7 @@ def config():
     safe_login_url = settings.ibkr_cp_login_url if login.scheme == "https" and login.hostname in {"localhost", "127.0.0.1"} and login.port == 5000 else "https://localhost:5000"
     return {"cp_enabled": settings.ibkr_cp_enabled, "cp_login_url": safe_login_url,
             "cp_verify_ssl": settings.ibkr_cp_verify_ssl, "username_hint": settings.ibkr_username_hint,
+            "cp_account_id_configured": bool(settings.ibkr_cp_account_id),
             "flex_enabled": settings.ibkr_flex_enabled,
             "flex_configured": bool(settings.ibkr_flex_token and settings.ibkr_flex_query_id),
             "proxy_enforced": settings.ibkr_proxy_url in {"socks5h://127.0.0.1:10808", "socks5h://host.docker.internal:10808"}, "read_only": True,

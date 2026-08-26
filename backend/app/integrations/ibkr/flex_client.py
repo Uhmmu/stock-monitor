@@ -5,12 +5,12 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
 
 from app.config import Settings, get_settings
-from .exceptions import IbkrConfigurationError, IbkrFlexError, IbkrFlexNotConfiguredError, IbkrGatewayTimeoutError, IbkrGatewayUnavailableError
+from .exceptions import IbkrFlexError, IbkrFlexNotConfiguredError, IbkrGatewayTimeoutError, IbkrGatewayUnavailableError
+from .http_transport import build_ibkr_http_client, validated_ibkr_proxy_url
 from .redaction import sanitize_xml
 
 SECTION_TAGS = {
@@ -24,13 +24,12 @@ SECTION_TAGS = {
 class IbkrFlexClient:
     def __init__(self, settings: Settings | None = None, client: httpx.AsyncClient | None = None):
         self.settings = settings or get_settings()
-        proxy = urlsplit(self.settings.ibkr_proxy_url)
-        if proxy.scheme != "socks5h" or proxy.hostname not in {"127.0.0.1", "localhost", "host.docker.internal"} or proxy.port != 10808:
-            raise IbkrConfigurationError("IBKR_PROXY_URL 必须指向受控的本机 10808 SOCKS5h 入口")
+        validated_ibkr_proxy_url(self.settings)
         self._owned = client is None
-        self.client = client or httpx.AsyncClient(
-            proxy=self.settings.ibkr_proxy_url, timeout=self.settings.ibkr_flex_timeout_seconds,
-            headers={"User-Agent": "stock-monitor-read-only-ibkr-test/1.0"}, trust_env=False,
+        self.client = client or build_ibkr_http_client(
+            self.settings,
+            timeout=self.settings.ibkr_flex_timeout_seconds,
+            headers={"User-Agent": "stock-monitor-read-only-ibkr-test/1.0"},
         )
 
     async def close(self):

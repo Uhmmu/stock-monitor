@@ -8,6 +8,32 @@
 
 选择 Client Portal Gateway 是因为个人 IBKR Pro 账户可通过官方 SRP 登录和 IB Key 建立 Web API 会话。stock-monitor 仅把自动登录用于只读测试模块，不启用交易接口。
 
+## Gateway 与 Flex 双源同步
+
+IBKR 板块（前端 `/ibkr`）有两个互相独立的手动同步来源，绝不互相 fallback 或隐式调用：
+
+### Client Portal Gateway —— 当前仓位（current / near-real-time）
+
+- 用途：读取当前账户与当前仓位，写入数据库 current-state 表 `ibkr_cp_positions`（迁移 `0074_ibkr_cp_positions`，含运行记录表 `ibkr_cp_sync_runs`）。
+- 管线：`POST /api/ibkr/client-portal/sync` → Celery 任务 `sync_ibkr_client_portal_positions`（`ibkr` 队列，仅手动触发，无 beat 计划）→ `cp_sync.py`：认证检查 → 账户选择 → 分页拉取 `/portfolio/{accountId}/positions/{page}` → 规范化 → 单数据库事务内 upsert 当前仓位并把缺失仓位标记 `removed`（软删除保留历史）。
+- 读取端点：`GET /api/ibkr/client-portal/status`（可选 `?live=1` 附带 Gateway 连通性探测）、`GET /api/ibkr/client-portal/positions`、`GET /api/ibkr/client-portal/sync/{id}`。
+- 空仓位安全：只有会话已认证、账户经过 `/portfolio/accounts` 校验、请求成功且 IBKR 明确返回空集合时，才把当前仓位清空；任何上游失败都保留原有数据库仓位。
+- 多账户：单账户自动选用；多账户必须在服务端设置 `IBKR_CP_ACCOUNT_ID`，否则同步显式失败，不做猜测。
+- Gateway 同步不写 `portfolio_positions`，不传播 Portfolio 权威；Flex 仍是组合持仓权威来源。
+
+### Flex —— 报表/历史/日终（reporting / statement / historical / EOD）
+
+- 既有 `POST /api/ibkr/sync` 流程保持不变；数量、成本、币种等组合权威仍由 Flex 对账传播。
+
+两者目前均为用户手动触发。
+
+## 代理约定（所有 IBKR 连接）
+
+所有 IBKR HTTP 客户端统一由 `backend/app/integrations/ibkr/http_transport.py` 构造：
+
+- 任何非环回 IBKR 主机（Flex Web Service 及后续新增端点）强制 `socks5h` 代理（Xray/VLESS），代理缺失或不可用即 fail-closed，禁止 direct fallback；`trust_env` 恒为 false。
+- 唯一例外是本机 Client Portal Gateway origin（`127.0.0.1` / `localhost` / `host.docker.internal` 的 5000 端口）：该跳不出 VPS，且 Gateway 进程自身被隔离在 `stock-monitor-ibkr` network namespace 中、其唯一出站路径就是 namespace SOCKS relay 到宿主机 `127.0.0.1:10808`；把容器域名的解析交给 socks5h 在技术上不可行。这与 headless Chromium 登录既有的 `--proxy-bypass-list` 先例一致。
+
 ## VPS 安装
 
 使用 [deploy/ibkr/README.md](../../deploy/ibkr/README.md) 的脚本。安装程序在 Debian/Ubuntu 上检查 Java 17、unzip、curl、ca-certificates 和 proxychains4，验证下载文件为 ZIP，已有安装会先整体备份，且不修改防火墙或 Gateway 用户配置。专用 proxychains 配置使用 `strict_chain` 与 `proxy_dns`，确保域名经代理解析并在 10808 失效时 fail-closed。

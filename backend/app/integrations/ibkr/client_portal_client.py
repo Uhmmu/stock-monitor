@@ -13,6 +13,7 @@ from .exceptions import (
     IbkrApiError, IbkrAuthenticationRequiredError, IbkrBrokerageSessionError, IbkrCompetingSessionError, IbkrDisabledError,
     IbkrConfigurationError, IbkrGatewayTimeoutError, IbkrGatewayUnavailableError, IbkrInvalidResponseError,
 )
+from .http_transport import LOOPBACK_GATEWAY_HOSTS, build_ibkr_http_client
 from .redaction import sanitize
 
 
@@ -28,11 +29,15 @@ class IbkrClientPortalClient:
     def __init__(self, settings: Settings | None = None, client: httpx.AsyncClient | None = None):
         self.settings = settings or get_settings()
         parsed = urlsplit(self.settings.ibkr_cp_base_url)
-        if parsed.scheme != "https" or parsed.hostname not in {"127.0.0.1", "localhost", "host.docker.internal"} or parsed.port != 5000:
+        if parsed.scheme != "https" or parsed.hostname not in LOOPBACK_GATEWAY_HOSTS or parsed.port != 5000:
             raise IbkrConfigurationError("IBKR_CP_BASE_URL 必须是本机或受控 Docker host gateway 的 HTTPS Gateway 地址")
         self.gateway_origin = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
         self._owned = client is None
-        self.client = client or httpx.AsyncClient(
+        # The loopback Gateway origin is the one documented proxy exemption in
+        # http_transport.py; the shared builder still validates the proxy
+        # configuration so a broken deployment fails closed everywhere.
+        self.client = client or build_ibkr_http_client(
+            self.settings,
             base_url=self.settings.ibkr_cp_base_url.rstrip("/"),
             verify=self.settings.ibkr_cp_verify_ssl,
             timeout=httpx.Timeout(
@@ -40,7 +45,6 @@ class IbkrClientPortalClient:
                 connect=self.settings.ibkr_cp_connect_timeout_seconds,
             ),
             limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
-            trust_env=False,
         )
 
     async def close(self) -> None:

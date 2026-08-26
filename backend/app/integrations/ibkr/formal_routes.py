@@ -8,14 +8,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
+from app.config import get_settings
 from app.database import get_db
 from app.models import User
 from .db_models import (
-    IbkrAccountDailyPerformance, IbkrDividendEvent, IbkrFlexRecord,
+    IbkrAccountDailyPerformance, IbkrCpPosition, IbkrCpSyncRun, IbkrDividendEvent, IbkrFlexRecord,
     IbkrFlexSyncRun, IbkrNormalizedCashFlow, IbkrPortfolioAuthorityAudit, IbkrPositionPerformanceDaily,
     IbkrTradeRoundTrip,
 )
-
+from .cp_sync import cp_sync_result, request_cp_sync
+from .exceptions import IbkrError
 from .repository import latest_run, latest_sync_attempt, mask_account, page_records
 from .sync import request_sync, sync_result
 
@@ -239,6 +241,113 @@ def data_health(user: User = Depends(get_current_user), db: Session = Depends(ge
         "portfolio_propagated_at": (run.propagation or {}).get("portfolio_propagated_at"),
         "data_completeness": "partial" if run.warning_count else "complete_for_present_sections",
         "explicit_gaps": {"corporate_actions": run.section_counts.get("corporate_actions", 0), "buying_power": None, "margin": None}}
+
+
+def _latest_cp_run(db: Session, user_id: int) -> IbkrCpSyncRun | None:
+    return db.scalar(select(IbkrCpSyncRun).where(IbkrCpSyncRun.user_id == user_id).order_by(
+        IbkrCpSyncRun.id.desc(),
+    ).limit(1))
+
+
+def _latest_completed_cp_run(db: Session, user_id: int) -> IbkrCpSyncRun | None:
+    return db.scalar(select(IbkrCpSyncRun).where(
+        IbkrCpSyncRun.user_id == user_id, IbkrCpSyncRun.status == "completed",
+    ).order_by(IbkrCpSyncRun.completed_at.desc().nullslast(), IbkrCpSyncRun.id.desc()).limit(1))
+
+
+def _cp_run_payload(run: IbkrCpSyncRun | None) -> dict | None:
+    if run is None:
+        return None
+    payload = cp_sync_result(run)
+    payload["account_id_masked"] = mask_account(run.account_id)
+    return payload
+
+
+@router.get("/client-portal/status")
+async def client_portal_status(live: bool = False, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Database-only Gateway source status; `live=1` additionally probes the Gateway."""
+    settings = get_settings()
+    last_run = _latest_cp_run(db, user.id)
+    last_completed = _latest_completed_cp_run(db, user.id)
+    active_count = db.scalar(select(func.count()).select_from(IbkrCpPosition).where(
+        IbkrCpPosition.user_id == user.id, IbkrCpPosition.status == "active",
+    )) or 0
+    gateway: dict = {"enabled": settings.ibkr_cp_enabled, "live_checked": False}
+    if live:
+        gateway["live_checked"] = True
+        try:
+            from .client_portal_client import IbkrClientPortalClient
+            from .service import IbkrReadOnlyService
+
+            service = IbkrReadOnlyService(IbkrClientPortalClient())
+            try:
+                health = await service.health()
+                auth = await service.auth_status()
+                gateway.update({
+                    "reachable": bool(health["normalized"]["reachable"]),
+                    "authenticated": bool(auth["normalized"]["authenticated"]),
+                    "connected": bool(auth["normalized"]["connected"]),
+                    "probe_error": None,
+                })
+            finally:
+                await service.client.close()
+        except IbkrError as exc:
+            gateway.update({"reachable": False, "authenticated": False, "connected": False,
+                            "probe_error": {"code": exc.code, "message": exc.message}})
+    return {
+        "source": "client_portal_gateway",
+        "enabled": settings.ibkr_cp_enabled,
+        "account_configured": bool(settings.ibkr_cp_account_id),
+        "configured": last_run is not None,
+        "gateway": gateway,
+        "last_sync": _cp_run_payload(last_run),
+        "last_successful_sync": _cp_run_payload(last_completed),
+        "active_position_count": active_count,
+        "note": "Client Portal Gateway 提供当前账户与仓位快照；Flex 仍是报告与历史数据来源。两者均为手动同步。",
+    }
+
+
+@router.post("/client-portal/sync", status_code=http_status.HTTP_202_ACCEPTED)
+def start_client_portal_sync(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    settings = get_settings()
+    if not settings.ibkr_cp_enabled:
+        raise HTTPException(503, "IBKR Client Portal Gateway 未启用")
+    try:
+        run, created = request_cp_sync(db, user_id=user.id, trigger_type="manual")
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Gateway 同步请求冲突，请稍后重试") from exc
+    if created:
+        from app.tasks.celery_app import sync_ibkr_client_portal_positions
+        sync_ibkr_client_portal_positions.delay(run.id)
+    return {**cp_sync_result(run), "created": created, "read_only": True}
+
+
+@router.get("/client-portal/sync/{sync_run_id}")
+def client_portal_sync_detail(sync_run_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    run = db.scalar(select(IbkrCpSyncRun).where(IbkrCpSyncRun.id == sync_run_id, IbkrCpSyncRun.user_id == user.id))
+    if run is None:
+        raise HTTPException(404, "未找到该 Gateway 同步运行")
+    return _cp_run_payload(run)
+
+
+@router.get("/client-portal/positions")
+def client_portal_positions(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = db.scalars(select(IbkrCpPosition).where(
+        IbkrCpPosition.user_id == user.id, IbkrCpPosition.status == "active",
+    ).order_by(IbkrCpPosition.market_value.desc().nullslast(), IbkrCpPosition.symbol)).all()
+    return {
+        "items": [{
+            "id": row.id, "account_id_masked": mask_account(row.account_id), "conid": row.conid,
+            "symbol": row.symbol, "asset_class": row.asset_class, "currency": row.currency,
+            "exchange": row.exchange, "quantity": row.quantity, "average_cost": row.average_cost,
+            "market_price": row.market_price, "market_value": row.market_value,
+            "unrealized_pnl": row.unrealized_pnl, "realized_pnl": row.realized_pnl,
+            "source": row.source, "last_synced_at": row.last_synced_at, "status": row.status,
+        } for row in rows],
+        "total": len(rows),
+        "note": "Client Portal Gateway 当前仓位（current-state）；行情值由 IBKR 报告，估值口径以项目行情为准。",
+    }
 
 
 @router.get("/{resource}")

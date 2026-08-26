@@ -222,6 +222,9 @@ class Settings(BaseSettings):
     ibkr_cp_verify_ssl: bool = False
     ibkr_cp_connect_timeout_seconds: float = 5.0
     ibkr_cp_read_timeout_seconds: float = 30.0
+    # Optional default account for Client Portal Gateway position sync. Empty
+    # means: use the single account when the session exposes exactly one.
+    ibkr_cp_account_id: str = ""
     ibkr_username_hint: str = ""
     ibkr_credential_encryption_key: str = ""
     ibkr_login_browser_executable: str = "/usr/bin/chromium"
