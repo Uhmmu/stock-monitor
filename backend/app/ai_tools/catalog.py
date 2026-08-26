@@ -111,6 +111,35 @@ class SearchNewsArguments(DateArguments):
     @classmethod
     def clean(cls, value): return _symbols(value)
 class IdArguments(ToolArguments): news_id: int = Field(gt=0)
+class CryptoResearchContextArguments(ToolArguments):
+    instrument_id: int | None = Field(None, gt=0)
+    provider: Literal["binance_spot", "binance_usdm"] | None = None
+    provider_id: str | None = Field(None, min_length=3, max_length=64, pattern=r"^[A-Z0-9_-]+$")
+
+    @model_validator(mode="after")
+    def require_exact_scope(self):
+        by_id = self.instrument_id is not None
+        by_provider = self.provider is not None or self.provider_id is not None
+        if by_id == by_provider or (by_provider and not (self.provider and self.provider_id)):
+            raise ValueError("provide instrument_id or exact provider + provider_id")
+        return self
+
+class CryptoNewsArguments(ToolArguments):
+    asset_id: int = Field(gt=0)
+    instrument_id: int | None = Field(None, gt=0)
+    limit: int = Field(20, ge=1, le=20)
+
+class CryptoReportsArguments(ToolArguments):
+    asset_id: int | None = Field(None, gt=0)
+    instrument_id: int | None = Field(None, gt=0)
+    limit: int = Field(20, ge=1, le=20)
+
+    @model_validator(mode="after")
+    def require_scope(self):
+        if self.asset_id is None and self.instrument_id is None:
+            raise ValueError("asset_id or instrument_id is required")
+        return self
+
 class FilingIdArguments(ToolArguments): filing_id: int = Field(gt=0)
 class EventIdArguments(ToolArguments): event_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:\-]+$")
 class ArchiveArguments(SymbolDateArguments):
@@ -439,6 +468,26 @@ def dispatch(name: str, args: ToolArguments, gw: ResearchGateway) -> AdapterResu
         r=gw.tracked_figures(args.query,1,args.limit); return from_research(r,_count_summary("tracked public figures",r))
     if name == "get_figure_positions": return from_research(gw.figure_positions(args.figure_id,args.symbol),f"Returned persisted positions for tracked figure {args.figure_id}.")
     if name == "get_public_figure_activity": return from_research(gw.public_figure_activity(args.figure_id,args.start_date,args.end_date),f"Returned persisted public activity for tracked figure {args.figure_id}.")
+    if name == "get_crypto_research_context":
+        response = (
+            gw.crypto_research_context(args.instrument_id)
+            if args.instrument_id is not None
+            else gw.crypto_research_context_by_provider(args.provider, args.provider_id)
+        )
+        return from_research(
+            response,
+            "Returned persisted crypto market, technical, derivatives, fundamental and regime context for an exact instrument identity; no provider fetch or execution was performed.",
+        )
+    if name == "get_crypto_news":
+        return from_research(
+            gw.crypto_news(args.asset_id, args.instrument_id, args.limit),
+            f"Returned persisted crypto news for asset {args.asset_id}; no provider fetch or execution was performed.",
+        )
+    if name == "get_crypto_reports":
+        return from_research(
+            gw.crypto_reports(args.asset_id, args.instrument_id, args.limit),
+            "Returned persisted crypto research reports; no provider fetch, signal, or order was submitted.",
+        )
     raise RuntimeError(f"unimplemented registered tool: {name}")
 
 
@@ -462,6 +511,9 @@ TOOL_SPECS: list[tuple[str,str,str,type[ToolArguments],bool,int,int|None,int|Non
     ("get_calendar_events","calendar","Calendar events",CalendarArguments,False,120,100,730),("get_calendar_event_detail","calendar","Calendar event detail",EventIdArguments,False,120,None,None),
     ("get_discovery_runs","discovery","Discovery runs",DiscoveryRunsArguments,True,120,50,3660),("get_discovery_run","discovery","Discovery run",RunIdArguments,True,120,None,None),("get_discovery_candidates","discovery","Discovery candidates",CandidateArguments,True,120,50,None),
     ("get_congress_trades","ownership","Congress trades",CongressArguments,False,600,100,3660),("get_tracked_figures","ownership","Tracked figures",FiguresArguments,False,600,100,None),("get_figure_positions","ownership","Figure positions",FigurePositionsArguments,False,600,100,None),("get_public_figure_activity","ownership","Public figure activity",FigureActivityArguments,False,600,100,3660),
+    ("get_crypto_research_context","crypto","Crypto research context",CryptoResearchContextArguments,False,60,None,None),
+    ("get_crypto_news","crypto","Crypto news",CryptoNewsArguments,False,120,20,30),
+    ("get_crypto_reports","crypto","Crypto research reports",CryptoReportsArguments,False,300,20,None),
 ]
 
 
@@ -472,7 +524,7 @@ def build_adapters(disabled: set[str] | None = None) -> list[GatewayToolAdapter]
     for name,domain,title,args_model,private,ttl,max_items,max_days in TOOL_SPECS:
         description=(f"Use this tool to retrieve {title.lower()} already stored in stock-monitor. It returns bounded structured data with sources and freshness. "
                      f"Do not use it for real-time data that may not have synchronized yet. It {'contains current-user private data' if private else 'does not expose another user’s private data'}. "
-                     "It is read-only and never searches the public web, calls a model, refreshes a provider, or triggers paid work.")
+                     "It is read-only and never searches the public web, calls a model, refreshes a provider, triggers paid work, emits signals, or submits paper/test/live orders.")
         definition=ToolDefinition(name=name,domain=domain,title=title,description=description,input_schema=args_model.model_json_schema(),
             output_schema=ToolExecutionResult.model_json_schema(),contains_private_data=private,enabled=name not in disabled,cache_ttl_seconds=ttl,max_items=max_items,max_date_range_days=max_days,
             default_timeout_seconds=default_timeout,max_timeout_seconds=maximum_timeout,tags=[domain,"read-only","stored-data"])

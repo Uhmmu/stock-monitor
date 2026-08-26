@@ -12,4 +12,5 @@ RESEARCH_DOMAINS = (
     "calendar",
     "discovery",
     "ownership",
+    "crypto",
 )

@@ -5,9 +5,10 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app import models as m
 from app.config import get_settings
 from app.models import User
 from app.services.portfolio.investment_ledger import (
@@ -78,6 +79,447 @@ class ResearchGateway:
             {"domains": list(RESEARCH_DOMAINS), "version": RESEARCH_VERSION, "read_only": True},
             sources=[source(SourceType.capability_registry, "v1", "Research Gateway capability registry", authority=SourceAuthority.derived, locator="research://capabilities/v1")],
             freshness=calculate_freshness("capability_registry", datetime.now(UTC), "runtime capability registry"),
+        )
+
+    @staticmethod
+    def _crypto_asset_data(asset):
+        if asset is None:
+            return None
+        return {
+            "id": asset.id,
+            "slug": asset.slug,
+            "symbol": asset.symbol,
+            "display_name": asset.display_name,
+            "asset_kind": asset.asset_kind,
+            "status": asset.status,
+        }
+
+    @classmethod
+    def _crypto_instrument_data(cls, instrument, base, quote, settlement):
+        return {
+            "id": instrument.id,
+            "venue": instrument.venue,
+            "market": instrument.market,
+            "provider_symbol": instrument.provider_symbol,
+            "kind": instrument.kind,
+            "status": instrument.status,
+            "calendar": instrument.calendar,
+            "base_asset": cls._crypto_asset_data(base),
+            "quote_asset": cls._crypto_asset_data(quote),
+            "settlement_asset": cls._crypto_asset_data(settlement),
+            "contract_size": _json_value(instrument.contract_size),
+            "tick_size": _json_value(instrument.tick_size),
+            "step_size": _json_value(instrument.step_size),
+            "min_notional": _json_value(instrument.min_notional),
+        }
+
+    @staticmethod
+    def _crypto_dt_ms(value: int | None) -> datetime | None:
+        if value is None:
+            return None
+        try:
+            return datetime.fromtimestamp(int(value) / 1000, UTC)
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+
+    @staticmethod
+    def _crypto_datetime(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _crypto_warning(code: str, message: str, severity: WarningSeverity = WarningSeverity.warning):
+        return ResearchWarning(code=code, message=message, severity=severity)
+
+    def _crypto_scope(self, instrument_id: int):
+        instrument = self.db.get(m.CryptoInstrument, instrument_id)
+        if instrument is None:
+            raise ResearchError(ResearchErrorCode.not_found, "crypto instrument was not found", status_code=404)
+        base = self.db.get(m.CryptoAsset, instrument.base_asset_id)
+        quote = self.db.get(m.CryptoAsset, instrument.quote_asset_id)
+        settlement = self.db.get(m.CryptoAsset, instrument.settlement_asset_id) if instrument.settlement_asset_id else None
+        if base is None:
+            raise ResearchError(ResearchErrorCode.data_incomplete, "crypto instrument has no canonical base asset", status_code=422)
+        return instrument, base, quote, settlement
+
+    def crypto_research_context_by_provider(self, provider: str, provider_id: str):
+        """Resolve an exact Binance provider identity, then read persisted context."""
+        if provider not in {"binance_spot", "binance_usdm"}:
+            raise ResearchError(
+                ResearchErrorCode.invalid_parameter,
+                "provider must be binance_spot or binance_usdm",
+                field="provider",
+                status_code=422,
+            )
+        mapping = self.db.scalar(
+            select(m.CryptoProviderMapping).where(
+                m.CryptoProviderMapping.provider == provider,
+                m.CryptoProviderMapping.object_type == "instrument",
+                m.CryptoProviderMapping.provider_id == provider_id,
+            )
+        )
+        if mapping is None or mapping.instrument_id is None:
+            raise ResearchError(
+                ResearchErrorCode.not_found,
+                "exact crypto provider instrument mapping was not found",
+                status_code=404,
+            )
+        return self.crypto_research_context(mapping.instrument_id)
+
+    def _crypto_news_rows(self, asset_id: int, instrument_id: int | None, limit: int):
+        from app.models import CryptoNewsAssociation, NewsItem
+
+        target = [CryptoNewsAssociation.asset_id == asset_id, CryptoNewsAssociation.scope_type == "crypto_market"]
+        if instrument_id is not None:
+            target.append(CryptoNewsAssociation.instrument_id == instrument_id)
+        rows = self.db.execute(
+            select(CryptoNewsAssociation, NewsItem)
+            .join(NewsItem, NewsItem.id == CryptoNewsAssociation.news_item_id)
+            .where(or_(*target))
+            .order_by(func.coalesce(NewsItem.published_at, NewsItem.found_at).desc(), NewsItem.id.desc())
+            .limit(max(1, min(limit, 20)))
+        ).all()
+        # One stored article may have both asset and market evidence. Return it
+        # once while retaining every explicit association in the payload.
+        grouped = {}
+        for association, item in rows:
+            entry = grouped.get(item.id)
+            evidence = {
+                "scope_type": association.scope_type,
+                "scope_key": association.scope_key,
+                "confidence": association.confidence,
+                "evidence_method": association.evidence_method,
+                "evidence": _bounded(association.evidence or {}),
+                "provider": association.provider,
+                "provider_entity_id": association.provider_entity_id,
+            }
+            if entry is None:
+                entry = {
+                    "news_id": item.id,
+                    "title": item.title,
+                    "translated_title": item.translated_title,
+                    "summary": item.summary,
+                    "ai_summary": item.ai_summary,
+                    "url": safe_external_url(item.url),
+                    "provider": item.provider,
+                    "source": item.source,
+                    "published_at": item.published_at,
+                    "found_at": item.found_at,
+                    "scope": item.scope,
+                    "associations": [],
+                }
+                grouped[item.id] = entry
+            entry["associations"].append(evidence)
+            entry["association"] = entry["associations"][0]
+        return list(grouped.values())
+
+    def crypto_news(self, asset_id: int, instrument_id: int | None = None, limit: int = 20):
+        asset = self.db.get(m.CryptoAsset, asset_id)
+        if asset is None:
+            raise ResearchError(ResearchErrorCode.not_found, "crypto asset was not found", status_code=404)
+        instrument = None
+        if instrument_id is not None:
+            instrument = self.db.get(m.CryptoInstrument, instrument_id)
+            if instrument is None:
+                raise ResearchError(ResearchErrorCode.not_found, "crypto instrument was not found", status_code=404)
+            if instrument.base_asset_id != asset_id:
+                raise ResearchError(
+                    ResearchErrorCode.invalid_parameter,
+                    "instrument does not belong to the requested crypto asset",
+                    field="instrument_id",
+                    status_code=422,
+                )
+        items = self._crypto_news_rows(asset_id, instrument_id, limit)
+        sources = [
+            source(
+                SourceType.crypto_news,
+                item["news_id"],
+                item["title"],
+                provider=item["provider"],
+                authority=SourceAuthority.secondary,
+                published_at=item["published_at"],
+                retrieved_at=item["found_at"],
+                url=item["url"],
+                locator=f"research://crypto/news/{item['news_id']}",
+            )
+            for item in items
+        ]
+        latest = max((item["found_at"] or item["published_at"] for item in items), default=None)
+        warnings = []
+        if not items:
+            warnings.append(self._crypto_warning(
+                "CRYPTO_NEWS_UNAVAILABLE",
+                "No persisted high-confidence crypto news matched the requested asset/instrument.",
+                WarningSeverity.info,
+            ))
+        warning_messages = [warning.message for warning in warnings]
+        data = {
+            "asset_id": asset_id,
+            "instrument_id": instrument_id,
+            "items": items,
+            "warnings": warning_messages,
+            "read_only": True,
+            "provider_fetch": False,
+        }
+        return self.response(
+            data,
+            sources=sources,
+            freshness=calculate_freshness("news", latest, "latest persisted crypto news association"),
+            warnings=warnings,
+            symbol=asset.symbol,
+            total=len(items),
+        )
+
+    def crypto_reports(self, asset_id: int | None = None, instrument_id: int | None = None, limit: int = 20):
+        if asset_id is None and instrument_id is None:
+            raise ResearchError(
+                ResearchErrorCode.invalid_parameter,
+                "asset_id or instrument_id is required",
+                status_code=422,
+            )
+        asset = self.db.get(m.CryptoAsset, asset_id) if asset_id is not None else None
+        if asset_id is not None and asset is None:
+            raise ResearchError(ResearchErrorCode.not_found, "crypto asset was not found", status_code=404)
+        instrument = self.db.get(m.CryptoInstrument, instrument_id) if instrument_id is not None else None
+        if instrument_id is not None and instrument is None:
+            raise ResearchError(ResearchErrorCode.not_found, "crypto instrument was not found", status_code=404)
+        if asset is not None and instrument is not None and instrument.base_asset_id != asset.id:
+            raise ResearchError(
+                ResearchErrorCode.invalid_parameter,
+                "instrument does not belong to the requested crypto asset",
+                field="instrument_id",
+                status_code=422,
+            )
+        query = select(m.CryptoResearchReport)
+        if asset is not None:
+            query = query.where(m.CryptoResearchReport.asset_id == asset.id)
+        if instrument is not None:
+            query = query.where(m.CryptoResearchReport.instrument_id == instrument.id)
+        rows = list(self.db.scalars(query.order_by(m.CryptoResearchReport.created_at.desc()).limit(max(1, min(limit, 20)))))
+        data_items = [
+            {
+                "report_id": row.id,
+                "asset_id": row.asset_id,
+                "instrument_id": row.instrument_id,
+                "title": row.title,
+                "content": _bounded(row.content),
+                "model": row.model,
+                "sources": _bounded(row.sources or []),
+                "evidence_manifest": _bounded(row.evidence_manifest or {}),
+                "coverage": _bounded(row.coverage or {}),
+                "warnings": _bounded(row.warnings or []),
+                "period_start": row.period_start,
+                "period_end": row.period_end,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ]
+        sources = [
+            source(
+                SourceType.crypto_report,
+                row.id,
+                row.title,
+                provider=row.model,
+                authority=SourceAuthority.derived,
+                published_at=row.created_at,
+                retrieved_at=row.created_at,
+                persisted_at=row.created_at,
+                locator=f"research://crypto/reports/{row.id}",
+            )
+            for row in rows
+        ]
+        warnings = []
+        if not rows:
+            warnings.append(self._crypto_warning(
+                "CRYPTO_REPORTS_UNAVAILABLE",
+                "No persisted crypto research reports matched the requested scope.",
+                WarningSeverity.info,
+            ))
+        data = {
+            "asset_id": asset.id if asset is not None else None,
+            "instrument_id": instrument.id if instrument is not None else None,
+            "items": data_items,
+            "warnings": [warning.message for warning in warnings],
+            "read_only": True,
+            "provider_fetch": False,
+            "execution_authority": False,
+        }
+        latest = max((row.created_at for row in rows), default=None)
+        return self.response(
+            data,
+            sources=sources,
+            freshness=calculate_freshness("technical_analysis", latest, "latest persisted crypto research report"),
+            warnings=warnings,
+            symbol=asset.symbol if asset is not None else None,
+            total=len(rows),
+        )
+
+    def crypto_research_context(self, instrument_id: int):
+        """Compose bounded persisted crypto evidence without provider refreshes."""
+        from app.services.crypto import candles, derivatives, fundamentals, latest, mood_bridge, regime, technical
+
+        instrument, asset, quote, settlement = self._crypto_scope(instrument_id)
+        provider = "binance_usdm" if instrument.market == "usdm_futures" else "binance_spot"
+        latest_market = latest.latest_market_payload(self.db, instrument=instrument, interval="1h")
+        coverage = candles.candle_coverage(self.db, instrument_id=instrument.id, interval="1h", provider=provider)
+        candle_rows = list(self.db.scalars(
+            select(m.MarketCandle)
+            .where(
+                m.MarketCandle.instrument_id == instrument.id,
+                m.MarketCandle.interval == "1h",
+                m.MarketCandle.provider == provider,
+                m.MarketCandle.price_type == "trade",
+            )
+            .order_by(m.MarketCandle.open_time_ms.desc())
+            .limit(50)
+        ))[::-1]
+        technical_data = technical.crypto_technical_payload(self.db, instrument_id=instrument.id, interval="1h", limit=1000)
+        metric_rows = derivatives.read_derivatives_history(self.db, instrument_id=instrument.id, interval="1h", limit=168)
+        funding_rows = derivatives.read_funding_history(self.db, instrument_id=instrument.id, limit=100)
+        metric_data = derivatives.derivatives_history_payload(metric_rows)
+        funding_data = derivatives.funding_history_payload(funding_rows)
+
+        persisted_regime = self.db.scalar(
+            select(m.CryptoRegimeSnapshot)
+            .where(m.CryptoRegimeSnapshot.instrument_id == instrument.id)
+            .order_by(m.CryptoRegimeSnapshot.as_of.desc(), m.CryptoRegimeSnapshot.id.desc())
+            .limit(1)
+        )
+        validation = self.db.scalar(
+            select(m.CryptoRegimeValidationRun)
+            .where(m.CryptoRegimeValidationRun.instrument_id == instrument.id)
+            .order_by(m.CryptoRegimeValidationRun.created_at.desc(), m.CryptoRegimeValidationRun.id.desc())
+            .limit(1)
+        )
+        if persisted_regime is not None:
+            regime_data = {
+                "state": persisted_regime.state,
+                "version": persisted_regime.regime_version,
+                "as_of": persisted_regime.as_of,
+                "evaluated_at": persisted_regime.evaluated_at,
+                "valid_until": persisted_regime.valid_until,
+                "threshold_hash": persisted_regime.threshold_hash,
+                "input_hash": persisted_regime.input_hash,
+                "confidence": persisted_regime.confidence,
+                "coverage": persisted_regime.coverage,
+                "source": persisted_regime.source,
+                **_bounded(persisted_regime.payload or {}),
+            }
+        else:
+            # This is deterministic classification over the stored rows only;
+            # it does not persist a snapshot or call a provider.
+            regime_data = regime.evaluate_regime(metric_rows, funding_rows, evaluated_at=datetime.now(UTC))
+        validation_data = None if validation is None else {
+            "status": validation.status,
+            "validation_version": validation.validation_version,
+            "regime_version": validation.regime_version,
+            "horizons": _bounded(validation.horizons or []),
+            "evaluation_count": validation.evaluation_count,
+            "data_cutoff": validation.data_cutoff,
+            "result": _bounded(validation.result_payload or {}),
+            "evidence": _bounded(validation.evidence or {}),
+            "warnings": _bounded(validation.warnings or []),
+            "completed_at": validation.completed_at,
+        }
+        mood = mood_bridge.build_mood_bridge_payload(regime_data, validation=validation_data, scope_key=f"instrument:{instrument.id}")
+        reference = self.db.scalar(
+            select(m.CryptoAssetReference)
+            .where(m.CryptoAssetReference.asset_id == asset.id, m.CryptoAssetReference.provider == "coingecko")
+            .order_by(m.CryptoAssetReference.provider_timestamp.desc(), m.CryptoAssetReference.id.desc())
+            .limit(1)
+        )
+        mapping = self.db.scalar(
+            select(m.CryptoProviderMapping)
+            .where(
+                m.CryptoProviderMapping.asset_id == asset.id,
+                m.CryptoProviderMapping.object_type == "asset",
+                m.CryptoProviderMapping.provider == "coingecko",
+            )
+            .order_by(m.CryptoProviderMapping.verified_at.desc(), m.CryptoProviderMapping.id.desc())
+            .limit(1)
+        )
+        snapshot = fundamentals.latest_fundamental_snapshot(self.db, asset.id)
+        fundamental_data = fundamentals.fundamental_snapshot_payload(snapshot)
+        news_response = self.crypto_news(asset.id, instrument.id, 20)
+        warnings = []
+        if latest_market.get("source") == "unavailable":
+            warnings.append(self._crypto_warning("CRYPTO_MARKET_UNAVAILABLE", "No persisted latest ticker or closed candle is available."))
+        if technical_data.get("status") != "ready":
+            warnings.append(self._crypto_warning("CRYPTO_TECHNICAL_INSUFFICIENT", technical_data.get("reason") or "Technical indicators need more persisted candles."))
+        if not metric_rows:
+            warnings.append(self._crypto_warning("CRYPTO_DERIVATIVES_UNAVAILABLE", "No persisted derivatives metrics are available."))
+        if not funding_rows:
+            warnings.append(self._crypto_warning("CRYPTO_FUNDING_UNAVAILABLE", "No persisted funding history is available."))
+        if snapshot is None:
+            warnings.append(self._crypto_warning("CRYPTO_FUNDAMENTALS_UNAVAILABLE", "No persisted CoinGecko fundamentals are available."))
+        if not news_response.data["items"]:
+            warnings.append(self._crypto_warning("CRYPTO_NEWS_UNAVAILABLE", "No persisted high-confidence crypto news is available.", WarningSeverity.info))
+        if regime_data.get("state") == "INSUFFICIENT_DATA":
+            warnings.append(self._crypto_warning("CRYPTO_REGIME_INSUFFICIENT", "Derivatives regime evidence is insufficient for a validated state."))
+        if mood.get("status") == "UNAVAILABLE":
+            warnings.append(self._crypto_warning("CRYPTO_MOOD_BRIDGE_UNAVAILABLE", "Crypto regime context is not available to the optional Mood bridge.", WarningSeverity.info))
+
+        source_rows = [
+            source(SourceType.crypto_asset, asset.id, asset.display_name, symbol=asset.symbol, authority=SourceAuthority.primary, retrieved_at=reference.fetched_at if reference else asset.updated_at, fetched_at=reference.fetched_at if reference else None, persisted_at=asset.updated_at, locator=f"research://crypto/assets/{asset.id}"),
+            source(SourceType.crypto_instrument, instrument.id, instrument.provider_symbol, symbol=asset.symbol, provider=instrument.venue, authority=SourceAuthority.primary, retrieved_at=instrument.updated_at, persisted_at=instrument.updated_at, locator=f"research://crypto/instruments/{instrument.id}"),
+        ]
+        market_time = self._crypto_dt_ms(latest_market.get("event_time_ms"))
+        source_rows.append(source(SourceType.crypto_market, instrument.id, f"{instrument.provider_symbol} persisted market", symbol=asset.symbol, provider=latest_market.get("provider") or provider, authority=SourceAuthority.primary, market_timestamp=market_time, retrieved_at=self._crypto_datetime(latest_market.get("received_at")), locator=f"research://crypto/instruments/{instrument.id}/market"))
+        if candle_rows:
+            source_rows.append(source(SourceType.crypto_market, f"{instrument.id}:candles", "Persisted closed crypto candles", symbol=asset.symbol, provider=provider, authority=SourceAuthority.primary, market_timestamp=self._crypto_dt_ms(candle_rows[-1].close_time_ms), retrieved_at=candle_rows[-1].fetched_at, persisted_at=candle_rows[-1].created_at, locator=f"research://crypto/instruments/{instrument.id}/candles"))
+        if technical_data:
+            source_rows.append(source(SourceType.crypto_technical, instrument.id, "Deterministic technical analysis over persisted candles", symbol=asset.symbol, provider="stock-monitor", authority=SourceAuthority.derived, market_timestamp=self._crypto_dt_ms(technical_data.get("data_through_ms")), locator=f"research://crypto/instruments/{instrument.id}/technical"))
+        if metric_rows or funding_rows:
+            latest_metric = metric_rows[-1] if metric_rows else None
+            latest_funding = funding_rows[-1] if funding_rows else None
+            source_rows.append(source(SourceType.crypto_derivatives, instrument.id, "Persisted Binance derivatives evidence", symbol=asset.symbol, provider=(latest_metric.provider if latest_metric else latest_funding.provider), authority=SourceAuthority.primary, market_timestamp=(latest_metric.observed_at if latest_metric else latest_funding.funding_time), retrieved_at=(latest_metric.fetched_at if latest_metric else latest_funding.fetched_at), persisted_at=(latest_metric.created_at if latest_metric else latest_funding.created_at), locator=f"research://crypto/instruments/{instrument.id}/derivatives"))
+        if snapshot is not None:
+            source_rows.append(source(SourceType.crypto_fundamentals, snapshot.id, "Persisted CoinGecko market fundamentals", symbol=asset.symbol, provider=snapshot.source, authority=SourceAuthority.secondary, published_at=snapshot.provider_timestamp, retrieved_at=snapshot.fetched_at, market_timestamp=snapshot.provider_timestamp, persisted_at=snapshot.created_at, locator=f"research://crypto/assets/{asset.id}/fundamentals"))
+        if persisted_regime is not None:
+            source_rows.append(source(SourceType.crypto_regime, persisted_regime.id, f"Persisted derivatives regime: {persisted_regime.state}", symbol=asset.symbol, provider=persisted_regime.source, authority=SourceAuthority.derived, published_at=persisted_regime.as_of, retrieved_at=persisted_regime.evaluated_at, persisted_at=persisted_regime.created_at, locator=f"research://crypto/instruments/{instrument.id}/regime"))
+        source_rows.extend(news_response.sources)
+        source_rows.append(source(SourceType.crypto_mood, f"instrument:{instrument.id}", "Optional read-only crypto Mood context", symbol=asset.symbol, authority=SourceAuthority.derived, published_at=self._crypto_datetime(regime_data.get("as_of")), locator=f"research://crypto/instruments/{instrument.id}/mood"))
+
+        coverage_data = {
+            "market": {"status": latest_market.get("source"), "candle_count": coverage.candle_count, "missing_count": coverage.missing_count, "latest_open_ms": coverage.latest_open_ms},
+            "technical": {"status": technical_data.get("status"), "candle_count": technical_data.get("candle_count", 0)},
+            "derivatives": {"metric_count": len(metric_rows), "funding_count": len(funding_rows)},
+            "fundamentals": {"status": fundamental_data.get("status"), "coverage": fundamental_data.get("coverage", 0)},
+            "news": {"count": len(news_response.data["items"])},
+            "regime": {"state": regime_data.get("state"), "validation_status": validation_data.get("status") if validation_data else "INSUFFICIENT_DATA"},
+        }
+        data = {
+            "identity": {
+                "asset": self._crypto_asset_data(asset),
+                "instrument": self._crypto_instrument_data(instrument, asset, quote, settlement),
+                "provider_mapping": None if mapping is None else {"provider": mapping.provider, "provider_id": mapping.provider_id, "method": mapping.method, "verified_at": mapping.verified_at},
+                "reference": None if reference is None else {"provider": reference.provider, "provider_id": reference.provider_id, "canonical_name": reference.canonical_name, "symbol": reference.symbol, "categories": _bounded(reference.categories or []), "website_urls": _bounded(reference.website_urls or []), "contract_references": _bounded(reference.contract_references or {})},
+            },
+            "market": {"latest": latest_market, "candles": [candles.candle_to_dict(row) for row in candle_rows], "coverage": coverage_data["market"]},
+            "technical": technical_data,
+            "derivatives": {"metrics": metric_data["items"], "funding_rates": funding_data["items"], "coverage": {"metrics": metric_data["coverage"], "funding": funding_data["coverage"]}},
+            "fundamentals": fundamental_data,
+            "news": news_response.data,
+            "regime": {"snapshot": regime_data, "validation": validation_data, "mood": mood},
+            "coverage": coverage_data,
+            "warnings": [warning.message for warning in warnings],
+            "read_only": True,
+            "provider_fetch": False,
+            "execution_authority": False,
+        }
+        latest_as_of = market_time or (candle_rows[-1].fetched_at if candle_rows else None) or (snapshot.fetched_at if snapshot else None)
+        return self.response(
+            _bounded(data, depth=-1),
+            sources=source_rows,
+            freshness=calculate_freshness("technical_analysis", latest_as_of, "latest persisted crypto research evidence"),
+            warnings=warnings,
+            symbol=asset.symbol,
         )
 
     def _portfolio(self, portfolio_id: int | None = None):

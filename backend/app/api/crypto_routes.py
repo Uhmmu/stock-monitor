@@ -17,7 +17,15 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.auth import get_current_user
 from app.database import get_db
-from app.models import CryptoAsset, CryptoInstrument, CryptoProviderMapping, CryptoSyncState
+from app.models import (
+    CryptoAsset,
+    CryptoAssetReference,
+    CryptoInstrument,
+    CryptoProviderMapping,
+    CryptoSyncState,
+    User,
+)
+from app.research.service import ResearchGateway
 from app.services.crypto import candles as candle_service
 from app.services.crypto import latest as latest_service
 from app.services.crypto.identity import (
@@ -82,6 +90,14 @@ class InstrumentListOut(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class CryptoReportCreate(BaseModel):
+    instrument_id: int
+    title: str = "Crypto Research Report"
+    period_start: datetime | None = None
+    period_end: datetime | None = None
+    idempotency_key: str | None = None
 
 
 class AssetSearchItem(BaseModel):
@@ -294,6 +310,60 @@ def search_identities(
         assets=asset_items,
         note="search results are hints with stable typed IDs; symbols are never identity authority",
     )
+
+
+@router.get("/fundamentals")
+def crypto_fundamentals(asset_id: int, db: Session = Depends(get_db)):
+    """Latest persisted CoinGecko enrichment; never refreshes a provider."""
+    from app.services.crypto import fundamentals
+
+    if db.get(CryptoAsset, asset_id) is None:
+        raise HTTPException(status_code=404, detail="asset not found")
+    mapping = db.scalar(
+        select(CryptoProviderMapping).where(
+            CryptoProviderMapping.provider == "coingecko",
+            CryptoProviderMapping.object_type == "asset",
+            CryptoProviderMapping.asset_id == asset_id,
+        )
+    )
+    reference = db.scalar(
+        select(CryptoAssetReference).where(
+            CryptoAssetReference.asset_id == asset_id,
+            CryptoAssetReference.provider == "coingecko",
+        )
+    )
+    snapshot = fundamentals.latest_fundamental_snapshot(db, asset_id)
+    latest = fundamentals.fundamental_snapshot_payload(snapshot) if snapshot else None
+    warnings = []
+    if mapping is None:
+        warnings.append("CoinGecko canonical mapping is unavailable; symbol-only matching was not used.")
+    if snapshot is None:
+        warnings.append("No persisted market fundamentals are available; Binance market research remains usable.")
+    return {
+        "asset_id": asset_id,
+        "provider_mapping": None if mapping is None else {
+            "provider": mapping.provider,
+            "provider_id": mapping.provider_id,
+            "method": mapping.method,
+            "verified_at": mapping.verified_at,
+        },
+        "reference": None if reference is None else {
+            "canonical_name": reference.canonical_name,
+            "symbol": reference.symbol,
+            "categories": reference.categories or [],
+            "website_urls": reference.website_urls or [],
+            "contract_references": reference.contract_references or {},
+        },
+        "latest": latest,
+        "freshness": None if snapshot is None else {
+            "status": snapshot.freshness_status,
+            "provider_timestamp": snapshot.provider_timestamp,
+            "fetched_at": snapshot.fetched_at,
+            "source": snapshot.source,
+            "coverage": snapshot.coverage,
+        },
+        "warnings": warnings,
+    }
 
 
 class CandleOut(BaseModel):
@@ -536,3 +606,78 @@ def crypto_derivatives_regime(instrument_id: int, db: Session = Depends(get_db))
         start_at=evaluated_at - timedelta(days=8), limit=100,
     )
     return regime.evaluate_regime(metrics, funding, evaluated_at=evaluated_at)
+
+
+@router.get("/research/context")
+def crypto_research_context(
+    instrument_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Bounded persisted evidence envelope for read-only crypto research."""
+    return ResearchGateway(db, user).crypto_research_context(instrument_id).data
+
+
+@router.get("/news")
+def crypto_news(
+    asset_id: int,
+    instrument_id: int | None = None,
+    limit: int = Query(default=20, ge=1, le=20),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Explicitly associated persisted crypto news; no ticker-only fallback."""
+    return ResearchGateway(db, user).crypto_news(asset_id, instrument_id, limit).data
+
+
+@router.get("/reports")
+def crypto_reports(
+    asset_id: int | None = None,
+    instrument_id: int | None = None,
+    limit: int = Query(default=20, ge=1, le=20),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Read persisted crypto research reports; never generates or refreshes."""
+    return ResearchGateway(db, user).crypto_reports(asset_id, instrument_id, limit).data
+
+
+@router.post("/reports", status_code=201)
+def create_crypto_report(
+    payload: CryptoReportCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Generate an idempotent report from persisted ResearchGateway evidence."""
+    from app.services.crypto.reports import persist_crypto_research_report
+
+    response = ResearchGateway(db, user).crypto_research_context(payload.instrument_id)
+    context = {**response.data, "sources": [item.model_dump(mode="json") for item in response.sources]}
+    asset_id = context["identity"]["asset"]["id"]
+    try:
+        report = persist_crypto_research_report(
+            db,
+            context=context,
+            asset_id=asset_id,
+            instrument_id=payload.instrument_id,
+            title=payload.title,
+            period_start=payload.period_start,
+            period_end=payload.period_end,
+            idempotency_key=payload.idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(report)
+    return {
+        "id": report.id,
+        "asset_id": report.asset_id,
+        "instrument_id": report.instrument_id,
+        "title": report.title,
+        "content": report.content,
+        "model": report.model,
+        "sources": report.sources,
+        "coverage": report.coverage,
+        "warnings": report.warnings,
+        "created_at": report.created_at,
+    }

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   cryptoIntervalLabel,
+  cryptoFreshnessLabel,
   formatCryptoAge,
+  formatCryptoCoverage,
+  formatCryptoEvidence,
   formatCryptoNumber,
   formatCryptoRate,
   formatUtcTime,
@@ -10,6 +13,7 @@ import {
   parseInstrumentFromSearch,
   prepareCryptoCandles,
   regimeLabel,
+  safeCryptoUrl,
   sparklineSegments,
   technicalStatusLabel,
   type CryptoCandleRow,
@@ -74,6 +78,19 @@ describe('展示与缺口文案', () => {
     expect(formatCryptoNumber('')).toBe('数据不足')
     expect(formatCryptoNumber('not-a-number')).toBe('数据不足')
     expect(formatCryptoNumber('79184.012345', 6)).toBe('79,184.012345')
+    expect(formatCryptoCoverage(null)).toBe('覆盖未知')
+    expect(formatCryptoCoverage(0.75)).toBe('75.0%')
+    expect(formatCryptoCoverage('82')).toBe('82.0%')
+  })
+
+  it('基本面新鲜度和新闻链接保持明确且安全', () => {
+    expect(cryptoFreshnessLabel('fresh')).toBe('新鲜')
+    expect(cryptoFreshnessLabel('expired')).toBe('已过期')
+    expect(cryptoFreshnessLabel(null)).toBe('新鲜度未知')
+    expect(safeCryptoUrl('https://example.com/btc')).toBe('https://example.com/btc')
+    expect(safeCryptoUrl('javascript:alert(1)')).toBeNull()
+    expect(safeCryptoUrl('not a url')).toBeNull()
+    expect(formatCryptoEvidence({ matched_name: 'Bitcoin' })).toBe('{"matched_name":"Bitcoin"}')
   })
 
   it('来源与状态标签稳定', () => {

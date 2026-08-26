@@ -202,6 +202,17 @@ class Settings(BaseSettings):
     # Latest ticker cache (Redis, short TTL) with closed-candle fallback.
     crypto_latest_ttl_seconds: int = 60
     crypto_latest_stale_seconds: int = 180
+    # Optional server-only CoinGecko enrichment.  Public access is keyless;
+    # the key is sent only when explicitly configured and never reaches the
+    # browser or Binance clients.
+    crypto_coingecko_enabled: bool = False
+    crypto_coingecko_base_url: str = "https://api.coingecko.com/api/v3"
+    crypto_coingecko_api_key: str = ""
+    crypto_coingecko_timeout_seconds: float = 15.0
+    crypto_coingecko_max_retries: int = 2
+    crypto_coingecko_refresh_hours: int = 24
+    crypto_coingecko_universe: str = "bitcoin,ethereum"
+    crypto_coingecko_manual_mappings: str = ""
 
     # Isolated, administrator-only, read-only IBKR integration test module.
     # Flex traffic is fail-closed through the loopback Xray/VLESS SOCKS5 proxy.

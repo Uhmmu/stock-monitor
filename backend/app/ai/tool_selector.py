@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from app.ai_tools.registry import ToolRegistry
@@ -15,6 +16,11 @@ class ToolSelection:
 
 
 DOMAIN_RULES = {
+    "crypto": (
+        "加密", "crypto", "cryptocurrency", "binance", "bitcoin", "ethereum", "solana",
+        "永续", "perpetual", "资金费率", "funding", "open interest", "未平仓", "基差", "basis",
+        "taker", "regime", "供应量", "supply", "fdv", "fully diluted",
+    ),
     "portfolio": ("持仓", "仓位", "成本", "盈亏", "组合", "portfolio", "position", "holding"),
     "news": ("新闻", "舆情", "消息", "风险", "news", "headline", "event"),
     "sec": ("sec", "10-q", "10-k", "8-k", "披露", "内部人", "filing", "insider"),
@@ -42,6 +48,7 @@ DOMAIN_RULES = {
 }
 
 PREFERRED = {
+    "crypto": ["get_crypto_research_context", "get_crypto_news", "get_crypto_reports"],
     # Historical analysis runs are intentionally excluded here. They can
     # contain an older position snapshot and must not be treated as current
     # holdings merely because the user mentioned their portfolio.
@@ -75,6 +82,17 @@ POSITION_SUBJECT_TERMS = ("股票", "个股", "证券", "标的")
 POSITION_METRIC_TERMS = (
     "盈利", "收益", "盈亏", "亏损", "赚钱", "回报", "涨跌", "表现", "百分比",
 )
+
+CRYPTO_ASSET_SYMBOLS = {"BTC", "ETH", "SOL", "USDT", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK", "MATIC", "LTC"}
+CRYPTO_SYMBOL_PATTERN = re.compile(
+    r"(?<![a-z0-9])(?:btc|eth|sol|bnb|xrp|ada|doge|avax|dot|link|matic|ltc)(?:usdt)?(?![a-z0-9])"
+    r"|(?<![a-z0-9])usdt(?![a-z0-9])"
+)
+
+
+def has_crypto_symbol(message: str) -> bool:
+    """Match standalone crypto symbols without substring false positives."""
+    return bool(CRYPTO_SYMBOL_PATTERN.search(message.casefold()))
 
 
 def has_current_portfolio_intent(message: str) -> bool:
@@ -113,7 +131,13 @@ class ToolSelector:
                 selected.append(name); reasons[name] = reason
 
         text = message.casefold()
-        domains = [domain for domain, words in DOMAIN_RULES.items() if any(word in text for word in words)]
+        domains = [
+            domain
+            for domain, words in DOMAIN_RULES.items()
+            if (domain == "crypto" and has_crypto_symbol(text)) or any(word in text for word in words)
+        ]
+        if (active_symbol or "").upper() in CRYPTO_ASSET_SYMBOLS and "crypto" not in domains:
+            domains.insert(0, "crypto")
         if has_current_portfolio_intent(message) and "portfolio" not in domains:
             domains.insert(0, "portfolio")
         if page_context in PREFERRED and page_context not in domains:

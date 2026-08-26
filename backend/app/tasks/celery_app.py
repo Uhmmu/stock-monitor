@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from celery import Celery
 from celery.schedules import crontab
 from sqlalchemy import and_, case, delete, func, or_, select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 import hashlib
 import asyncio
@@ -158,6 +158,21 @@ celery_app.conf.beat_schedule = {
     "refresh-crypto-latest": {
         "task": "app.tasks.celery_app.refresh_crypto_latest",
         "schedule": 60,
+    },
+    "sync-crypto-coingecko-fundamentals": {
+        "task": "app.tasks.celery_app.ensure_crypto_coingecko_fundamentals_fresh",
+        "schedule": 1800,
+    },
+    # These are read-only materializers over persisted crypto research data.
+    # They deliberately do not instantiate a provider client or touch equity
+    # news/Mood state.
+    "sync-crypto-news-associations": {
+        "task": "app.tasks.celery_app.ensure_crypto_news_associations_fresh",
+        "schedule": 900,
+    },
+    "materialize-crypto-regimes": {
+        "task": "app.tasks.celery_app.materialize_crypto_regimes",
+        "schedule": 3600,
     },
     "sync-investment-calendar": {
         "task": "app.tasks.celery_app.ensure_investment_calendar_fresh",
@@ -1043,6 +1058,330 @@ def refresh_crypto_latest():
             db, client=client, instruments=instruments, ttl_seconds=settings.crypto_latest_ttl_seconds
         )
         return {"refreshed": summary.refreshed, "failed": summary.failed}
+
+
+@celery_app.task(name="app.tasks.celery_app.ensure_crypto_coingecko_fundamentals_fresh", queue="crypto_public")
+def ensure_crypto_coingecko_fundamentals_fresh():
+    """Due-driven CoinGecko enrichment isolated from Binance collectors."""
+    from app.services.crypto import fundamentals as crypto_fundamentals
+    from app.services.crypto import jobs as crypto_jobs
+    from app.services.crypto.providers.coingecko import CoinGeckoClient
+
+    if not settings.crypto_public_enabled:
+        return {"skipped": "crypto_public_disabled"}
+    if not settings.crypto_coingecko_enabled:
+        return {"skipped": "crypto_coingecko_disabled"}
+
+    provider_ids = crypto_fundamentals._coingecko_provider_ids(settings.crypto_coingecko_universe)
+    if not provider_ids:
+        return {"skipped": "empty_universe"}
+
+    with SessionLocal() as db:
+        refresh_hours = max(1, int(settings.crypto_coingecko_refresh_hours))
+        if not crypto_fundamentals.coingecko_fundamentals_due(
+            db, refresh_interval=timedelta(hours=refresh_hours)
+        ):
+            return {"skipped": "not_due"}
+
+        now = datetime.now(UTC)
+        bucket = now.strftime("%Y%m%d%H")
+        try:
+            run = crypto_jobs._claim_run(
+                db,
+                provider=crypto_fundamentals.PROVIDER,
+                domain=crypto_fundamentals.COINGECKO_DOMAIN,
+                bucket=bucket,
+            )
+        except IntegrityError:
+            db.rollback()
+            return {"skipped": "bucket_already_claimed"}
+        if run is None:
+            db.rollback()
+            return {"skipped": "bucket_already_claimed"}
+
+        try:
+            # Seed only the already-audited BTC/ETH/USDT canonical rows; this
+            # never calls Binance and does not overwrite provider mappings.
+            crypto_jobs.ensure_core_identity_seed(db)
+            manual = crypto_fundamentals.parse_manual_mappings(settings.crypto_coingecko_manual_mappings)
+            assets, unresolved = crypto_fundamentals.coingecko_assets_for_universe(
+                db, provider_ids, manual_mappings=manual
+            )
+            if assets:
+                client = CoinGeckoClient(
+                    base_url=settings.crypto_coingecko_base_url,
+                    api_key=settings.crypto_coingecko_api_key,
+                    timeout_seconds=settings.crypto_coingecko_timeout_seconds,
+                    max_retries=settings.crypto_coingecko_max_retries,
+                )
+                summary = crypto_fundamentals.sync_coingecko_assets(
+                    db,
+                    client=client,
+                    assets=assets,
+                    manual_mappings=manual,
+                    fetched_at=now,
+                )
+            else:
+                summary = crypto_fundamentals.SyncSummary(status="success")
+            summary.requested = len(provider_ids)
+            if unresolved:
+                summary.unresolved = unresolved + summary.unresolved
+                summary.status = "partial"
+            crypto_fundamentals.finish_coingecko_run(db, run, summary)
+            db.commit()
+            return {
+                "status": summary.status,
+                "requested": summary.requested,
+                "fetched": summary.fetched,
+                "mapped": summary.mapped,
+                "snapshots_created": summary.snapshots_created,
+                "snapshots_updated": summary.snapshots_updated,
+                "unresolved": summary.unresolved,
+                "errors": summary.errors,
+            }
+        except Exception as exc:
+            # Provider/client failure is recorded as a failed CoinGecko run;
+            # no Binance run or persisted last-good snapshot is cleared.
+            db.rollback()
+            from app.models import CryptoCollectionRun
+
+            failed = CryptoCollectionRun(
+                provider=crypto_fundamentals.PROVIDER,
+                domain=crypto_fundamentals.COINGECKO_DOMAIN,
+                bucket=bucket,
+                status="failed",
+                finished_at=datetime.now(UTC),
+                heartbeat_at=datetime.now(UTC),
+                error_message=f"{type(exc).__name__}: {str(exc)[:240]}",
+                details={"requested": len(provider_ids)},
+            )
+            db.add(failed)
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+            return {
+                "status": "failed",
+                "requested": len(provider_ids),
+                "error": f"{type(exc).__name__}: {str(exc)[:240]}",
+            }
+
+
+CRYPTO_REGIME_PROVIDER = "binance_usdm"
+CRYPTO_REGIME_INTERVAL = "1h"
+CRYPTO_REGIME_METRIC_LIMIT = 2_000
+CRYPTO_VALIDATION_METRIC_LIMIT = 5_000
+# The classifier needs 192 hours of lookback plus the current observation;
+# funding is sampled at eight-hour intervals, so 22 rows cover one week plus
+# the current observation.  Below these bounds, do not load the larger candle
+# windows merely to produce a predictable insufficient-data result.
+CRYPTO_REGIME_MIN_METRICS = 193
+CRYPTO_REGIME_MIN_FUNDING = 22
+
+
+def _materialize_crypto_regimes(
+    db,
+    *,
+    evaluated_at: datetime | None = None,
+) -> dict:
+    """Persist current deterministic regimes from already stored derivatives."""
+
+    from app.services.crypto import derivatives, jobs as crypto_jobs
+    from app.services.crypto.regime import evaluate_regime
+    from app.services.crypto.regime_validation import persist_regime_snapshot
+
+    evaluated = evaluated_at or datetime.now(UTC)
+    instruments = crypto_jobs.instrument_universe(
+        db, kind="perpetual", market="usdm_futures"
+    )
+    items: list[dict] = []
+    failures: list[dict] = []
+    for instrument in instruments:
+        try:
+            metrics = derivatives.read_derivatives_history(
+                db,
+                instrument_id=instrument.id,
+                interval=CRYPTO_REGIME_INTERVAL,
+                provider=CRYPTO_REGIME_PROVIDER,
+                limit=CRYPTO_REGIME_METRIC_LIMIT,
+            )
+            funding = derivatives.read_funding_history(
+                db,
+                instrument_id=instrument.id,
+                provider=CRYPTO_REGIME_PROVIDER,
+                limit=CRYPTO_REGIME_METRIC_LIMIT,
+            )
+            regime = evaluate_regime(metrics, funding, evaluated_at=evaluated)
+            # A savepoint keeps one malformed instrument from rolling back
+            # snapshots already materialized for the rest of the universe.
+            with db.begin_nested():
+                snapshot = persist_regime_snapshot(
+                    db,
+                    instrument_id=instrument.id,
+                    regime=regime,
+                    evaluated_at=evaluated,
+                    source="persisted_derivatives",
+                )
+            items.append(
+                {
+                    "instrument_id": instrument.id,
+                    "provider_symbol": instrument.provider_symbol,
+                    "snapshot_id": getattr(snapshot, "id", None),
+                    "state": regime.get("state"),
+                    "as_of": regime.get("as_of"),
+                    "quality": "INSUFFICIENT_DATA"
+                    if regime.get("state") == "INSUFFICIENT_DATA"
+                    else "OBSERVATIONAL",
+                    "metrics": len(metrics),
+                    "funding": len(funding),
+                }
+            )
+        except Exception as exc:  # isolate one instrument, retain last-good rows
+            failures.append(
+                {
+                    "instrument_id": getattr(instrument, "id", None),
+                    "provider_symbol": getattr(instrument, "provider_symbol", None),
+                    "error": f"{type(exc).__name__}: {str(exc)[:240]}",
+                }
+            )
+    db.commit()
+    return {
+        "status": "partial" if failures else "success",
+        "items": items,
+        "failed": failures,
+        "processed": len(items),
+        "failed_count": len(failures),
+    }
+
+
+@celery_app.task(
+    name="app.tasks.celery_app.ensure_crypto_news_associations_fresh",
+    queue="crypto_public",
+)
+def ensure_crypto_news_associations_fresh():
+    """Associate recent persisted news; this task never fetches a provider."""
+
+    if not settings.crypto_public_enabled:
+        return {"skipped": "crypto_public_disabled"}
+    from app.services.crypto.news import associate_recent_crypto_news
+
+    with SessionLocal() as db:
+        return associate_recent_crypto_news(db)
+
+
+@celery_app.task(
+    name="app.tasks.celery_app.materialize_crypto_regimes",
+    queue="crypto_public",
+)
+def materialize_crypto_regimes():
+    """Hourly observational regime materialization from persisted facts only."""
+
+    if not settings.crypto_public_enabled:
+        return {"skipped": "crypto_public_disabled"}
+    with SessionLocal() as db:
+        return _materialize_crypto_regimes(db)
+
+
+def _validate_crypto_regime_history(db, instrument_id: int) -> dict:
+    """Run a bounded offline validation study for one USD-M perpetual."""
+
+    from app.models import CryptoInstrument
+    from app.services.crypto import candles, derivatives
+    from app.services.crypto.regime_validation import (
+        persist_validation_run,
+        validate_regime_history,
+    )
+
+    instrument = db.get(CryptoInstrument, int(instrument_id))
+    if instrument is None:
+        return {"status": "failed", "reason": "instrument_not_found", "instrument_id": instrument_id}
+    if not (
+        instrument.venue == "binance"
+        and instrument.kind == "perpetual"
+        and instrument.market == "usdm_futures"
+    ):
+        return {
+            "status": "failed",
+            "reason": "unsupported_instrument",
+            "instrument_id": instrument.id,
+        }
+
+    metrics = derivatives.read_derivatives_history(
+        db,
+        instrument_id=instrument.id,
+        interval=CRYPTO_REGIME_INTERVAL,
+        provider=CRYPTO_REGIME_PROVIDER,
+        limit=CRYPTO_VALIDATION_METRIC_LIMIT,
+    )
+    funding = derivatives.read_funding_history(
+        db,
+        instrument_id=instrument.id,
+        provider=CRYPTO_REGIME_PROVIDER,
+        limit=CRYPTO_VALIDATION_METRIC_LIMIT,
+    )
+    enough_history = (
+        len(metrics) >= CRYPTO_REGIME_MIN_METRICS
+        and len(funding) >= CRYPTO_REGIME_MIN_FUNDING
+    )
+    candles_rows: list = []
+    if enough_history:
+        for interval in ("1h", "4h", "1d"):
+            candles_rows.extend(
+                candles.read_candles(
+                    db,
+                    instrument_id=instrument.id,
+                    interval=interval,
+                    provider=CRYPTO_REGIME_PROVIDER,
+                    price_type="trade",
+                    limit=CRYPTO_VALIDATION_METRIC_LIMIT,
+                )
+            )
+    validation = validate_regime_history(
+        metrics,
+        funding,
+        candles_rows,
+        horizons=("1h", "4h", "1d"),
+    )
+    run = persist_validation_run(
+        db,
+        instrument_id=instrument.id,
+        validation=validation,
+        status=validation.get("status"),
+    )
+    db.commit()
+    return {
+        "status": "completed",
+        "quality_status": validation.get("status"),
+        "instrument_id": instrument.id,
+        "run_id": getattr(run, "id", None),
+        "input_hash": validation.get("input_hash"),
+        "evaluation_count": validation.get("evaluation_count", 0),
+        "summaries": validation.get("summaries", {}),
+        "candles_loaded": len(candles_rows),
+        "candles_skipped": not enough_history,
+        "warnings": validation.get("warnings", []),
+    }
+
+
+@celery_app.task(
+    name="app.tasks.celery_app.validate_crypto_regime_history",
+    queue="crypto_public",
+)
+def validate_crypto_regime_history(instrument_id: int):
+    """Explicit, read-only validation task; never called by the hourly job."""
+
+    if not settings.crypto_public_enabled:
+        return {"skipped": "crypto_public_disabled"}
+    with SessionLocal() as db:
+        try:
+            return _validate_crypto_regime_history(db, instrument_id)
+        except Exception as exc:
+            db.rollback()
+            return {
+                "status": "failed",
+                "instrument_id": instrument_id,
+                "error": f"{type(exc).__name__}: {str(exc)[:240]}",
+            }
 
 
 @celery_app.task(name="app.tasks.celery_app.ensure_investment_calendar_fresh")

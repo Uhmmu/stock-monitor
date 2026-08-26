@@ -36,6 +36,77 @@ export type CryptoSearchResponse = {
   note: string
 }
 
+export type CryptoInstrumentDetail = CryptoInstrumentSummary & {
+  filters: Record<string, unknown>
+  provider_mappings: { provider: string; provider_id: string; method: string; verified_at: string | null }[]
+  base_asset: { id: number; slug: string; symbol: string; display_name: string }
+  quote_asset: { id?: number; slug: string; symbol: string; display_name: string }
+  settlement_asset: { id?: number; slug: string; symbol: string } | null
+}
+
+export type CryptoFundamentalsLatest = {
+  market_cap: string | null
+  fully_diluted_valuation: string | null
+  circulating_supply: string | null
+  total_supply: string | null
+  max_supply: string | null
+  market_cap_rank: number | null
+  provider_timestamp: string | null
+  fetched_at: string | null
+  source: string | null
+  coverage: number | string | null
+  freshness_status: string | null
+}
+
+export type CryptoFundamentals = {
+  asset_id: number
+  provider_mapping: {
+    provider: string
+    provider_id: string
+    method?: string | null
+    verified_at?: string | null
+  } | null
+  reference: {
+    canonical_name?: string | null
+    symbol?: string | null
+    categories?: string[]
+    website_urls?: string[]
+    contract_references?: Record<string, string>
+  } | null
+  latest: CryptoFundamentalsLatest | null
+  freshness: {
+    status?: string | null
+    provider_timestamp?: string | null
+    fetched_at?: string | null
+    source?: string | null
+    coverage?: number | string | null
+  } | null
+  warnings: string[]
+}
+
+export type CryptoNewsItem = {
+  news_id: number | string
+  title: string
+  summary: string | null
+  ai_summary: string | null
+  url: string | null
+  provider: string | null
+  source: string | null
+  published_at: string | null
+  found_at: string | null
+  association: {
+    scope_type: string
+    confidence: number | string | null
+    evidence_method?: string | null
+    evidence: unknown
+  } | null
+}
+
+export type CryptoNewsResponse = {
+  items: CryptoNewsItem[]
+  warnings: string[]
+}
+
 export type CryptoLatest = {
   instrument_id: number
   display_label: string
@@ -195,6 +266,42 @@ export function formatCryptoNumber(value: string | null | undefined, maxDigits =
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return '数据不足'
   return parsed.toLocaleString('en-US', { maximumFractionDigits: maxDigits })
+}
+
+export function formatCryptoCoverage(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '覆盖未知'
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return '覆盖未知'
+  const percent = parsed <= 1 ? parsed * 100 : parsed
+  return `${Math.max(0, Math.min(100, percent)).toFixed(1)}%`
+}
+
+export function cryptoFreshnessLabel(status: string | null | undefined): string {
+  if (status === 'fresh') return '新鲜'
+  if (status === 'stale') return '可能偏旧'
+  if (status === 'expired') return '已过期'
+  if (status === 'unknown') return '新鲜度未知'
+  return status ? status : '新鲜度未知'
+}
+
+export function safeCryptoUrl(value: string | null | undefined): string | null {
+  if (!value) return null
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null
+  } catch {
+    return null
+  }
+}
+
+export function formatCryptoEvidence(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
 }
 
 export function formatUtcTime(ms: number | null): string {
@@ -429,7 +536,7 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
   })
   const detail = useQuery({
     queryKey: ['crypto-instrument', instrumentId],
-    queryFn: () => api<CryptoInstrumentSummary & { filters: Record<string, unknown>; provider_mappings: { provider: string; provider_id: string; method: string; verified_at: string | null }[]; base_asset: { slug: string; symbol: string; display_name: string }; quote_asset: { slug: string; symbol: string; display_name: string }; settlement_asset: { slug: string; symbol: string } | null }>(`/crypto/instruments/${instrumentId}`),
+    queryFn: () => api<CryptoInstrumentDetail>(`/crypto/instruments/${instrumentId}`),
     enabled: enabled && instrumentId !== null,
     staleTime: 5 * 60_000,
   })
@@ -464,6 +571,19 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
     enabled: enabled && instrumentId !== null && detail.data?.kind === 'perpetual',
     staleTime: 5 * 60_000,
   })
+  const assetId = detail.data?.base_asset.id ?? null
+  const fundamentals = useQuery({
+    queryKey: ['crypto-fundamentals', assetId],
+    queryFn: () => api<CryptoFundamentals>(`/crypto/fundamentals?asset_id=${assetId}`),
+    enabled: enabled && assetId !== null,
+    staleTime: 15 * 60_000,
+  })
+  const news = useQuery({
+    queryKey: ['crypto-news', assetId, instrumentId],
+    queryFn: () => api<CryptoNewsResponse>(`/crypto/news?asset_id=${assetId}&instrument_id=${instrumentId}&limit=20`),
+    enabled: enabled && assetId !== null && instrumentId !== null,
+    staleTime: 5 * 60_000,
+  })
 
   useEffect(() => {
     if (detail.data?.kind !== 'perpetual' && priceType !== 'trade') setPriceType('trade')
@@ -486,13 +606,17 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
   const options = query.trim().length > 0 && search.data ? search.data.instruments : instruments.data?.items ?? []
   const coverage = candles.data?.coverage
   const technicalLast = technical.data?.status === 'ready' ? technical.data.last : null
+  const fundamentalLatest = fundamentals.data?.latest
+  const fundamentalFreshness = fundamentals.data?.freshness
+  const fundamentalStatus = fundamentalLatest?.freshness_status ?? fundamentalFreshness?.status ?? null
+  const newsItems = news.data?.items ?? []
 
   return <div className="crypto-research-page">
     <section className="crypto-hero">
       <div>
         <p className="crypto-eyebrow">CRYPTO RESEARCH · 加密研究</p>
-        <h2>链上资产，同样的证据标准</h2>
-        <p>专属 Crypto 研究面板：现货、永续合约、技术指标与衍生品证据都在这里，和 Stock 工作区保持分离。</p>
+        <h2>交易型加密研究，证据优先</h2>
+        <p>专属 Crypto 研究面板：现货、永续合约、技术指标、市场基本面、新闻与衍生品证据都在这里，和 Stock 工作区保持分离。</p>
       </div>
       <div className="crypto-hero-meta">
         <span>数据来源</span>
@@ -557,6 +681,74 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
               <div><dt>行情时间</dt><dd>{formatUtcTime(latest.data.event_time_ms)}</dd></div>
             </dl>
           )}
+        </section>
+
+        <section className="crypto-fundamentals" aria-label="市场基本面">
+          <header>
+            <div><p className="crypto-eyebrow">COINGECKO REFERENCE</p><h3>市场基本面</h3></div>
+            <span className={`crypto-source-badge${fundamentalStatus === 'stale' || fundamentalStatus === 'expired' ? ' stale' : ''}`}>
+              {cryptoFreshnessLabel(fundamentalStatus)}
+            </span>
+          </header>
+          {fundamentals.isLoading && <p className="crypto-loading">正在读取已持久化基本面…</p>}
+          {fundamentals.isError && <p className="crypto-warning" role="status">基本面暂时不可用；现货、技术与衍生品研究仍可继续。</p>}
+          {fundamentals.data && (
+            <>
+              {fundamentals.data.provider_mapping && (
+                <p className="crypto-fundamentals-reference">
+                  映射：{fundamentals.data.provider_mapping.provider}:{fundamentals.data.provider_mapping.provider_id}
+                  {fundamentals.data.provider_mapping.method ? ` · ${fundamentals.data.provider_mapping.method}` : ''}
+                  {fundamentals.data.reference?.canonical_name ? ` · ${fundamentals.data.reference.canonical_name}` : ''}
+                </p>
+              )}
+              <dl className="crypto-metrics compact">
+                <div><dt>市值</dt><dd>{formatCryptoNumber(fundamentalLatest?.market_cap, 0)}</dd></div>
+                <div><dt>FDV</dt><dd>{formatCryptoNumber(fundamentalLatest?.fully_diluted_valuation, 0)}</dd></div>
+                <div><dt>市值排名</dt><dd>{fundamentalLatest?.market_cap_rank ?? '数据不足'}</dd></div>
+                <div><dt>流通供应量</dt><dd>{formatCryptoNumber(fundamentalLatest?.circulating_supply, 4)}</dd></div>
+                <div><dt>总供应量</dt><dd>{formatCryptoNumber(fundamentalLatest?.total_supply, 4)}</dd></div>
+                <div><dt>最大供应量</dt><dd>{formatCryptoNumber(fundamentalLatest?.max_supply, 4)}</dd></div>
+              </dl>
+              <footer className="crypto-coverage">
+                <span>来源 {fundamentalLatest?.source ?? fundamentalFreshness?.source ?? fundamentals.data.provider_mapping?.provider ?? 'CoinGecko'}</span>
+                <span>供应商时间 {formatUtcIso(fundamentalLatest?.provider_timestamp ?? fundamentalFreshness?.provider_timestamp)}</span>
+                <span>读取时间 {formatUtcIso(fundamentalLatest?.fetched_at ?? fundamentalFreshness?.fetched_at)}</span>
+                <span>覆盖 {formatCryptoCoverage(fundamentalLatest?.coverage ?? fundamentalFreshness?.coverage)}</span>
+              </footer>
+              {fundamentals.data.warnings.map((warning, index) => <p className="crypto-warning" role="status" key={`${warning}-${index}`}>{warning}</p>)}
+            </>
+          )}
+        </section>
+
+        <section className="crypto-news" aria-label="加密新闻">
+          <header>
+            <div><p className="crypto-eyebrow">CRYPTO NEWS</p><h3>关联新闻</h3></div>
+            <span className="crypto-source-badge">{news.data ? `${newsItems.length} 条已保存` : '仅读取已保存新闻'}</span>
+          </header>
+          {news.isLoading && <p className="crypto-loading">正在读取已持久化新闻…</p>}
+          {news.isError && <p className="crypto-warning" role="status">新闻暂时不可用；市场、技术与衍生品研究仍可继续。</p>}
+          {news.data && newsItems.length === 0 && <p className="crypto-empty-hint">暂无高置信度关联新闻；不以 ticker-only 匹配补造结果。</p>}
+          {newsItems.length > 0 && (
+            <div className="crypto-news-list">
+              {newsItems.map(item => {
+                const href = safeCryptoUrl(item.url)
+                const summary = item.ai_summary || item.summary
+                const evidence = formatCryptoEvidence(item.association?.evidence)
+                return <article className="crypto-news-item" key={String(item.news_id)}>
+                  <h4>{href ? <a href={href} target="_blank" rel="noreferrer noopener">{item.title}</a> : <span>{item.title}</span>}</h4>
+                  {summary && <p>{summary}</p>}
+                  <div className="crypto-news-meta">
+                    <span>{item.source || item.provider || '来源未知'}</span>
+                    <span>发布 {formatUtcIso(item.published_at)}</span>
+                    <span>发现 {formatUtcIso(item.found_at)}</span>
+                    {item.association && <span>{item.association.scope_type} · 置信度 {formatCryptoCoverage(item.association.confidence)}</span>}
+                  </div>
+                  {evidence && <small className="crypto-news-evidence">证据：{evidence}</small>}
+                </article>
+              })}
+            </div>
+          )}
+          {news.data?.warnings.map((warning, index) => <p className="crypto-warning" role="status" key={`${warning}-${index}`}>{warning}</p>)}
         </section>
 
         <section className="crypto-chart-section" aria-label="历史 K 线">

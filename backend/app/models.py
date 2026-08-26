@@ -2770,6 +2770,91 @@ class CryptoAsset(Base):
     )
 
 
+class CryptoAssetReference(Base):
+    """Provider reference metadata attached to a canonical crypto asset.
+
+    CoinGecko is an enrichment source only; the canonical asset remains the
+    ``CryptoAsset`` row and provider mappings retain the explicit join
+    evidence.  Contract/category/site payloads are bounded JSON because they
+    are reference metadata rather than query-critical identity fields.
+    """
+
+    __tablename__ = "crypto_asset_references"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_id", name="uq_crypto_asset_references_provider_id"),
+        UniqueConstraint("asset_id", "provider", name="uq_crypto_asset_references_asset_provider"),
+        Index("ix_crypto_asset_references_asset", "asset_id"),
+        Index("ix_crypto_asset_references_provider_timestamp", "provider", "provider_timestamp"),
+        CheckConstraint("revision >= 0", name="ck_crypto_asset_references_revision"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("crypto_assets.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(32))
+    provider_id: Mapped[str] = mapped_column(String(128))
+    canonical_name: Mapped[str | None] = mapped_column(String(256))
+    symbol: Mapped[str | None] = mapped_column(String(32))
+    categories: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    website_urls: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    contract_references: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    reference_metadata: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    source: Mapped[str] = mapped_column(String(32), default="coingecko", server_default="coingecko")
+    provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    freshness_status: Mapped[str] = mapped_column(String(16), default="fresh", server_default="fresh")
+    source_hash: Mapped[str] = mapped_column(String(64))
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CryptoAssetFundamentalSnapshot(Base):
+    """Point-in-time market fundamentals from an optional reference provider.
+
+    Missing provider values stay NULL.  ``coverage`` is the fraction of the
+    six primary values present, not an inferred confidence score.
+    """
+
+    __tablename__ = "crypto_asset_fundamental_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "asset_id", "provider", "observed_at",
+            name="uq_crypto_asset_fundamental_snapshots_observation",
+        ),
+        Index("ix_crypto_asset_fundamental_snapshots_asset_time", "asset_id", "observed_at"),
+        Index("ix_crypto_asset_fundamental_snapshots_provider_time", "provider", "observed_at"),
+        CheckConstraint("revision >= 0", name="ck_crypto_asset_fundamental_snapshots_revision"),
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="ck_crypto_asset_fundamental_snapshots_coverage"),
+        CheckConstraint("market_cap_rank IS NULL OR market_cap_rank >= 1", name="ck_crypto_asset_fundamental_snapshots_rank"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("crypto_assets.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(32))
+    source: Mapped[str] = mapped_column(String(32), default="coingecko", server_default="coingecko")
+    currency: Mapped[str] = mapped_column(String(16), default="usd", server_default="usd")
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    market_cap: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    fully_diluted_valuation: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    circulating_supply: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    total_supply: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    max_supply: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    market_cap_rank: Mapped[int | None] = mapped_column(Integer)
+    coverage: Mapped[float] = mapped_column(Float, default=0, server_default="0")
+    freshness_status: Mapped[str] = mapped_column(String(16), default="fresh", server_default="fresh")
+    quality: Mapped[str] = mapped_column(String(24), default="ok", server_default="ok")
+    source_hash: Mapped[str] = mapped_column(String(64))
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class CryptoSymbolAlias(Base):
     """Historical/alternative ticker explicitly linked to one asset (XBT -> bitcoin)."""
 
@@ -3227,6 +3312,172 @@ class CryptoDerivativesMetric(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class CryptoNewsAssociation(Base):
+    """Evidence-backed association between a stored news item and crypto.
+
+    This is deliberately additive to ``NewsItem``.  Equity ticker/scope
+    semantics remain authoritative for existing rows; crypto consumers use
+    stable scope keys and explicit evidence in this join table.
+    """
+
+    __tablename__ = "crypto_news_associations"
+    __table_args__ = (
+        UniqueConstraint("association_key", name="uq_crypto_news_associations_key"),
+        CheckConstraint(
+            "scope_type IN ('crypto_asset', 'crypto_instrument', 'crypto_market')",
+            name="ck_crypto_news_associations_scope",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="ck_crypto_news_associations_confidence",
+        ),
+        CheckConstraint(
+            "(scope_type = 'crypto_asset' AND asset_id IS NOT NULL AND instrument_id IS NULL) OR "
+            "(scope_type = 'crypto_instrument' AND asset_id IS NULL AND instrument_id IS NOT NULL) OR "
+            "(scope_type = 'crypto_market' AND asset_id IS NULL AND instrument_id IS NULL)",
+            name="ck_crypto_news_associations_target",
+        ),
+        Index("ix_crypto_news_associations_news_scope", "news_item_id", "scope_type"),
+        Index("ix_crypto_news_associations_asset", "asset_id"),
+        Index("ix_crypto_news_associations_instrument", "instrument_id"),
+        Index("ix_crypto_news_associations_scope_key", "scope_type", "scope_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    news_item_id: Mapped[int] = mapped_column(
+        ForeignKey("news_items.id", ondelete="CASCADE")
+    )
+    scope_type: Mapped[str] = mapped_column(String(24))
+    scope_key: Mapped[str] = mapped_column(String(192))
+    asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crypto_assets.id", ondelete="CASCADE")
+    )
+    instrument_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE")
+    )
+    provider: Mapped[str] = mapped_column(String(64))
+    provider_entity_type: Mapped[str | None] = mapped_column(String(32))
+    provider_entity_id: Mapped[str | None] = mapped_column(String(256))
+    evidence_method: Mapped[str] = mapped_column(String(32))
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    confidence: Mapped[float] = mapped_column(Float)
+    association_key: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CryptoRegimeSnapshot(Base):
+    """Immutable, versioned observational regime evidence for one instrument."""
+
+    __tablename__ = "crypto_regime_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id", "as_of", "regime_version", "input_hash",
+            name="uq_crypto_regime_snapshots_observation",
+        ),
+        UniqueConstraint("snapshot_key", name="uq_crypto_regime_snapshots_key"),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_crypto_regime_snapshots_confidence",
+        ),
+        CheckConstraint(
+            "coverage IS NULL OR (coverage >= 0 AND coverage <= 1)",
+            name="ck_crypto_regime_snapshots_coverage",
+        ),
+        Index("ix_crypto_regime_snapshots_instrument_time", "instrument_id", "as_of"),
+        Index("ix_crypto_regime_snapshots_state", "state"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE")
+    )
+    regime_version: Mapped[str] = mapped_column(String(64))
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(String(32))
+    threshold_hash: Mapped[str | None] = mapped_column(String(64))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    coverage: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(64), default="persisted_derivatives", server_default="persisted_derivatives")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    snapshot_key: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CryptoRegimeValidationRun(Base):
+    """Persisted, observational result/evidence payload for one validation run."""
+
+    __tablename__ = "crypto_regime_validation_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id", "validation_version", "input_hash",
+            name="uq_crypto_regime_validation_runs_identity",
+        ),
+        UniqueConstraint("run_key", name="uq_crypto_regime_validation_runs_key"),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'completed', 'failed')",
+            name="ck_crypto_regime_validation_runs_status",
+        ),
+        CheckConstraint("evaluation_count >= 0", name="ck_crypto_regime_validation_runs_count"),
+        Index("ix_crypto_regime_validation_runs_instrument_created", "instrument_id", "created_at"),
+        Index("ix_crypto_regime_validation_runs_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE")
+    )
+    validation_version: Mapped[str] = mapped_column(String(64))
+    regime_version: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="completed", server_default="completed")
+    horizons: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    evaluation_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    data_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    result_payload: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    warnings: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    run_key: Mapped[str] = mapped_column(String(64))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CryptoResearchReport(Base):
+    """Persisted crypto research report envelope."""
+
+    __tablename__ = "crypto_research_reports"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_crypto_research_reports_idempotency"),
+        Index("ix_crypto_research_reports_asset_created", "asset_id", "created_at"),
+        Index("ix_crypto_research_reports_instrument_created", "instrument_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_assets.id", ondelete="CASCADE")
+    )
+    instrument_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="SET NULL")
+    )
+    title: Mapped[str] = mapped_column(String(256))
+    content: Mapped[str] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(String(128))
+    sources: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    evidence_manifest: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    coverage: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    warnings: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 
