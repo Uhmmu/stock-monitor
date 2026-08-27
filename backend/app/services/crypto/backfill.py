@@ -301,7 +301,11 @@ def backfill_instrument_candles(
     if result.status == "success":
         state.last_error = None
         state.last_success_at = _utcnow()
-        due_ms = now_ms + modulo + _due_delay_ms(interval)
+        # Align the next due check to the next closed UTC boundary plus a
+        # small finalization delay.  A full interval measured from "now"
+        # would let ingestion drift an entire bar behind its close, which
+        # starves boundary-aligned consumers such as quant signal generation.
+        due_ms = (now_ms // modulo + 1) * modulo + _due_delay_ms(interval)
         state.next_due_at = datetime.fromtimestamp(due_ms / 1000, tz=timezone.utc)
     else:
         # failed or partial: error recorded above; retry due soon

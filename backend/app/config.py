@@ -216,6 +216,16 @@ class Settings(BaseSettings):
     # Quant jobs consume persisted crypto evidence only.  Kept independently
     # gated so public collection can stay up while research jobs are paused.
     crypto_quant_enabled: bool = False
+    # Goal 5 signal generation and paper trading are separately gated so
+    # backtests can stay enabled while execution-adjacent features stay off.
+    quant_signal_enabled: bool = False
+    quant_paper_enabled: bool = False
+    # Wait after a UTC boundary closes before treating it as decidable.
+    quant_signal_boundary_lag_minutes: int = 5
+    # Hard cap so a misconfigured interval can never mint long-lived signals.
+    quant_signal_max_validity_minutes: int = 1440
+    quant_paper_initial_cash: float = 10_000.0
+    quant_paper_leverage_cap: float = 1.0
 
     # Isolated, administrator-only, read-only IBKR integration test module.
     # Flex traffic is fail-closed through the loopback Xray/VLESS SOCKS5 proxy.

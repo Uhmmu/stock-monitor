@@ -145,3 +145,232 @@ def rerun_backtest(run_id: int, user: User = Depends(get_current_user), db: Sess
     from app.tasks.celery_app import run_crypto_backtest
     queued = run_crypto_backtest.delay(run.id)
     return {**service.run_payload(db, run), "task_id": queued.id}
+
+
+# --- Goal 5: deployments, signals and paper trading ------------------------
+
+
+class DeploymentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_key: str
+    instrument_id: int
+    interval: str
+    target_exposure: float = Field(default=1.0, ge=0.25, le=1.0)
+
+
+class StatusChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class PaperAccountCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    initial_cash: Decimal = Field(default=Decimal("10000"), ge=100, le=10_000_000)
+    leverage_cap: Decimal = Field(default=Decimal("1"), ge=1, le=3)
+    taker_fee_bps: Decimal = Field(default=Decimal("5"), ge=0, le=100)
+    spread_bps: Decimal = Field(default=Decimal("2"), ge=0, le=100)
+    slippage_bps: Decimal = Field(default=Decimal("2"), ge=0, le=200)
+
+
+def _require_signal_enabled() -> None:
+    if not get_settings().quant_signal_enabled:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "信号生成当前已暂停")
+
+
+def _require_paper_enabled() -> None:
+    if not get_settings().quant_paper_enabled:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "模拟盘当前已暂停")
+
+
+@router.get("/deployments")
+def deployments(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import signals as signal_service
+    _require_signal_enabled()
+    return {"items": [signal_service.deployment_payload(db, row) for row in signal_service.list_deployments(db, user.id)]}
+
+
+@router.post("/deployments", status_code=status.HTTP_201_CREATED)
+def create_deployment(payload: DeploymentCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import signals as signal_service
+    _require_signal_enabled()
+    try:
+        row = signal_service.create_deployment(
+            db, user_id=user.id, strategy_key=payload.strategy_key,
+            instrument_id=payload.instrument_id, interval=payload.interval,
+            target_exposure=payload.target_exposure,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return signal_service.deployment_payload(db, row)
+
+
+def _owned_deployment(db: Session, user_id: int, deployment_id: int):
+    from app.services.quant import signals as signal_service
+    row = signal_service.owned_deployment(db, user_id, deployment_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "未找到该策略部署")
+    return row
+
+
+@router.post("/deployments/{deployment_id}/pause")
+def pause_deployment(deployment_id: int, payload: StatusChange, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import signals as signal_service
+    _require_signal_enabled()
+    return signal_service.deployment_payload(
+        db, signal_service.set_deployment_status(
+            db, _owned_deployment(db, user.id, deployment_id), status="paused", reason=payload.reason,
+        ),
+    )
+
+
+@router.post("/deployments/{deployment_id}/resume")
+def resume_deployment(deployment_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import signals as signal_service
+    _require_signal_enabled()
+    return signal_service.deployment_payload(
+        db, signal_service.set_deployment_status(db, _owned_deployment(db, user.id, deployment_id), status="active"),
+    )
+
+
+@router.get("/signals")
+def signals(
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    from app.services.quant import signals as signal_service
+    _require_signal_enabled()
+    try:
+        return signal_service.list_signals(db, user.id, status=status_filter, limit=limit, offset=offset)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+
+@router.get("/signals/runs")
+def signal_runs(
+    limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    from app.services.quant import signals as signal_service
+    _require_signal_enabled()
+    return signal_service.list_signal_runs(db, user.id, limit=limit, offset=offset)
+
+
+@router.get("/signals/{signal_id}")
+def signal_detail(signal_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import signals as signal_service
+    _require_signal_enabled()
+    row = signal_service.get_signal(db, user.id, signal_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "未找到该信号")
+    return signal_service.signal_payload(db, row)
+
+
+@router.post("/signals/generate", status_code=status.HTTP_202_ACCEPTED)
+def generate_signals(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import signals as signal_service
+    _require_signal_enabled()
+    recent = signal_service.manual_generation_cooldown(db)
+    if recent is not None:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "手动触发冷却中，请稍后再试")
+    from app.tasks.celery_app import run_quant_signal_generation
+    queued = run_quant_signal_generation.delay()
+    return {"status": "queued", "task_id": queued.id}
+
+
+@router.get("/paper")
+def paper_account_view(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    account = paper_service.owned_account(db, user.id)
+    if account is None:
+        return {"account": None}
+    return {"account": paper_service.account_payload(db, account)}
+
+
+@router.post("/paper/account", status_code=status.HTTP_201_CREATED)
+def create_paper_account(payload: PaperAccountCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    try:
+        account, created = paper_service.ensure_account(
+            db, user_id=user.id, initial_cash=payload.initial_cash,
+            leverage_cap=payload.leverage_cap, taker_fee_bps=payload.taker_fee_bps,
+            spread_bps=payload.spread_bps, slippage_bps=payload.slippage_bps,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    if created != "created":
+        raise HTTPException(status.HTTP_409_CONFLICT, "模拟盘账户已存在；资金与成本以首次创建为准")
+    return {"account": paper_service.account_payload(db, account)}
+
+
+def _owned_paper_account(db: Session, user_id: int):
+    from app.services.quant import paper as paper_service
+    account = paper_service.owned_account(db, user_id)
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "请先创建模拟盘账户")
+    return account
+
+
+@router.post("/paper/pause")
+def pause_paper(payload: StatusChange, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    return {"account": paper_service.account_payload(
+        db, paper_service.set_account_status(db, _owned_paper_account(db, user.id), status="paused", reason=payload.reason),
+    )}
+
+
+@router.post("/paper/resume")
+def resume_paper(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    return {"account": paper_service.account_payload(
+        db, paper_service.set_account_status(db, _owned_paper_account(db, user.id), status="active"),
+    )}
+
+
+@router.post("/paper/process", status_code=status.HTTP_202_ACCEPTED)
+def process_paper(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    account = _owned_paper_account(db, user.id)
+    from app.tasks.celery_app import process_paper_signals
+    queued = process_paper_signals.delay(account.id)
+    return {"status": "queued", "account_id": account.id, "task_id": queued.id}
+
+
+@router.post("/paper/reconcile")
+def reconcile_paper(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    account = _owned_paper_account(db, user.id)
+    record = paper_service.reconcile_account(db, account)
+    return {"reconciliation": paper_service.reconciliation_payload(record),
+            "account": paper_service.account_payload(db, account)}
+
+
+@router.get("/paper/orders")
+def paper_orders(
+    limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    return paper_service.list_orders(db, _owned_paper_account(db, user.id).id, limit=limit, offset=offset)
+
+
+@router.get("/paper/reconciliations")
+def paper_reconciliations(
+    limit: int = Query(default=20, ge=1, le=100),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    return paper_service.list_reconciliations(db, _owned_paper_account(db, user.id).id, limit=limit)

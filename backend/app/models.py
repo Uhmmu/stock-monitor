@@ -3697,6 +3697,325 @@ class BacktestTrade(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class QuantStrategyDeployment(Base):
+    """User-owned binding of one released strategy to instrument/interval.
+
+    Deployments start paused; nothing generates until the user explicitly
+    resumes them.  ``environment`` is pinned to ``paper`` for Goal 5.
+    """
+
+    __tablename__ = "quant_strategy_deployments"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "environment", "strategy_key", "instrument_id", "interval",
+            name="uq_quant_deployments_identity",
+        ),
+        CheckConstraint("environment = 'paper'", name="ck_quant_deployments_paper_only"),
+        CheckConstraint("status IN ('active', 'paused')", name="ck_quant_deployments_status"),
+        CheckConstraint(
+            "CAST(target_exposure AS NUMERIC) >= 0.25 AND CAST(target_exposure AS NUMERIC) <= 1",
+            name="ck_quant_deployments_exposure_bounds",
+        ),
+        Index("ix_quant_deployments_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    environment: Mapped[str] = mapped_column(String(12), default="paper", server_default="paper")
+    strategy_key: Mapped[str] = mapped_column(String(64))
+    strategy_version: Mapped[str] = mapped_column(String(32), default="v1", server_default="v1")
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
+    )
+    interval: Mapped[str] = mapped_column(String(8))
+    target_exposure: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("1"), server_default="1")
+    status: Mapped[str] = mapped_column(String(16), default="paused", server_default="paused")
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pause_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class QuantSignal(Base):
+    """Immutable, expiring desired position; never an order or broker command."""
+
+    __tablename__ = "quant_signals"
+    __table_args__ = (
+        CheckConstraint("environment = 'paper'", name="ck_quant_signals_paper_only"),
+        CheckConstraint(
+            "status IN ('generated', 'superseded', 'expired', 'rejected', 'consumed')",
+            name="ck_quant_signals_status",
+        ),
+        CheckConstraint("valid_from < expires_at", name="ck_quant_signals_validity_window"),
+        CheckConstraint(
+            "CAST(target_exposure AS NUMERIC) >= -1 AND CAST(target_exposure AS NUMERIC) <= 1",
+            name="ck_quant_signals_target_bounds",
+        ),
+        UniqueConstraint("idempotency_key", name="uq_quant_signals_idempotency_key"),
+        Index("ix_quant_signals_user_status_generated", "user_id", "status", "generated_at"),
+        Index("ix_quant_signals_status_expires", "status", "expires_at"),
+        Index("ix_quant_signals_deployment_decision", "deployment_id", "decision_time"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    deployment_id: Mapped[int] = mapped_column(
+        ForeignKey("quant_strategy_deployments.id", ondelete="CASCADE"), index=True
+    )
+    environment: Mapped[str] = mapped_column(String(12), default="paper", server_default="paper")
+    status: Mapped[str] = mapped_column(String(16), default="generated", server_default="generated")
+    strategy_key: Mapped[str] = mapped_column(String(64))
+    strategy_version: Mapped[str] = mapped_column(String(32))
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
+    )
+    interval: Mapped[str] = mapped_column(String(8))
+    decision_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    target_exposure: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    reason: Mapped[str | None] = mapped_column(Text)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    feature_value_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quant_feature_values.id", ondelete="SET NULL"), index=True
+    )
+    input_hash: Mapped[str | None] = mapped_column(String(64))
+    data_hash: Mapped[str] = mapped_column(String(64))
+    feature_hash: Mapped[str] = mapped_column(String(64))
+    code_hash: Mapped[str] = mapped_column(String(64))
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_reason: Mapped[str | None] = mapped_column(Text)
+    rejected_reason: Mapped[str | None] = mapped_column(Text)
+    superseded_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quant_signals.id", ondelete="SET NULL"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class QuantSignalRun(Base):
+    """Low-volume observability record for one generation attempt per boundary."""
+
+    __tablename__ = "quant_signal_runs"
+    __table_args__ = (
+        UniqueConstraint("deployment_id", "boundary", name="uq_quant_signal_runs_deployment_boundary"),
+        CheckConstraint(
+            "status IN ('signal_created', 'no_signal', 'duplicate', 'stale_data', "
+            "'missing_data', 'failed', 'skipped_paused', 'skipped_expired_boundary')",
+            name="ck_quant_signal_runs_status",
+        ),
+        Index("ix_quant_signal_runs_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    deployment_id: Mapped[int] = mapped_column(
+        ForeignKey("quant_strategy_deployments.id", ondelete="CASCADE"), index=True
+    )
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
+    )
+    interval: Mapped[str] = mapped_column(String(8))
+    boundary: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str | None] = mapped_column(Text)
+    feature_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    feature_available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lag_seconds: Mapped[int | None] = mapped_column(Integer)
+    retries: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    signal_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quant_signals.id", ondelete="SET NULL"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PaperAccount(Base):
+    """One isolated virtual account per user; ledger authority lives in fills."""
+
+    __tablename__ = "paper_accounts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "environment", name="uq_paper_accounts_user_env"),
+        CheckConstraint("environment = 'paper'", name="ck_paper_accounts_paper_only"),
+        CheckConstraint("status IN ('active', 'paused')", name="ck_paper_accounts_status"),
+        CheckConstraint("CAST(initial_cash AS NUMERIC) > 0", name="ck_paper_accounts_initial_cash_positive"),
+        CheckConstraint(
+            "CAST(leverage_cap AS NUMERIC) >= 1 AND CAST(leverage_cap AS NUMERIC) <= 3",
+            name="ck_paper_accounts_leverage_bounds",
+        ),
+        Index("ix_paper_accounts_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    environment: Mapped[str] = mapped_column(String(12), default="paper", server_default="paper")
+    base_currency: Mapped[str] = mapped_column(String(8), default="USDT", server_default="USDT")
+    initial_cash: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    cash: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    taker_fee_bps: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("5"), server_default="5")
+    spread_bps: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("2"), server_default="2")
+    slippage_bps: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("2"), server_default="2")
+    leverage_cap: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("1"), server_default="1")
+    fill_policy: Mapped[str] = mapped_column(String(24), default="paper-fill-v1", server_default="paper-fill-v1")
+    last_funding_boundary: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pause_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PaperOrder(Base):
+    """Virtual order with an immutable client id; no exchange submission exists."""
+
+    __tablename__ = "paper_orders"
+    __table_args__ = (
+        UniqueConstraint("client_order_id", name="uq_paper_orders_client_order_id"),
+        CheckConstraint("side IN ('buy', 'sell')", name="ck_paper_orders_side"),
+        CheckConstraint("order_type = 'market'", name="ck_paper_orders_market_only"),
+        CheckConstraint(
+            "status IN ('pending', 'partially_filled', 'filled', 'rejected', 'expired', 'cancelled')",
+            name="ck_paper_orders_status",
+        ),
+        CheckConstraint("CAST(intended_quantity AS NUMERIC) > 0", name="ck_paper_orders_quantity_positive"),
+        Index("ix_paper_orders_account_created", "account_id", "created_at"),
+        Index("ix_paper_orders_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    signal_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quant_signals.id", ondelete="SET NULL"), index=True
+    )
+    client_order_id: Mapped[str] = mapped_column(String(64))
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
+    )
+    side: Mapped[str] = mapped_column(String(8))
+    order_type: Mapped[str] = mapped_column(String(12), default="market", server_default="market")
+    intended_quantity: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    filled_quantity: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    reference_price: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    avg_fill_price: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    fee: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    spread_cost: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    slippage_cost: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
+    reason: Mapped[str | None] = mapped_column(Text)
+    reject_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PaperFill(Base):
+    """Append-only fill; the authority from which positions must rebuild exactly."""
+
+    __tablename__ = "paper_fills"
+    __table_args__ = (
+        CheckConstraint("side IN ('buy', 'sell')", name="ck_paper_fills_side"),
+        CheckConstraint("CAST(quantity AS NUMERIC) > 0", name="ck_paper_fills_quantity_positive"),
+        Index("ix_paper_fills_account_time", "account_id", "fill_time"),
+        Index("ix_paper_fills_order", "order_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("paper_orders.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
+    )
+    side: Mapped[str] = mapped_column(String(8))
+    quantity: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    price: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    fee: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    spread_cost: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    slippage_cost: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    realized_pnl: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    fill_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PaperFundingEntry(Base):
+    """Append-only funding accrual so the ledger fully explains account cash."""
+
+    __tablename__ = "paper_funding_entries"
+    __table_args__ = (
+        UniqueConstraint("account_id", "instrument_id", "boundary", name="uq_paper_funding_entries_boundary"),
+        Index("ix_paper_funding_entries_account_boundary", "account_id", "boundary"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
+    )
+    boundary: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    rate: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    quantity: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    price: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    cash_delta: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PaperPosition(Base):
+    """Derived cache; rebuilds from the fill/funding ledger during reconciliation."""
+
+    __tablename__ = "paper_positions"
+    __table_args__ = (
+        UniqueConstraint("account_id", "instrument_id", name="uq_paper_positions_account_instrument"),
+        Index("ix_paper_positions_account", "account_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
+    )
+    quantity: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    avg_entry_price: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    realized_pnl: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    total_fees: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    last_fill_id: Mapped[int | None] = mapped_column(
+        ForeignKey("paper_fills.id", ondelete="SET NULL"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PaperReconciliation(Base):
+    """One canary comparison between the ledger rebuild and the derived cache."""
+
+    __tablename__ = "paper_reconciliations"
+    __table_args__ = (
+        CheckConstraint("status IN ('ok', 'mismatch', 'repaired')", name="ck_paper_reconciliations_status"),
+        Index("ix_paper_reconciliations_account_created", "account_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(16))
+    fill_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    funding_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    cash_from_ledger: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    cash_cached: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    mismatches: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    warnings: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
 
 # Register integration-owned tables in the same metadata whenever core models
 # are imported (tests, application runtime, and Alembic must see one graph).

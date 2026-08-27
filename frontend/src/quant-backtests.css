@@ -78,3 +78,16 @@
 @media (prefers-reduced-motion:reduce) { .quant-primary-button,.quant-run-actions button,.quant-pagination button { transition:none; } }
 @media (prefers-reduced-transparency:reduce) { .quant-card,.quant-status-card,.quant-form-grid input,.quant-form-grid select { background:var(--solid); backdrop-filter:none; -webkit-backdrop-filter:none; } }
 @media (prefers-contrast:more) { .quant-card,.quant-status-card,.quant-form-grid input,.quant-form-grid select,.quant-run-list article { border-width:2px; } .quant-run-list article.selected { box-shadow:none; outline:2px solid var(--accent); } }
+
+/* --- Goal 5 paper trading console --------------------------------------- */
+
+.paper-environment-badge { display:inline-flex; align-items:center; margin-left:6px; padding:2px 7px; border-radius:999px; border:1px solid rgba(217,119,6,.45); background:rgba(217,119,6,.12); color:#b45309; font-size:10px; font-weight:800; letter-spacing:.08em; vertical-align:middle; }
+.paper-environment-badge::before { content:''; width:6px; height:6px; margin-right:5px; border-radius:50%; background:#d97706; }
+.quant-paper-page .paper-fills-detail { display:flex; flex-direction:column; gap:6px; }
+.quant-paper-page .paper-fills-detail details { border:1px solid var(--line); border-radius:9px; padding:7px 9px; font-size:11px; }
+.quant-paper-page .paper-fills-detail summary { cursor:pointer; font-weight:600; }
+.quant-paper-page .paper-fills-detail p { margin:5px 0 0; opacity:.75; font-variant-numeric:tabular-nums; }
+.quant-paper-page .paper-position-table .quant-trade-head,
+.quant-paper-page .paper-position-table .quant-trade-row { grid-template-columns:minmax(90px,1fr) minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) minmax(90px,1fr) minmax(90px,1fr); }
+@media (prefers-contrast:more) { .paper-environment-badge { background:#fff; border-color:#b45309; } }
+@media (prefers-reduced-transparency:reduce) { .paper-environment-badge { background:var(--solid); } }

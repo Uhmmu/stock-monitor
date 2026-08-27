@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timezone
 from decimal import Decimal
 
 import pytest
@@ -119,6 +120,30 @@ class TestBackfill:
         state = db.query(CryptoSyncState).one()
         assert state.watermark_ms == HOUR * 7
         assert state.next_due_at is not None and state.last_error is None
+
+    def test_next_due_aligns_to_next_closed_boundary_not_run_time(self, db):
+        """WP 11.2 depends on boundary-aligned ingestion availability.
+
+        A run at a non-aligned instant must schedule the next due check just
+        after the *next* closed UTC boundary, not one full interval after the
+        run, so freshly closed bars land ~10 minutes after their close.
+        """
+        times = [HOUR * i for i in range(1, 8)]
+        client = FakeKlineClient(times, page_size=10)
+        # now = 100.5h: previous "now + interval" scheduling would wait until
+        # 101.5h; boundary alignment must pick 101h + 10 minutes.
+        now_ms = NOW_MS + HOUR // 2
+        result = backfill.backfill_instrument_candles(
+            db, client=client, instrument=instrument(db), interval="1h",
+            now_ms=now_ms, history_days=5, page_pause_seconds=0,
+        )
+        assert result.status == "success"
+        state = db.query(CryptoSyncState).one()
+        expected_ms = (now_ms // HOUR + 1) * HOUR + 10 * 60_000
+        # SQLite returns the stored instant as a naive UTC datetime; interpret
+        # it as UTC before comparing epochs.
+        due_as_utc = state.next_due_at.replace(tzinfo=timezone.utc)
+        assert due_as_utc.timestamp() * 1000 == expected_ms
 
     def test_open_forming_candle_excluded_not_errored(self, db):
         times = [HOUR * i for i in range(1, 4)]

@@ -178,6 +178,18 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.celery_app.ensure_crypto_quant_features_fresh",
         "schedule": 900,
     },
+    "generate-quant-signals": {
+        "task": "app.tasks.celery_app.run_quant_signal_generation",
+        "schedule": 300,
+    },
+    "process-paper-signals": {
+        "task": "app.tasks.celery_app.process_paper_signals",
+        "schedule": 300,
+    },
+    "reconcile-paper-accounts": {
+        "task": "app.tasks.celery_app.reconcile_paper_accounts",
+        "schedule": 3600,
+    },
     "sync-investment-calendar": {
         "task": "app.tasks.celery_app.ensure_investment_calendar_fresh",
         "schedule": 600,
@@ -1433,6 +1445,49 @@ def run_crypto_backtest(run_id: int):
     with SessionLocal() as db:
         run = execute_run(db, run_id)
         return {"run_id": run_id, "status": run.status if run else "missing"}
+
+
+@celery_app.task(name="app.tasks.celery_app.run_quant_signal_generation", queue="quant")
+def run_quant_signal_generation():
+    """Generate expiring target signals at closed UTC boundaries."""
+    if not settings.quant_signal_enabled:
+        return {"skipped": "quant_signal_disabled"}
+    from app.services.quant.signals import generate_due_signals
+    with SessionLocal() as db:
+        return generate_due_signals(db)
+
+
+@celery_app.task(name="app.tasks.celery_app.process_paper_signals", queue="quant")
+def process_paper_signals(account_id: int | None = None):
+    """Convert leasable paper signals into virtual orders and fills."""
+    if not settings.quant_paper_enabled:
+        return {"account_id": account_id, "skipped": "quant_paper_disabled"}
+    from app.models import PaperAccount
+    from app.services.quant.paper import process_pending_signals
+    with SessionLocal() as db:
+        if account_id is not None:
+            account = db.get(PaperAccount, account_id)
+            accounts = [account] if account is not None else []
+        else:
+            accounts = list(db.scalars(select(PaperAccount).where(PaperAccount.status == "active")))
+        results = [process_pending_signals(db, account) for account in accounts]
+        return {"accounts": len(accounts), "results": results}
+
+
+@celery_app.task(name="app.tasks.celery_app.reconcile_paper_accounts", queue="quant")
+def reconcile_paper_accounts():
+    """Reconcile every paper cache against the append-only ledger."""
+    if not settings.quant_paper_enabled:
+        return {"skipped": "quant_paper_disabled"}
+    from app.models import PaperAccount
+    from app.services.quant.paper import reconcile_account
+    with SessionLocal() as db:
+        accounts = list(db.scalars(select(PaperAccount)))
+        records = [reconcile_account(db, account) for account in accounts]
+        return {
+            "accounts": len(accounts),
+            "statuses": [record.status for record in records],
+        }
 
 
 @celery_app.task(name="app.tasks.celery_app.ensure_investment_calendar_fresh")
