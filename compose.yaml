@@ -91,6 +91,18 @@ services:
     healthcheck:
       disable: true
 
+  quant-worker:
+    <<: *backend
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 --prefetch-multiplier=1 -Q quant -n quant@%h
+    environment:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+
   beat:
     <<: *backend
     command: celery -A app.tasks.celery_app beat --loglevel=info

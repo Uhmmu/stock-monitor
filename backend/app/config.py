@@ -195,7 +195,7 @@ class Settings(BaseSettings):
     # Bounded collection universe: only these Binance symbols are synced as
     # instruments/candles. Comma-separated venue symbols per exact market.
     crypto_spot_universe: str = "BTCUSDT,ETHUSDT"
-    crypto_usdm_universe: str = "BTCUSDT,ETHUSDT"
+    crypto_usdm_universe: str = "BTCUSDT,ETHUSDT,ADAUSDT"
     # Candle backfill window and intervals for the bounded universe.
     crypto_candle_history_days: int = 365
     crypto_candle_sync_intervals: str = "1h,4h,1d"
@@ -213,6 +213,9 @@ class Settings(BaseSettings):
     crypto_coingecko_refresh_hours: int = 24
     crypto_coingecko_universe: str = "bitcoin,ethereum"
     crypto_coingecko_manual_mappings: str = ""
+    # Quant jobs consume persisted crypto evidence only.  Kept independently
+    # gated so public collection can stay up while research jobs are paused.
+    crypto_quant_enabled: bool = False
 
     # Isolated, administrator-only, read-only IBKR integration test module.
     # Flex traffic is fail-closed through the loopback Xray/VLESS SOCKS5 proxy.

@@ -11,6 +11,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { api } from './api'
+import QuantBacktests from './QuantBacktests'
 import './crypto-research.css'
 
 // ---------------------------------------------------------------------------
@@ -506,6 +507,7 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
   const [interval, setIntervalState] = useState<CryptoInterval>('1d')
   const [priceType, setPriceType] = useState<CryptoPriceType>('trade')
   const [query, setQuery] = useState('')
+  const [view, setView] = useState<'market' | 'quant'>('market')
 
   useEffect(() => {
     const onPop = () => setInstrumentId(parseInstrumentFromSearch(window.location.search))
@@ -625,8 +627,14 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
       </div>
     </section>
 
+    <div className="crypto-view-segment" role="tablist" aria-label="Crypto 研究模块">
+      <button role="tab" aria-selected={view === 'market'} className={view === 'market' ? 'active' : ''} onClick={() => setView('market')}>市场研究 <small>Market Research</small></button>
+      <button role="tab" aria-selected={view === 'quant'} className={view === 'quant' ? 'active' : ''} onClick={() => setView('quant')}>量化回测 <small>Quant Backtest</small></button>
+    </div>
+
     {!enabled && <div className="crypto-disabled">演示预览未加载加密数据，连接账户后读取已保存的市场数据。</div>}
 
+    {view === 'quant' ? <QuantBacktests enabled={enabled} /> : <>
     <section className="crypto-search" aria-label="加密标的搜索">
       <label>
         <span>搜索标的</span>
@@ -858,5 +866,6 @@ export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
         )}
       </>
     )}
+    </>}
   </div>
 }

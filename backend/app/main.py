@@ -22,6 +22,7 @@ from app.api.market_routes import router as market_router
 from app.api.mood_routes import router as mood_router
 from app.api.mood_validation_routes import router as mood_validation_router
 from app.api.options_routes import router as options_router
+from app.api.quant_routes import router as quant_router
 from app.api.portfolio_analysis_routes import router as portfolio_analysis_router
 from app.api.portfolio_routes import router as portfolio_router
 from app.api.routes import public_router, router
@@ -113,6 +114,7 @@ app.include_router(public_router)
 app.include_router(auth_router)
 app.include_router(compare_router)
 app.include_router(crypto_router)
+app.include_router(quant_router)
 app.include_router(router)
 app.include_router(portfolio_router)
 app.include_router(portfolio_analysis_router)

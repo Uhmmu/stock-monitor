@@ -49,6 +49,11 @@
   opacity: 0.8;
 }
 
+.crypto-view-segment { display:flex; align-self:flex-start; gap:2px; padding:3px; border-radius:12px; background:rgba(118,118,128,.09); }
+.crypto-view-segment button { display:flex; flex-direction:column; gap:2px; min-height:38px; padding:7px 13px; border:0; border-radius:9px; background:transparent; color:var(--ink-3,inherit); font:inherit; font-size:12px; font-weight:650; cursor:pointer; }
+.crypto-view-segment button small { font-size:9px; font-weight:500; opacity:.58; }
+.crypto-view-segment button.active { background:var(--solid); color:var(--ink,inherit); box-shadow:0 1px 5px rgba(0,0,0,.11); }
+
 .crypto-search { display: flex; flex-direction: column; gap: 10px; }
 .crypto-search label { display: flex; flex-direction: column; gap: 6px; max-width: 360px; }
 .crypto-search label span { font-size: 12px; opacity: 0.6; }
@@ -248,6 +253,8 @@
 @media (max-width: 720px) {
   .crypto-research-page { gap: 12px; }
   .crypto-hero h2 { font-size: 20px; }
+  .crypto-view-segment { align-self:stretch; }
+  .crypto-view-segment button { flex:1; }
   .crypto-chart-host { height: 280px; }
   .crypto-instrument-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .crypto-regime-summary,.crypto-derivative-grid { grid-template-columns: 1fr; }

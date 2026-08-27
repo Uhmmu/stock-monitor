@@ -174,6 +174,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.celery_app.materialize_crypto_regimes",
         "schedule": 3600,
     },
+    "materialize-crypto-quant-features": {
+        "task": "app.tasks.celery_app.ensure_crypto_quant_features_fresh",
+        "schedule": 900,
+    },
     "sync-investment-calendar": {
         "task": "app.tasks.celery_app.ensure_investment_calendar_fresh",
         "schedule": 600,
@@ -1394,6 +1398,41 @@ def validate_crypto_regime_history(instrument_id: int):
                 "instrument_id": instrument_id,
                 "error": f"{type(exc).__name__}: {str(exc)[:240]}",
             }
+
+
+@celery_app.task(
+    name="app.tasks.celery_app.ensure_crypto_quant_features_fresh",
+    queue="quant",
+)
+def ensure_crypto_quant_features_fresh():
+    """Materialize causal features from persisted public evidence only."""
+    if not settings.crypto_quant_enabled:
+        return {"skipped": "crypto_quant_disabled"}
+    from app.services.quant.backtest.service import recover_stale_runs
+    from app.services.quant.features import feature_work_due, materialize_features
+    with SessionLocal() as db:
+        recovered = recover_stale_runs(db)
+        if not feature_work_due(db):
+            return {"status": "fresh", "stale_runs_recovered": recovered}
+        result = materialize_features(db)
+        db.commit()
+        return {**result, "stale_runs_recovered": recovered}
+
+
+@celery_app.task(
+    name="app.tasks.celery_app.run_crypto_backtest",
+    queue="quant",
+    soft_time_limit=290,
+    time_limit=300,
+)
+def run_crypto_backtest(run_id: int):
+    """Execute one frozen research manifest; never calls a provider."""
+    if not settings.crypto_quant_enabled:
+        return {"run_id": run_id, "skipped": "crypto_quant_disabled"}
+    from app.services.quant.backtest.service import execute_run
+    with SessionLocal() as db:
+        run = execute_run(db, run_id)
+        return {"run_id": run_id, "status": run.status if run else "missing"}
 
 
 @celery_app.task(name="app.tasks.celery_app.ensure_investment_calendar_fresh")

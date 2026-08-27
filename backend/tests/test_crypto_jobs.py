@@ -80,7 +80,7 @@ class TestCoreIdentitySeed:
     def test_seed_idempotent(self, db):
         first = jobs.ensure_core_identity_seed(db)
         second = jobs.ensure_core_identity_seed(db)
-        assert first["assets_created"] == 3 and first["mappings_created"] == 3
+        assert first["assets_created"] == 4 and first["mappings_created"] == 4
         assert second["assets_created"] == 0 and second["mappings_created"] == 0
         # XBT alias seeded to bitcoin
         result = identity.resolve_symbol(db, "XBT")
@@ -88,7 +88,7 @@ class TestCoreIdentitySeed:
 
     def test_seed_mappings_resolve_binance_assets(self, db):
         jobs.ensure_core_identity_seed(db)
-        for provider_id, slug in (("BTC", "bitcoin"), ("ETH", "ethereum"), ("USDT", "tether-usd")):
+        for provider_id, slug in (("BTC", "bitcoin"), ("ETH", "ethereum"), ("ADA", "cardano"), ("USDT", "tether-usd")):
             resolved = identity.resolve_provider_id(
                 db, provider="binance_spot", object_type="asset", provider_id=provider_id
             )

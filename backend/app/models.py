@@ -3480,6 +3480,223 @@ class CryptoResearchReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# ---------------------------------------------------------------------------
+# Crypto quant research (Goal 4 / WP 9-10).
+#
+# Quant rows intentionally keep their input/config snapshots in bounded JSON.
+# Raw crypto tables remain the source of market truth; these rows are the
+# immutable, replayable contract consumed by the later backtest service.
+# ---------------------------------------------------------------------------
+
+
+class QuantStrategyDefinition(Base):
+    """Versioned, explicitly registered strategy definition."""
+
+    __tablename__ = "quant_strategy_definitions"
+    __table_args__ = (
+        UniqueConstraint("strategy_key", "version", name="uq_quant_strategy_definitions_key_version"),
+        CheckConstraint("status IN ('experimental', 'released', 'retired')", name="ck_quant_strategy_definitions_status"),
+        Index("ix_quant_strategy_definitions_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy_key: Mapped[str] = mapped_column(String(64))
+    # ``name`` is a stable display label, not a lookup key.
+    name: Mapped[str] = mapped_column(String(128))
+    version: Mapped[str] = mapped_column(String(32))
+    description: Mapped[str | None] = mapped_column(Text)
+    interval: Mapped[str] = mapped_column(String(8), default="1h", server_default="1h")
+    universe: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    parameter_schema: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    default_parameters: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    config: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    config_hash: Mapped[str] = mapped_column(String(64))
+    code_version: Mapped[str] = mapped_column(String(64), default="registry-v1", server_default="registry-v1")
+    status: Mapped[str] = mapped_column(String(16), default="released", server_default="released")
+    strategy_name = synonym("name")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class QuantFeatureSet(Base):
+    """Versioned feature schema and its causal availability policy."""
+
+    __tablename__ = "quant_feature_sets"
+    __table_args__ = (
+        UniqueConstraint("feature_set_key", "version", name="uq_quant_feature_sets_key_version"),
+        CheckConstraint("status IN ('experimental', 'released', 'retired')", name="ck_quant_feature_sets_status"),
+        CheckConstraint("availability_policy <> ''", name="ck_quant_feature_sets_policy_nonempty"),
+        Index("ix_quant_feature_sets_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    feature_set_key: Mapped[str] = mapped_column(String(96))
+    name: Mapped[str] = mapped_column(String(128))
+    version: Mapped[str] = mapped_column(String(32))
+    description: Mapped[str | None] = mapped_column(Text)
+    supported_intervals: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    feature_schema: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    parameters: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    input_declarations: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    input_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    input_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    availability_policy: Mapped[str] = mapped_column(
+        String(32), default="source_causal_v1", server_default="source_causal_v1"
+    )
+    config_hash: Mapped[str] = mapped_column(String(64))
+    code_version: Mapped[str] = mapped_column(String(64), default="features-v1", server_default="features-v1")
+    status: Mapped[str] = mapped_column(String(16), default="released", server_default="released")
+    key = synonym("feature_set_key")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class QuantFeatureValue(Base):
+    """Append-only feature payload for one instrument/bar/vintage."""
+
+    __tablename__ = "quant_feature_values"
+    __table_args__ = (
+        UniqueConstraint(
+            "feature_set_id", "instrument_id", "interval", "bar_open_time_ms", "input_hash",
+            name="uq_quant_feature_values_input_identity",
+        ),
+        CheckConstraint("coverage >= 0 AND coverage <= 1", name="ck_quant_feature_values_coverage"),
+        CheckConstraint("available_at >= as_of", name="ck_quant_feature_values_causal_order"),
+        Index("ix_quant_feature_values_instrument_time", "instrument_id", "interval", "as_of"),
+        Index("ix_quant_feature_values_feature_time", "feature_set_id", "interval", "as_of"),
+        Index("ix_quant_feature_values_available_at", "available_at"),
+        Index("ix_quant_feature_values_input_hash", "input_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    feature_set_id: Mapped[int] = mapped_column(
+        ForeignKey("quant_feature_sets.id", ondelete="CASCADE"), index=True
+    )
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
+    )
+    interval: Mapped[str] = mapped_column(String(8))
+    bar_open_time_ms: Mapped[int] = mapped_column(BigInteger)
+    open_time_ms = synonym("bar_open_time_ms")
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    input_snapshot: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    coverage: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    quality: Mapped[str] = mapped_column(String(24), default="ok", server_default="ok")
+    omissions: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    warnings: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    source_causal_version: Mapped[str] = mapped_column(
+        String(32), default="source_causal_v1", server_default="source_causal_v1"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BacktestRun(Base):
+    """User-owned immutable manifest and lifecycle for one replay."""
+
+    __tablename__ = "backtest_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'cancel_requested', 'completed', 'failed', 'cancelled')",
+            name="ck_backtest_runs_status",
+        ),
+        CheckConstraint("initial_capital > 0", name="ck_backtest_runs_initial_capital_positive"),
+        Index("ix_backtest_runs_user_status_created", "user_id", "status", "created_at"),
+        Index("ix_backtest_runs_status_created", "status", "created_at"),
+        Index("ix_backtest_runs_manifest_hash", "manifest_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    strategy_definition_id: Mapped[int] = mapped_column(
+        ForeignKey("quant_strategy_definitions.id", ondelete="RESTRICT"), index=True
+    )
+    rerun_of_id: Mapped[int | None] = mapped_column(
+        ForeignKey("backtest_runs.id", ondelete="SET NULL"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(24), default="pending", server_default="pending")
+    interval: Mapped[str] = mapped_column(String(8))
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    parameters: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    config: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    manifest: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    manifest_hash: Mapped[str] = mapped_column(String(64))
+    data_hash: Mapped[str] = mapped_column(String(64))
+    feature_hash: Mapped[str] = mapped_column(String(64))
+    code_hash: Mapped[str] = mapped_column(String(64))
+    result_hash: Mapped[str | None] = mapped_column(String(64))
+    initial_capital: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    seed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    warnings: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class BacktestEquityPoint(Base):
+    """One strategy-interval NAV observation."""
+
+    __tablename__ = "backtest_equity_points"
+    __table_args__ = (
+        UniqueConstraint("run_id", "timestamp", name="uq_backtest_equity_points_run_time"),
+        Index("ix_backtest_equity_points_run_time", "run_id", "timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    time = synonym("timestamp")
+    nav: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    cash: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    gross_exposure: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    drawdown: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BacktestTrade(Base):
+    """One deterministic simulated intent/fill with causal timestamps."""
+
+    __tablename__ = "backtest_trades"
+    __table_args__ = (
+        Index("ix_backtest_trades_run_time", "run_id", "fill_time"),
+        Index("ix_backtest_trades_instrument_time", "instrument_id", "fill_time"),
+        CheckConstraint("side IN ('buy', 'sell', 'long', 'short')", name="ck_backtest_trades_side"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"), index=True)
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
+    )
+    decision_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    fill_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    side: Mapped[str] = mapped_column(String(8))
+    quantity: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    qty = synonym("quantity")
+    price: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    fee: Mapped[Decimal] = mapped_column(PreciseNumeric, default=0, server_default="0")
+    slippage: Mapped[Decimal] = mapped_column(PreciseNumeric, default=0, server_default="0")
+    funding: Mapped[Decimal] = mapped_column(PreciseNumeric, default=0, server_default="0")
+    realized_pnl: Mapped[Decimal] = mapped_column(PreciseNumeric, default=0, server_default="0")
+    reason: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="filled", server_default="filled")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 
 # Register integration-owned tables in the same metadata whenever core models
 # are imported (tests, application runtime, and Alembic must see one graph).

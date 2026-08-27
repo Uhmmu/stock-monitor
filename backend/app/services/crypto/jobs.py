@@ -36,6 +36,7 @@ CORE_IDENTITY_SEEDS = [
     {"slug": "bitcoin", "symbol": "BTC", "display_name": "Bitcoin", "asset_kind": "coin",
      "aliases": [{"symbol": "XBT", "reason": "ISO 4217-style historical ticker"}]},
     {"slug": "ethereum", "symbol": "ETH", "display_name": "Ether", "asset_kind": "coin", "aliases": []},
+    {"slug": "cardano", "symbol": "ADA", "display_name": "Cardano", "asset_kind": "coin", "aliases": []},
     {"slug": "tether-usd", "symbol": "USDT", "display_name": "Tether USD", "asset_kind": "token", "aliases": []},
 ]
 
