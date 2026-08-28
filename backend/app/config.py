@@ -227,6 +227,14 @@ class Settings(BaseSettings):
     quant_paper_initial_cash: float = 10_000.0
     quant_paper_leverage_cap: float = 1.0
 
+    # Goal 6 TEST control plane. Binance credentials never belong here; the
+    # standalone local executor is the only process allowed to hold them.
+    execution_control_enabled: bool = False
+    execution_agent_clock_skew_seconds: int = 300
+    execution_agent_max_requests_per_minute: int = 120
+    execution_agent_lease_ttl_seconds: int = 60
+    execution_agent_heartbeat_stale_seconds: int = 180
+
     # Isolated, administrator-only, read-only IBKR integration test module.
     # Flex traffic is fail-closed through the loopback Xray/VLESS SOCKS5 proxy.
     ibkr_cp_enabled: bool = False

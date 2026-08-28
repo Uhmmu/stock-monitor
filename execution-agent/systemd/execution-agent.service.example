@@ -1,0 +1,19 @@
+[Unit]
+Description=Stock Monitor local Binance TEST execution agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/execution-agent run
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/stock-monitor/execution-agent
+Environment=EXECUTION_AGENT_DIR=%h/.local/share/stock-monitor/execution-agent
+
+[Install]
+WantedBy=default.target

@@ -89,5 +89,28 @@
 .quant-paper-page .paper-fills-detail p { margin:5px 0 0; opacity:.75; font-variant-numeric:tabular-nums; }
 .quant-paper-page .paper-position-table .quant-trade-head,
 .quant-paper-page .paper-position-table .quant-trade-row { grid-template-columns:minmax(90px,1fr) minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) minmax(90px,1fr) minmax(90px,1fr); }
+
+/* Goal 6 test execution is deliberately visually distinct from PAPER/LIVE. */
+.test-environment-badge { display:inline-flex;align-items:center;width:max-content;padding:3px 7px;border:1px solid rgba(88,86,214,.38);border-radius:999px;background:rgba(88,86,214,.12);color:#4f46b8;font-size:10px;font-weight:800;letter-spacing:.08em;vertical-align:middle; }
+.execution-token-once { display:grid;gap:8px;margin:14px 0;padding:12px;border:1px solid rgba(88,86,214,.35);border-radius:12px;background:rgba(88,86,214,.08); }
+.execution-token-once code { overflow-wrap:anywhere;user-select:all; }
+.execution-token-once button { justify-self:start; }
+.execution-policy-grid { margin:12px 0; }
+.execution-agent-list,.execution-event-list { display:grid;gap:8px; }
+.execution-agent-list article,.execution-event-list article { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line); }
+.execution-agent-list article>div { display:grid;gap:3px; }
+.execution-agent-list small,.execution-event-list small { color:var(--muted); }
+.quant-execution-test-page .execution-order-table .quant-trade-head,
+.quant-execution-test-page .execution-order-table .quant-trade-row { grid-template-columns:minmax(130px,1fr) minmax(80px,.7fr) minmax(150px,1.2fr) minmax(90px,.7fr) minmax(80px,.7fr) minmax(80px,.7fr); }
+[data-theme='dark'] .test-environment-badge { color:#a8a7ff; }
+
+@media (max-width: 760px) {
+  .quant-execution-test-page .execution-order-table { overflow-x:auto; }
+  .quant-execution-test-page .execution-order-table .quant-trade-head,
+  .quant-execution-test-page .execution-order-table .quant-trade-row { min-width:760px; }
+  .execution-agent-list article { align-items:flex-start; }
+}
+@media (prefers-reduced-transparency:reduce) { .test-environment-badge,.execution-token-once { background:var(--solid); } }
+@media (prefers-contrast:more) { .test-environment-badge,.execution-token-once { border-width:2px; } }
 @media (prefers-contrast:more) { .paper-environment-badge { background:#fff; border-color:#b45309; } }
 @media (prefers-reduced-transparency:reduce) { .paper-environment-badge { background:var(--solid); } }

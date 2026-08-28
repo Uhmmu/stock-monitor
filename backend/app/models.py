@@ -4017,6 +4017,343 @@ class PaperReconciliation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# ---------------------------------------------------------------------------
+# Goal 6 TEST execution control plane.
+#
+# These tables are intentionally separate from the Goal 5 paper ledger and
+# from the portfolio/IBKR ledger.  Every row is pinned to the Binance TEST
+# authority; there is no live environment switch in this boundary.
+# ---------------------------------------------------------------------------
+
+
+class ExecutionTestAccount(Base):
+    """Administrator-owned TEST account metadata (never a broker credential)."""
+
+    __tablename__ = "execution_test_accounts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "venue", "account_key", name="uq_execution_test_accounts_scope"),
+        CheckConstraint("environment = 'test'", name="ck_execution_test_accounts_test_only"),
+        CheckConstraint("status IN ('active', 'paused', 'revoked')", name="ck_execution_test_accounts_status"),
+        CheckConstraint("CAST(initial_capital AS NUMERIC) > 0", name="ck_execution_test_accounts_capital_positive"),
+        Index("ix_execution_test_accounts_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(96))
+    account_key: Mapped[str] = mapped_column(String(128))
+    environment: Mapped[str] = mapped_column(String(12), default="test", server_default="test")
+    venue: Mapped[str] = mapped_column(String(32), default="binance_usdm", server_default="binance_usdm")
+    base_currency: Mapped[str] = mapped_column(String(12), default="USDT", server_default="USDT")
+    initial_capital: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    cash: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# Short aliases keep service/test call sites readable without creating a
+# second mapped class or a second table.
+TestAccount = ExecutionTestAccount
+
+
+class ExecutionIntent(Base):
+    """Immutable TEST projection of a valid paper signal snapshot."""
+
+    __tablename__ = "execution_intents"
+    __table_args__ = (
+        UniqueConstraint("account_id", "signal_id", name="uq_execution_intents_account_signal"),
+        CheckConstraint("environment = 'test'", name="ck_execution_intents_test_only"),
+        CheckConstraint(
+            "status IN ('pending', 'leased', 'acked', 'rejected', 'consumed', 'expired')",
+            name="ck_execution_intents_status",
+        ),
+        CheckConstraint(
+            "CAST(target_exposure AS NUMERIC) >= -1 AND CAST(target_exposure AS NUMERIC) <= 1",
+            name="ck_execution_intents_target_bounds",
+        ),
+        Index("ix_execution_intents_account_status", "account_id", "status", "created_at"),
+        Index("ix_execution_intents_signal_expiry", "signal_id", "signal_expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("execution_test_accounts.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    signal_id: Mapped[int] = mapped_column(ForeignKey("quant_signals.id", ondelete="RESTRICT"), index=True)
+    deployment_id: Mapped[int] = mapped_column(
+        ForeignKey("quant_strategy_deployments.id", ondelete="RESTRICT"), index=True
+    )
+    instrument_id: Mapped[int] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="RESTRICT"), index=True
+    )
+    environment: Mapped[str] = mapped_column(String(12), default="test", server_default="test")
+    strategy_key: Mapped[str] = mapped_column(String(64))
+    strategy_version: Mapped[str] = mapped_column(String(32))
+    interval: Mapped[str] = mapped_column(String(8))
+    target_exposure: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    decision_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    signal_generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    signal_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    snapshot: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+TestIntent = ExecutionIntent
+
+
+class ExecutionAgent(Base):
+    """Scoped local agent identity; only a token hash is persisted."""
+
+    __tablename__ = "execution_agents"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "name", name="uq_execution_agents_owner_name"),
+        UniqueConstraint("token_hash", name="uq_execution_agents_token_hash"),
+        CheckConstraint("environment = 'test'", name="ck_execution_agents_test_only"),
+        CheckConstraint("status IN ('active', 'revoked')", name="ck_execution_agents_status"),
+        Index("ix_execution_agents_owner_status", "owner_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(96))
+    environment: Mapped[str] = mapped_column(String(12), default="test", server_default="test")
+    scopes: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    account_ids: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    venues: Mapped[list] = mapped_column(JSON, default=lambda: ["binance_usdm"], server_default='["binance_usdm"]')
+    token_hash: Mapped[str] = mapped_column(String(64))
+    token_fingerprint: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ExecutionRequestNonce(Base):
+    """Durable anti-replay nonce consumed before an agent operation."""
+
+    __tablename__ = "execution_request_nonces"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "nonce", name="uq_execution_request_nonces_agent_nonce"),
+        Index("ix_execution_request_nonces_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("execution_agents.id", ondelete="CASCADE"), index=True)
+    nonce: Mapped[str] = mapped_column(String(128))
+    request_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SignalLease(Base):
+    """Short-lived claim; it cannot extend the projected signal expiry."""
+
+    __tablename__ = "signal_leases"
+    __table_args__ = (
+        UniqueConstraint("intent_id", "attempt", name="uq_signal_leases_intent_attempt"),
+        UniqueConstraint("lease_token", name="uq_signal_leases_lease_token"),
+        CheckConstraint("environment = 'test'", name="ck_signal_leases_test_only"),
+        CheckConstraint(
+            "status IN ('leased', 'acked', 'rejected', 'expired', 'released')",
+            name="ck_signal_leases_status",
+        ),
+        Index("ix_signal_leases_agent_status", "agent_id", "status", "expires_at"),
+        Index("ix_signal_leases_expiry", "status", "expires_at"),
+        Index(
+            "uq_signal_leases_active_intent",
+            "intent_id",
+            unique=True,
+            postgresql_where=text("status = 'leased'"),
+            sqlite_where=text("status = 'leased'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    intent_id: Mapped[int] = mapped_column(ForeignKey("execution_intents.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("execution_agents.id", ondelete="CASCADE"), index=True)
+    environment: Mapped[str] = mapped_column(String(12), default="test", server_default="test")
+    lease_token: Mapped[str] = mapped_column(String(96))
+    attempt: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    leased_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16), default="leased", server_default="leased")
+    acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ExecutionOrder(Base):
+    """Agent-reported TEST order lifecycle; never a broker command itself."""
+
+    __tablename__ = "execution_orders"
+    __table_args__ = (
+        UniqueConstraint("environment", "account_id", "venue", "client_order_id", name="uq_execution_orders_client"),
+        UniqueConstraint("environment", "account_id", "venue", "provider_order_id", name="uq_execution_orders_provider"),
+        CheckConstraint("environment = 'test'", name="ck_execution_orders_test_only"),
+        CheckConstraint(
+            "status IN ('created', 'submitted', 'partially_filled', 'filled', 'cancel_requested', 'cancelled', 'rejected', 'unknown', 'failed')",
+            name="ck_execution_orders_status",
+        ),
+        CheckConstraint("side IN ('buy', 'sell')", name="ck_execution_orders_side"),
+        CheckConstraint("CAST(quantity AS NUMERIC) > 0", name="ck_execution_orders_quantity_positive"),
+        Index("ix_execution_orders_account_status", "account_id", "status", "created_at"),
+        Index("ix_execution_orders_intent", "intent_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("execution_test_accounts.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    intent_id: Mapped[int | None] = mapped_column(ForeignKey("execution_intents.id", ondelete="SET NULL"), index=True)
+    lease_id: Mapped[int | None] = mapped_column(ForeignKey("signal_leases.id", ondelete="SET NULL"), index=True)
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("execution_agents.id", ondelete="SET NULL"), index=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("crypto_instruments.id", ondelete="RESTRICT"), index=True)
+    environment: Mapped[str] = mapped_column(String(12), default="test", server_default="test")
+    venue: Mapped[str] = mapped_column(String(32), default="binance_usdm", server_default="binance_usdm")
+    client_order_id: Mapped[str] = mapped_column(String(36))
+    provider_order_id: Mapped[str | None] = mapped_column(String(128))
+    side: Mapped[str] = mapped_column(String(8))
+    order_type: Mapped[str] = mapped_column(String(16), default="market", server_default="market")
+    time_in_force: Mapped[str | None] = mapped_column(String(16))
+    quantity: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    price: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    status: Mapped[str] = mapped_column(String(24), default="created", server_default="created")
+    reason: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ExecutionFill(Base):
+    """Append-only TEST fill observation used for reconciliation."""
+
+    __tablename__ = "execution_fills"
+    __table_args__ = (
+        UniqueConstraint("environment", "account_id", "venue", "provider_trade_id", name="uq_execution_fills_provider_trade"),
+        CheckConstraint("environment = 'test'", name="ck_execution_fills_test_only"),
+        CheckConstraint("side IN ('buy', 'sell')", name="ck_execution_fills_side"),
+        CheckConstraint("CAST(quantity AS NUMERIC) > 0", name="ck_execution_fills_quantity_positive"),
+        CheckConstraint("CAST(price AS NUMERIC) > 0", name="ck_execution_fills_price_positive"),
+        Index("ix_execution_fills_order_time", "order_id", "fill_time"),
+        Index("ix_execution_fills_account_time", "account_id", "fill_time"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("execution_orders.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("execution_test_accounts.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("execution_agents.id", ondelete="SET NULL"), index=True)
+    environment: Mapped[str] = mapped_column(String(12), default="test", server_default="test")
+    venue: Mapped[str] = mapped_column(String(32), default="binance_usdm", server_default="binance_usdm")
+    provider_trade_id: Mapped[str | None] = mapped_column(String(128))
+    side: Mapped[str] = mapped_column(String(8))
+    quantity: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    price: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    fee: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    fee_asset: Mapped[str | None] = mapped_column(String(16))
+    fill_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    event_hash: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ExecutionEvent(Base):
+    """Append-only, recursively redacted agent event/audit envelope."""
+
+    __tablename__ = "execution_events"
+    __table_args__ = (
+        UniqueConstraint("environment", "event_id", name="uq_execution_events_event_id"),
+        UniqueConstraint("environment", "agent_id", "event_nonce", name="uq_execution_events_agent_nonce"),
+        CheckConstraint("environment = 'test'", name="ck_execution_events_test_only"),
+        Index("ix_execution_events_account_time", "account_id", "received_at"),
+        Index("ix_execution_events_type_time", "event_type", "received_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(128))
+    event_nonce: Mapped[str | None] = mapped_column(String(128))
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("execution_agents.id", ondelete="SET NULL"), index=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("execution_test_accounts.id", ondelete="SET NULL"), index=True)
+    intent_id: Mapped[int | None] = mapped_column(ForeignKey("execution_intents.id", ondelete="SET NULL"), index=True)
+    lease_id: Mapped[int | None] = mapped_column(ForeignKey("signal_leases.id", ondelete="SET NULL"), index=True)
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("execution_orders.id", ondelete="SET NULL"), index=True)
+    fill_id: Mapped[int | None] = mapped_column(ForeignKey("execution_fills.id", ondelete="SET NULL"), index=True)
+    environment: Mapped[str] = mapped_column(String(12), default="test", server_default="test")
+    venue: Mapped[str | None] = mapped_column(String(32))
+    event_type: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    event_hash: Mapped[str] = mapped_column(String(64))
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RiskPolicyVersion(Base):
+    """Immutable versioned TEST risk policy; activation is an audit event."""
+
+    __tablename__ = "risk_policy_versions"
+    __table_args__ = (
+        UniqueConstraint("environment", "account_id", "version", name="uq_risk_policy_versions_scope_version"),
+        CheckConstraint("environment = 'test'", name="ck_risk_policy_versions_test_only"),
+        CheckConstraint("status IN ('draft', 'active', 'retired')", name="ck_risk_policy_versions_status"),
+        Index("ix_risk_policy_versions_account_status", "account_id", "status", "effective_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("execution_test_accounts.id", ondelete="CASCADE"), index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    environment: Mapped[str] = mapped_column(String(12), default="test", server_default="test")
+    version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="draft", server_default="draft")
+    policy_hash: Mapped[str] = mapped_column(String(64))
+    limits: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ExecutionKillSwitch(Base):
+    """Immediate scoped stop control, never silently inherited by live."""
+
+    __tablename__ = "execution_kill_switches"
+    __table_args__ = (
+        UniqueConstraint("environment", "scope_type", "scope_id", name="uq_execution_kill_switches_scope"),
+        CheckConstraint("environment = 'test'", name="ck_execution_kill_switches_test_only"),
+        CheckConstraint("scope_type IN ('global', 'account', 'agent', 'deployment', 'instrument')", name="ck_execution_kill_switches_scope_type"),
+        Index("ix_execution_kill_switches_enabled", "environment", "enabled"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope_type: Mapped[str] = mapped_column(String(16))
+    # Global scope uses the non-null sentinel 0 so the uniqueness guarantee is
+    # identical on PostgreSQL and SQLite (NULLs are otherwise distinct).
+    scope_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    environment: Mapped[str] = mapped_column(String(12), default="test", server_default="test")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    reason: Mapped[str | None] = mapped_column(Text)
+    changed_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 # Register integration-owned tables in the same metadata whenever core models
 # are imported (tests, application runtime, and Alembic must see one graph).
 from app.integrations.ibkr import db_models as _ibkr_db_models  # noqa: E402,F401

@@ -15,6 +15,8 @@ from app.api.compare_routes import router as compare_router
 from app.api.crypto_routes import router as crypto_router
 from app.api.agent_gateway_routes import router as agent_gateway_router
 from app.api.discovery_routes import router as discovery_router
+from app.api.execution_admin_routes import router as execution_admin_router
+from app.api.execution_agent_routes import router as execution_agent_router
 from app.api.investment_routes import router as investment_router
 from app.api.industry_pulse_routes import router as industry_pulse_router
 from app.api.macro_routes import admin_router as macro_admin_router, router as macro_router
@@ -119,6 +121,8 @@ app.include_router(router)
 app.include_router(portfolio_router)
 app.include_router(portfolio_analysis_router)
 app.include_router(discovery_router)
+app.include_router(execution_admin_router)
+app.include_router(execution_agent_router)
 app.include_router(agent_gateway_router)
 app.include_router(sentiment_router)
 app.include_router(investment_router)
