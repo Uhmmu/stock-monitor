@@ -45,13 +45,13 @@ switch. `LIVE_READY` is always false.
 
 ## Deployment status (2026-08-28)
 
-The control plane and UI are deployed at migration `0079_execution_test` and
-the production API, workers, main frontend and beta frontend are healthy. The
-current state is deliberately `DEGRADED`: no TEST account or local agent has
-been registered, because the local credentials currently do not include the
-Binance Futures Demo HMAC signing secret. Provision that secret locally and run
-the mandatory preflight/canary above before recording `TEST_READY`; never copy
-the secret to the VPS, repository, browser or chat.
+The control-plane implementation is committed, but the earlier deployment was
+mistakenly sent to the retired `203.0.113.20` host. Treat that host as invalid;
+the current production host is `203.0.113.10` and remains at migration `0078`
+until a deliberate Goal 6 deployment is performed. No TEST account or local
+agent has been registered. Provision a fresh Binance Futures Demo HMAC key in
+the local executor, then deploy and run the mandatory preflight/canary above;
+never copy a secret to the VPS, repository, browser or chat.
 
 ## Recovery and rollback
 
