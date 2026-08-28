@@ -45,13 +45,16 @@ switch. `LIVE_READY` is always false.
 
 ## Deployment status (2026-08-28)
 
-The control-plane implementation is committed, but the earlier deployment was
-mistakenly sent to the retired `203.0.113.20` host. Treat that host as invalid;
-the current production host is `203.0.113.10` and remains at migration `0078`
-until a deliberate Goal 6 deployment is performed. No TEST account or local
-agent has been registered. Provision a fresh Binance Futures Demo HMAC key in
-the local executor, then deploy and run the mandatory preflight/canary above;
-never copy a secret to the VPS, repository, browser or chat.
+Deployed 2026-08-28 to the current production host `203.0.113.10`
+(钟家乐.com). `EXECUTION_CONTROL_ENABLED=true` is set in the production `.env`,
+migration head is `0079_execution_test`, and api/worker/sec-worker/beat/
+quant-worker/frontend were rebuilt and switched. Backup directory:
+`/opt/stock-monitor/backups/deployments/20260828-1005-goal6-execution`
+(rollback image tag `pre-20260828-1005-goal6`). The retired `203.0.113.20` host
+is invalid; do not deploy there. No TEST account or local agent has been
+registered yet. Provision a fresh Binance Futures Demo HMAC key in the local
+executor, then run the mandatory preflight/canary above; never copy a secret
+to the VPS, repository, browser or chat.
 
 ## Recovery and rollback
 
