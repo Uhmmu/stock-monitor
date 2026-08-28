@@ -238,6 +238,7 @@ def expire_leases(db: Session, *, now=None) -> int:
             ExecutionIntent.signal_expires_at <= moment,
         )
         .values(status="expired", rejection_reason="signal_expired")
+        .execution_options(synchronize_session=False)
     ).rowcount or 0
     return count
 
@@ -328,6 +329,7 @@ def claim_next_lease(
                             ExecutionIntent.signal_expires_at > moment,
                         )
                         .values(status="leased")
+                        .execution_options(synchronize_session=False)
                     )
                     if not updated.rowcount:
                         continue

@@ -258,3 +258,68 @@ def test_admin_ui_contract_uses_body_step_up_and_one_time_token(db):
         },
     )
     assert kill_response.status_code == 200 and kill_response.json()["enabled"] is True
+
+
+def test_events_route_accepts_agent_wire_version_envelope(db):
+    """The agent always tags events with wire_version; the route must accept it.
+
+    Regression: EventRequest used extra="forbid" without declaring
+    wire_version, so every real agent event POST failed with 422 and tripped
+    the local kill switch ("control event delivery unavailable").
+    """
+    import json as _json
+
+    from fastapi.testclient import TestClient as _TC
+
+    from app.api.execution_agent_routes import router as agent_router
+
+    _user, _instrument, _deployment, _signal, account, _policy, agent = _seed(db)
+    wire_agent, token = create_agent(db, owner_id=_user.id, name="wire-local", account_ids=[account.id])
+    db.commit()
+    intent = project_eligible_intents(db)[0]
+    lease = claim_next_lease(db, wire_agent)
+    assert lease is not None
+
+    app = FastAPI()
+    app.include_router(agent_router)
+    app.dependency_overrides[get_db] = lambda: db
+    client = _TC(app)
+
+    def _post(body: dict):
+        payload = _json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        timestamp = str(int(datetime.now(UTC).timestamp()))
+        nonce = f"nonce-{timestamp}-{len(body)}"
+        path = "/api/execution-agent/v1/events"
+        signature = sign_request(token, "POST", path, "", payload, timestamp, nonce)
+        return client.post(
+            path,
+            content=payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-Execution-Agent-Id": "wire-local",
+                "X-Execution-Agent-Token": token,
+                "X-Execution-Agent-Timestamp": timestamp,
+                "X-Execution-Agent-Nonce": nonce,
+                "X-Execution-Agent-Signature": signature,
+            },
+        )
+
+    ok = _post({
+        "wire_version": "execution-agent.v1",
+        "event_id": "evt-wire-1",
+        "event_type": "lease_ack",
+        "lease_id": lease.lease_token,
+        "account_id": account.id,
+        "payload": {"status": "acked"},
+    })
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "accepted"
+
+    conflict = _post({
+        "wire_version": "execution-agent.v9",
+        "event_id": "evt-wire-2",
+        "event_type": "lease_ack",
+        "lease_id": lease.lease_token,
+        "payload": {},
+    })
+    assert conflict.status_code == 409

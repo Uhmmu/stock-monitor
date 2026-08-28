@@ -23,6 +23,7 @@ WIRE_VERSION = "execution-agent.v1"
 class EventRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    wire_version: str | None = Field(default=None, max_length=40)
     event_id: str = Field(min_length=1, max_length=128)
     event_type: str = Field(min_length=1, max_length=40)
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -77,6 +78,8 @@ def post_event(
     db: Session = Depends(get_db),
 ):
     _require_scope(agent, "event:write")
+    if payload.wire_version is not None and payload.wire_version != WIRE_VERSION:
+        raise HTTPException(status.HTTP_409_CONFLICT, "wire_version 不支持")
     try:
         event = record_event(
             db,
