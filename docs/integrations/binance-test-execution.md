@@ -14,7 +14,7 @@ wallet, transfer or withdrawal method in this boundary.
 
    ```sh
    execution-agent init \
-     --control-url https://jialenb.com \
+     --control-url https://xn--fjq893a0q8b.com \
      --agent-id <agent-name> \
      --machine-token-file <local-0600-token-file>
    ```

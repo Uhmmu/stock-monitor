@@ -15,6 +15,9 @@ test = ["pytest>=8"]
 [project.scripts]
 execution-agent = "execution_agent.cli:main"
 
+[tool.setuptools.packages.find]
+include = ["execution_agent*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
