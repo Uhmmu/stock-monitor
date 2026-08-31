@@ -126,7 +126,7 @@ API 启动时会自动执行 Alembic 迁移。数据库中没有管理员时，�
 设置域名和 Caddy Basic Auth：
 
 ```env
-SITE_DOMAINS="stocks.example.com, www.stocks.example.com"
+SITE_DOMAINS="jialenb.com, xn--fjq893a0q8b.com"
 AUTH_USER=admin
 AUTH_PASSWORD_HASH=replace-with-a-caddy-password-hash
 ```
