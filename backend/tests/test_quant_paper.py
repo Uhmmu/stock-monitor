@@ -545,6 +545,7 @@ def test_paper_api_contract(client):
     payload = created.json()["account"]
     assert payload["environment"] == "paper" and payload["base_currency"] == "USDT"
     assert payload["execution_mode"] == "paper" and payload["current_run"]["status"] == "active"
+    assert payload["available_execution_modes"] == ["paper"]
     assert payload["positions"] == [] and payload["nav"] == "10000"
     config = test_client.get("/api/crypto/quant/paper/config")
     assert config.status_code == 200

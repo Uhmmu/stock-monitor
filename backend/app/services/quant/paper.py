@@ -959,7 +959,7 @@ def account_payload(db: Session, account: PaperAccount) -> dict[str, Any]:
     }
     return {
         "id": account.id, "environment": account.environment, "base_currency": account.base_currency,
-        "execution_mode": "paper", "available_execution_modes": ["paper", "binance_demo", "binance_live"],
+        "execution_mode": "paper", "available_execution_modes": ["paper"],
         "status": account.status, "paused_at": account.paused_at, "pause_reason": account.pause_reason,
         "initial_cash": str(_d(account.initial_cash)), "cash": str(_d(account.cash)),
         "locked_cash": str(_d(account.locked_cash)), "available_balance": str(_d(account.cash)),
