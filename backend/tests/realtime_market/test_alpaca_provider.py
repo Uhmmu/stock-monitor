@@ -1,7 +1,10 @@
 import asyncio
 import json
 
+import pytest
+
 from app.config import Settings
+from app.services.realtime_market.contracts import ProviderError
 from app.services.realtime_market.providers import AlpacaRealtimeProvider
 from app.services.realtime_market.stream import StreamingSupervisor
 
@@ -71,6 +74,22 @@ def test_alpaca_websocket_uses_same_key_secret_auth_packet_and_paper_health_meta
     assert health.feed == "iex"
     assert health.stream_endpoint == "wss://stream.data.alpaca.markets/v2/iex"
     asyncio.run(provider.close())
+
+
+def test_alpaca_connection_limit_is_retried_as_transient():
+    websocket = FakeWebsocket()
+    websocket.incoming = [json.dumps([{"T": "error", "code": 406, "msg": "connection limit exceeded"}])]
+
+    async def factory(url, **kwargs):
+        return websocket
+
+    provider = AlpacaRealtimeProvider(settings=settings(), websocket_factory=factory)
+    with pytest.raises(ProviderError) as raised:
+        asyncio.run(provider.connect())
+
+    assert raised.value.status_code == 406
+    assert raised.value.transient is True
+    assert websocket.closed is True
 
 
 def test_alpaca_does_not_subscribe_symbols_rejected_by_rest_market_data():

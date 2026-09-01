@@ -58,6 +58,7 @@ class StreamingSupervisor:
         self.stale_after_seconds = max(1.0, stale_after_seconds)
         self.reconnect_count = 0
         self.last_message_at: datetime | None = None
+        self.connected_at: datetime | None = None
         self.last_error: str | None = None
         self.connected = False
         self._stop = asyncio.Event()
@@ -88,12 +89,34 @@ class StreamingSupervisor:
             logger.debug("stream provider close failed", exc_info=True)
 
     def stale(self, now: datetime | None = None) -> bool:
-        if not self.connected or self.last_message_at is None:
+        if not self.connected:
             return True
         current = now or datetime.now(UTC)
         if current.tzinfo is None:
             current = current.replace(tzinfo=UTC)
-        return (current.astimezone(UTC) - self.last_message_at).total_seconds() > self.stale_after_seconds
+        reference = self.last_message_at or self.connected_at
+        if reference is None:
+            return True
+        return (current.astimezone(UTC) - reference).total_seconds() > self.stale_after_seconds
+
+    async def reconnect_if_stale(self, *, now: datetime | None = None) -> bool:
+        """Break a live-but-silent transport so ``run`` can reconnect it.
+
+        The caller decides when messages should be expected. Marking the
+        supervisor disconnected before closing also prevents a periodic
+        watchdog from issuing duplicate reconnect requests while ``stream``
+        unwinds.
+        """
+
+        if not self.connected or not self.stale(now):
+            return False
+        self.connected = False
+        self.last_error = "stream stale; reconnect requested"
+        try:
+            await self.provider.close()
+        except Exception:
+            logger.debug("stale stream provider close failed", exc_info=True)
+        return True
 
     async def _dispatch(self, message: Message) -> None:
         self.last_message_at = datetime.now(UTC)
@@ -108,6 +131,7 @@ class StreamingSupervisor:
 
         await self.provider.connect()
         self.connected = True
+        self.connected_at = datetime.now(UTC)
         self.last_error = None
         self.backoff.reset()
         if self._symbols:
@@ -119,6 +143,7 @@ class StreamingSupervisor:
                     break
         finally:
             self.connected = False
+            self.connected_at = None
             # A failed websocket object must not be reused on the next retry.
             # Provider close is isolated so one transport's cleanup failure
             # cannot terminate the supervisor or the FastAPI process.

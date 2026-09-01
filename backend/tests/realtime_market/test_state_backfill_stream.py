@@ -136,3 +136,28 @@ def test_stream_supervisor_stops_provider_without_leaking_disconnect():
     assert provider.subscribed == [("MSFT",)]
     asyncio.run(supervisor.stop())
     assert provider.closed is True
+
+
+def test_stream_supervisor_reconnects_connected_but_stale_transport():
+    provider = FakeStream()
+    supervisor = StreamingSupervisor(provider, stale_after_seconds=30)
+    now = datetime.now(UTC)
+    supervisor.connected = True
+    supervisor.connected_at = now - timedelta(seconds=31)
+
+    assert asyncio.run(supervisor.reconnect_if_stale(now=now)) is True
+    assert supervisor.connected is False
+    assert supervisor.last_error == "stream stale; reconnect requested"
+    assert provider.closed is True
+
+
+def test_stream_supervisor_allows_new_connection_message_grace_period():
+    provider = FakeStream()
+    supervisor = StreamingSupervisor(provider, stale_after_seconds=30)
+    now = datetime.now(UTC)
+    supervisor.connected = True
+    supervisor.connected_at = now - timedelta(seconds=29)
+
+    assert asyncio.run(supervisor.reconnect_if_stale(now=now)) is False
+    assert supervisor.connected is True
+    assert provider.closed is False

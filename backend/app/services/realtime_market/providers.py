@@ -416,7 +416,12 @@ class AlpacaRealtimeProvider(_ProviderBase):
                         f"alpaca websocket authentication rejected ({status_code or 'unknown'})",
                         provider=self.name,
                         status_code=status_code,
-                        transient=status_code in {407, 500},
+                        # Alpaca documents 406 as "connection limit exceeded".
+                        # A recently dropped socket can temporarily retain the
+                        # account's single stream slot, so retry with bounded
+                        # backoff instead of disabling the provider until the
+                        # whole process restarts.
+                        transient=status_code in {406, 407, 500},
                     )
                     self._mark_failure(error)
                     raise error

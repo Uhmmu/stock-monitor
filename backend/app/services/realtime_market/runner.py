@@ -27,7 +27,7 @@ from .backfill import BackfillCoordinator
 from .contracts import IntradayBar, ProviderHealth, RealtimeQuote, RealtimeQuoteEnvelope
 from .providers import AlpacaRealtimeProvider, TiingoRealtimeProvider
 from .routing import calculate_divergence, configured_provider_order
-from .session import is_quote_stale
+from .session import is_market_open, is_quote_stale
 from .state import RealtimeStateStore
 from .stream import StreamingSupervisor
 
@@ -174,6 +174,13 @@ class MarketStreamRuntime:
                 payload = health.to_dict()
                 payload.update(self.metrics)
                 self.state.set_health(payload)
+                # Ping/pong can keep a dead provider socket looking connected
+                # after business messages stop. During regular XNYS trading,
+                # break stale transports and let the supervisor's normal
+                # bounded reconnect loop recover them. Avoid connection churn
+                # overnight, on weekends, and on exchange holidays.
+                if is_market_open() and await supervisor.reconnect_if_stale():
+                    logger.warning("market_stream_stale_reconnect provider=%s", name)
                 previous = self._seen_reconnects[name]
                 if supervisor.reconnect_count > previous and supervisor.connected:
                     self._seen_reconnects[name] = supervisor.reconnect_count
