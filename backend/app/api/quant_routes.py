@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.config import get_settings
 from app.database import get_db
-from app.models import BacktestEquityPoint, BacktestRun, BacktestTrade, User
+from app.models import BacktestEquityPoint, BacktestRun, BacktestTrade, CryptoInstrument, User
 from app.services.quant.backtest import service
 
 
@@ -171,8 +171,32 @@ class PaperAccountCreate(BaseModel):
     initial_cash: Decimal = Field(default=Decimal("10000"), ge=100, le=10_000_000)
     leverage_cap: Decimal = Field(default=Decimal("1"), ge=1, le=3)
     taker_fee_bps: Decimal = Field(default=Decimal("5"), ge=0, le=100)
+    maker_fee_bps: Decimal = Field(default=Decimal("2"), ge=0, le=100)
     spread_bps: Decimal = Field(default=Decimal("2"), ge=0, le=100)
     slippage_bps: Decimal = Field(default=Decimal("2"), ge=0, le=200)
+    maintenance_margin_ratio: Decimal = Field(default=Decimal("0.005"), gt=0, le=Decimal("0.1"))
+    liquidation_fee_bps: Decimal = Field(default=Decimal("50"), ge=0, le=500)
+
+
+class PaperOrderCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instrument_id: int
+    side: str
+    order_type: str
+    quantity: Decimal = Field(gt=0)
+    limit_price: Decimal | None = Field(default=None, gt=0)
+    leverage: Decimal = Field(default=Decimal("1"), ge=1, le=3)
+    position_side: str = "BOTH"
+    client_order_id: str | None = Field(default=None, min_length=8, max_length=64)
+
+
+class PaperResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: str
+    initial_cash: Decimal | None = Field(default=None, ge=100, le=10_000_000)
+    strategy_metadata: dict = Field(default_factory=dict)
 
 
 def _require_signal_enabled() -> None:
@@ -301,7 +325,10 @@ def create_paper_account(payload: PaperAccountCreate, user: User = Depends(get_c
         account, created = paper_service.ensure_account(
             db, user_id=user.id, initial_cash=payload.initial_cash,
             leverage_cap=payload.leverage_cap, taker_fee_bps=payload.taker_fee_bps,
+            maker_fee_bps=payload.maker_fee_bps,
             spread_bps=payload.spread_bps, slippage_bps=payload.slippage_bps,
+            maintenance_margin_ratio=payload.maintenance_margin_ratio,
+            liquidation_fee_bps=payload.liquidation_fee_bps,
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
@@ -354,6 +381,111 @@ def reconcile_paper(user: User = Depends(get_current_user), db: Session = Depend
     record = paper_service.reconcile_account(db, account)
     return {"reconciliation": paper_service.reconciliation_payload(record),
             "account": paper_service.account_payload(db, account)}
+
+
+@router.post("/paper/reconcile/repair")
+def repair_paper(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    account = _owned_paper_account(db, user.id)
+    record = paper_service.reconcile_account(db, account, repair=True)
+    return {"reconciliation": paper_service.reconciliation_payload(record),
+            "account": paper_service.account_payload(db, account)}
+
+
+@router.post("/paper/orders", status_code=status.HTTP_201_CREATED)
+def create_paper_order(
+    payload: PaperOrderCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    try:
+        order = paper_service.submit_manual_order(
+            db, _owned_paper_account(db, user.id), instrument_id=payload.instrument_id,
+            side=payload.side, order_type=payload.order_type, quantity=payload.quantity,
+            limit_price=payload.limit_price, leverage=payload.leverage,
+            position_side=payload.position_side, client_order_id=payload.client_order_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return paper_service.order_payload(db, order)
+
+
+@router.post("/paper/orders/{order_id}/cancel")
+def cancel_paper_order(order_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    try:
+        order = paper_service.cancel_order(db, _owned_paper_account(db, user.id), order_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return paper_service.order_payload(db, order)
+
+
+@router.post("/paper/reset", status_code=status.HTTP_201_CREATED)
+def reset_paper_account(
+    payload: PaperResetRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    if payload.confirm != "RESET PAPER":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "必须明确输入 RESET PAPER")
+    run = paper_service.reset_account(
+        db, _owned_paper_account(db, user.id), initial_cash=payload.initial_cash,
+        strategy_metadata=payload.strategy_metadata,
+    )
+    return {"run": paper_service.run_payload(db, run),
+            "account": paper_service.account_payload(db, _owned_paper_account(db, user.id))}
+
+
+@router.get("/paper/runs")
+def paper_runs(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    return paper_service.list_runs(db, _owned_paper_account(db, user.id))
+
+
+@router.get("/paper/fills")
+def paper_fills(
+    limit: int = Query(default=100, ge=1, le=500),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    return paper_service.list_fills(db, _owned_paper_account(db, user.id), limit=limit)
+
+
+@router.get("/paper/ledger")
+def paper_ledger(
+    limit: int = Query(default=100, ge=1, le=500),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    return paper_service.list_ledger(db, _owned_paper_account(db, user.id), limit=limit)
+
+
+@router.get("/paper/config")
+def paper_config(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.quant import paper as paper_service
+    _require_paper_enabled()
+    account = _owned_paper_account(db, user.id)
+    state = paper_service.account_payload(db, account)
+    return {
+        "execution_mode": "paper", "market_data": "binance_production_public",
+        "credentials_required": False, "authenticated_trading_available": False,
+        "costs": state["costs"], "leverage_cap": state["leverage_cap"],
+        "supported": {"markets": ["spot", "futures"], "order_types": ["market", "limit"]},
+        "instruments": [
+            {"id": row.id, "provider_symbol": row.provider_symbol,
+             "market_type": "spot" if row.market == "spot" else "futures", "kind": row.kind}
+            for row in db.scalars(select(CryptoInstrument).where(
+                CryptoInstrument.venue == "binance",
+                CryptoInstrument.market.in_(["spot", "usdm_futures"]),
+                CryptoInstrument.status == "trading",
+            ).order_by(CryptoInstrument.market, CryptoInstrument.provider_symbol))
+        ],
+    }
 
 
 @router.get("/paper/orders")

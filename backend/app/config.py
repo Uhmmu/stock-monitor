@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     technical_chart_dir: str = "/data/technical-charts"
     sec_user_agent: str = "stockMonitor/1.0 self-hosted@example.com"
     edgar_local_data_dir: str = "/data/edgar"
+    # Empty uses Playwright's bundled browser (native macOS development).
+    # Production keeps the container-provided Chromium path by default.
+    article_fetch_browser_executable: str = "/usr/bin/chromium"
     sec_insider_heavy_sell_value: float = 1_000_000.0
     # 13F ticker→CUSIP 手动兜底覆盖，形如 "IREN:45840M108,ABC:012345678"
     sec_13f_cusip_overrides: str = ""
@@ -226,6 +229,11 @@ class Settings(BaseSettings):
     quant_signal_max_validity_minutes: int = 1440
     quant_paper_initial_cash: float = 10_000.0
     quant_paper_leverage_cap: float = 1.0
+    quant_paper_maker_fee_bps: float = 2.0
+    quant_paper_taker_fee_bps: float = 5.0
+    quant_paper_slippage_bps: float = 2.0
+    quant_paper_maintenance_margin_ratio: float = 0.005
+    quant_paper_liquidation_fee_bps: float = 50.0
 
     # Goal 6 TEST control plane. Binance credentials never belong here; the
     # standalone local executor is the only process allowed to hold them.

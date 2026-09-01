@@ -34,14 +34,15 @@ from app.services.quant import signals as signal_service
 from app.services.quant.backtest.contracts import BacktestConfig, InstrumentSpec
 from app.services.quant.backtest.engine import _fill_price
 from app.services.quant.features import ensure_registry
+from app.services.quant.paper_fill import PaperQuote
 
 TABLES = [
     "users", "crypto_assets", "crypto_instruments", "market_candles",
     "crypto_derivatives_metrics", "crypto_funding_rates",
     "quant_strategy_definitions", "quant_feature_sets", "quant_feature_values",
     "quant_strategy_deployments", "quant_signals", "quant_signal_runs",
-    "paper_accounts", "paper_orders", "paper_fills", "paper_funding_entries",
-    "paper_positions", "paper_reconciliations",
+    "paper_accounts", "paper_runs", "paper_balances", "paper_orders", "paper_fills", "paper_funding_entries",
+    "paper_positions", "paper_reconciliations", "paper_ledger_events",
 ]
 
 
@@ -122,6 +123,24 @@ def _make_signal(
 def _account(db: Session, user, **kwargs) -> PaperAccount:
     account, _created = paper_service.ensure_account(db, user_id=user.id, **kwargs)
     return account
+
+
+def _spot_instrument(db: Session, futures: CryptoInstrument) -> CryptoInstrument:
+    spot = CryptoInstrument(
+        venue="binance", market="spot", provider_symbol=futures.provider_symbol, kind="spot",
+        base_asset_id=futures.base_asset_id, quote_asset_id=futures.quote_asset_id,
+        tick_size=futures.tick_size, step_size=futures.step_size, min_notional=futures.min_notional,
+        status="trading", calendar="utc",
+    )
+    db.add(spot); db.commit(); db.refresh(spot)
+    return spot
+
+
+def _quote(bid="99", ask="100", mark=None, *, observed_at: datetime | None = None):
+    return PaperQuote(
+        Decimal(bid), Decimal(ask), observed_at or datetime.now(UTC),
+        Decimal(mark) if mark else None,
+    )
 
 
 def test_fill_price_parity_with_backtest_engine():
@@ -257,25 +276,50 @@ def test_expired_signal_never_leases_and_pauses_block_processing(db):
     summary = paper_service.process_pending_signals(db, account, now=now + timedelta(minutes=31))
     assert summary["account"] == "paused" and not summary.get("outcomes")
     paper_service.set_account_status(db, account, status="active")
-    summary = paper_service.process_pending_signals(db, account, now=now + timedelta(minutes=32))
+    processing_time = now + timedelta(minutes=32)
+    summary = paper_service.process_pending_signals(
+        db, account, now=processing_time,
+        quotes={instrument.id: _quote("164", "165", "164.5", observed_at=processing_time)},
+    )
     assert summary["outcomes"].get("filled") == 1
     assert summary["account"] == "processed"
     db.refresh(fresh)
     assert fresh.status == "consumed"
 
 
+def test_pending_signal_waits_for_fresh_public_quote(db, monkeypatch):
+    user, _other, (instrument,) = _seed(db)
+    deployment = _deployment(db, user, instrument)
+    account = _account(db, user)
+    signal = _make_signal(db, deployment, target="1")
+    monkeypatch.setattr(
+        paper_service, "public_quote",
+        lambda _instrument: (_ for _ in ()).throw(TimeoutError("public quote timeout")),
+    )
+
+    summary = paper_service.process_pending_signals(db, account)
+
+    assert summary["outcomes"] == {"market_data_unavailable": 1}
+    assert summary["market_data_warnings"] == [f"signal {signal.id}: public quote timeout"]
+    db.refresh(signal)
+    assert signal.status == "generated"
+    assert db.scalar(select(PaperOrder)) is None
+
+
 def test_partial_fills_advance_the_state_machine(db):
     user, _other, (instrument,) = _seed(db)
     account = _account(db, user)
     order = PaperOrder(
-        user_id=user.id, account_id=account.id, signal_id=None,
+        user_id=user.id, account_id=account.id, run_id=account.current_run_id, signal_id=None,
         client_order_id=f"paper-{account.id}-manual", instrument_id=instrument.id,
         side="buy", intended_quantity=Decimal("10"), reference_price=Decimal("165"),
         status="pending",
     )
     db.add(order); db.commit(); db.refresh(order)
-    first = paper_service.apply_fill(db, account, order, Decimal("4"))
+    first = paper_service.apply_fill(db, account, order, Decimal("4"), event_key="partial-fill-1")
     assert order.status == "partially_filled" and Decimal(str(order.filled_quantity)) == 4
+    replay = paper_service.apply_fill(db, account, order, Decimal("4"), event_key="partial-fill-1")
+    assert replay.id == first.id and Decimal(str(order.filled_quantity)) == 4
     expected_avg_1 = Decimal(str(order.avg_fill_price))
     second = paper_service.apply_fill(db, account, order, Decimal("6"))
     assert order.status == "filled" and Decimal(str(order.filled_quantity)) == 10
@@ -293,7 +337,8 @@ def test_funding_accrual_is_persisted_idempotent_and_in_ledger(db):
     user, _other, (instrument,) = _seed(db)
     deployment = _deployment(db, user, instrument)
     account = _account(db, user)
-    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    raw_now = datetime.now(UTC)
+    now = datetime.fromtimestamp((int(raw_now.timestamp()) // (8 * 3600)) * (8 * 3600), UTC)
     boundary = now - timedelta(hours=8)
     opened = _make_signal(db, deployment, target="1", decision=boundary - timedelta(minutes=30))
     paper_service.process_signal(db, account, opened, now=boundary - timedelta(minutes=20))
@@ -338,13 +383,16 @@ def test_reconciliation_repairs_tampered_cache(db):
     opened = _make_signal(db, deployment, target="1")
     paper_service.process_signal(db, account, opened, now=now)
     clean = paper_service.reconcile_account(db, account)
-    assert clean.status == "ok" and clean.mismatches == []
+    assert clean.status == "ok" and clean.mismatches == [], clean.mismatches
     position = db.scalar(select(PaperPosition))
     tampered_quantity = Decimal(str(position.quantity)) + Decimal("7")
     position.quantity = tampered_quantity
     account.cash = Decimal(str(account.cash)) + Decimal("100")
     db.commit()
-    repaired = paper_service.reconcile_account(db, account)
+    detected = paper_service.reconcile_account(db, account)
+    assert detected.status == "mismatch" and len(detected.mismatches) >= 1
+    # Background reconciliation is detect-only; repair requires explicit authority.
+    repaired = paper_service.reconcile_account(db, account, repair=True)
     assert repaired.status == "repaired" and len(repaired.mismatches) >= 1
     position = db.scalar(select(PaperPosition).where(PaperPosition.account_id == account.id))
     db.refresh(account)
@@ -365,6 +413,104 @@ def test_account_isolation_and_validation(db):
         paper_service.ensure_account(db, user_id=other.id, initial_cash=Decimal("1"))
     with pytest.raises(ValueError):
         paper_service.ensure_account(db, user_id=other.id, leverage_cap=Decimal("10"))
+
+
+def test_spot_market_buy_sell_balance_fees_and_duplicate_submit(db):
+    user, _other, (future,) = _seed(db)
+    spot = _spot_instrument(db, future)
+    account = _account(db, user, initial_cash=Decimal("1000"))
+    bought = paper_service.submit_manual_order(
+        db, account, instrument_id=spot.id, side="buy", order_type="market",
+        quantity="2", quote=_quote(), client_order_id="paper-spot-buy-0001",
+    )
+    duplicate = paper_service.submit_manual_order(
+        db, account, instrument_id=spot.id, side="buy", order_type="market",
+        quantity="2", quote=_quote(), client_order_id="paper-spot-buy-0001",
+    )
+    assert bought.id == duplicate.id and bought.status == "filled"
+    base = paper_service._balance(db, account, "BTC")
+    assert base.available == Decimal("2")
+    assert account.cash < Decimal("800")
+    sold = paper_service.submit_manual_order(
+        db, account, instrument_id=spot.id, side="sell", order_type="market",
+        quantity="1", quote=_quote(), client_order_id="paper-spot-sell-0001",
+    )
+    assert sold.status == "filled" and base.available == Decimal("1")
+    with pytest.raises(ValueError, match="insufficient Spot base"):
+        paper_service.submit_manual_order(
+            db, account, instrument_id=spot.id, side="sell", order_type="market",
+            quantity="2", quote=_quote(), client_order_id="paper-spot-sell-0002",
+        )
+    assert len(paper_service.list_ledger(db, account)["items"]) >= 5
+
+
+def test_limit_cross_cancel_and_restart_recovery(db):
+    user, _other, (future,) = _seed(db)
+    spot = _spot_instrument(db, future)
+    account = _account(db, user, initial_cash=Decimal("1000"))
+    pending = paper_service.submit_manual_order(
+        db, account, instrument_id=spot.id, side="buy", order_type="limit",
+        quantity="1", limit_price="95", quote=_quote(), client_order_id="paper-limit-buy-0001",
+    )
+    assert pending.status == "pending" and account.locked_cash > 0
+    db.expire_all()  # process-style restart: recover the durable open row, not process memory
+    account = db.get(PaperAccount, account.id)
+    result = paper_service.process_open_orders(db, account, quotes={spot.id: _quote("94", "95")})
+    db.refresh(pending)
+    assert result["filled"] == 1 and pending.status == "filled" and account.locked_cash == 0
+
+    sell_limit = paper_service.submit_manual_order(
+        db, account, instrument_id=spot.id, side="sell", order_type="limit",
+        quantity="1", limit_price="105", quote=_quote(), client_order_id="paper-limit-sell-0001",
+    )
+    assert sell_limit.status == "pending" and paper_service._balance(db, account, "BTC").locked == 1
+    sold = paper_service.process_open_orders(db, account, quotes={spot.id: _quote("105", "106")})
+    assert sold["filled"] == 1 and sell_limit.status == "filled"
+
+    pending2 = paper_service.submit_manual_order(
+        db, account, instrument_id=spot.id, side="buy", order_type="limit",
+        quantity="1", limit_price="90", quote=_quote(), client_order_id="paper-limit-buy-0002",
+    )
+    cancelled = paper_service.cancel_order(db, account, pending2.id)
+    assert cancelled.status == "cancelled" and account.locked_cash == 0
+
+
+def test_futures_long_short_margin_liquidation_and_run_reset(db):
+    user, _other, (future,) = _seed(db)
+    account = _account(db, user, initial_cash=Decimal("1000"), leverage_cap=Decimal("3"))
+    long = paper_service.submit_manual_order(
+        db, account, instrument_id=future.id, side="buy", order_type="market",
+        quantity="20", leverage="3", position_side="LONG", quote=_quote("99", "100", "100"),
+        client_order_id="paper-future-long-0001",
+    )
+    assert long.status == "filled"
+    position = db.scalar(select(PaperPosition).where(PaperPosition.run_id == account.current_run_id))
+    assert position.quantity > 0 and position.margin_used > 0
+    liquidation = paper_service.check_liquidation(
+        db, account, quotes={future.id: _quote("49", "50", "50")},
+    )
+    db.refresh(position)
+    assert liquidation["liquidated"] == 1 and position.quantity == 0
+    assert any(item["event_type"] == "LIQUIDATION" for item in paper_service.list_ledger(db, account)["items"])
+
+    old_run = account.current_run_id
+    new_run = paper_service.reset_account(db, account, initial_cash="2000", strategy_metadata={"strategy": "v2"})
+    assert new_run.id != old_run and account.cash == Decimal("2000")
+    runs = paper_service.list_runs(db, account)["items"]
+    assert len(runs) == 2 and runs[1]["status"] == "completed"
+    short = paper_service.submit_manual_order(
+        db, account, instrument_id=future.id, side="sell", order_type="market",
+        quantity="1", leverage="2", position_side="SHORT", quote=_quote("99", "100", "100"),
+        client_order_id="paper-future-short-0001",
+    )
+    closed = paper_service.submit_manual_order(
+        db, account, instrument_id=future.id, side="buy", order_type="market",
+        quantity="1", leverage="2", position_side="SHORT", quote=_quote("89", "90", "90"),
+        client_order_id="paper-future-short-close-0001",
+    )
+    assert short.status == closed.status == "filled"
+    short_position = db.scalar(select(PaperPosition).where(PaperPosition.run_id == new_run.id))
+    assert short_position.quantity == 0 and short_position.realized_pnl > 0
 
 
 def test_task_gates_respect_disabled_flags(db, monkeypatch):
@@ -398,7 +544,15 @@ def test_paper_api_contract(client):
     assert created.status_code == 201
     payload = created.json()["account"]
     assert payload["environment"] == "paper" and payload["base_currency"] == "USDT"
+    assert payload["execution_mode"] == "paper" and payload["current_run"]["status"] == "active"
     assert payload["positions"] == [] and payload["nav"] == "10000"
+    config = test_client.get("/api/crypto/quant/paper/config")
+    assert config.status_code == 200
+    assert config.json()["credentials_required"] is False
+    assert config.json()["authenticated_trading_available"] is False
+    assert test_client.get("/api/crypto/quant/paper/runs").json()["total"] == 1
+    assert test_client.get("/api/crypto/quant/paper/fills").json()["total"] == 0
+    assert test_client.get("/api/crypto/quant/paper/ledger").json()["total"] == 1
     duplicate = test_client.post("/api/crypto/quant/paper/account", json={"initial_cash": "20000"})
     assert duplicate.status_code == 409
     paused = test_client.post("/api/crypto/quant/paper/pause", json={"reason": "hold"})
@@ -410,5 +564,9 @@ def test_paper_api_contract(client):
     assert reconciled.status_code == 200
     assert reconciled.json()["reconciliation"]["status"] == "ok"
     assert test_client.get("/api/crypto/quant/paper/reconciliations").json()["total"] == 1
+    denied_reset = test_client.post("/api/crypto/quant/paper/reset", json={"confirm": "no"})
+    assert denied_reset.status_code == 422
+    reset = test_client.post("/api/crypto/quant/paper/reset", json={"confirm": "RESET PAPER"})
+    assert reset.status_code == 201 and reset.json()["account"]["current_run"]["id"] != payload["current_run"]["id"]
     bad = test_client.post("/api/crypto/quant/paper/account", json={"initial_cash": "1"})
     assert bad.status_code == 422

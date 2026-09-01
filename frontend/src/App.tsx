@@ -581,7 +581,7 @@ export default function App({ appleDesign = false, betaDesign = false }: { apple
       {tab==='calendar'&&<InvestmentCalendar/>}
       {tab==='discovery'&&<OpportunityDiscovery/>}
       {tab==='options'&&<OptionsPage enabled={!demoMode}/>}
-      {tab==='crypto'&&<CryptoResearchPage enabled={!demoMode} isAdmin={authUser.role==='admin'}/>}
+      {tab==='crypto'&&<CryptoResearchPage enabled={!demoMode}/>}
       {tab==='mood'&&<AIMoodConsole enabled={!demoMode} onAskAI={()=>{setTab('ai');window.history.pushState({},'',appHref('/ai/new?context=mood'));window.dispatchEvent(new PopStateEvent('popstate'))}}/>}
       {tab==='mood-lab'&&<MoodValidationLab enabled={!demoMode} isAdmin={authUser.role==='admin'}/>}
       {tab==='alerts'&&<div className="investigations">{groupInvestigations(investigations.data).map(group=><article key={group.key}><div><span className={`status ${group.status}`}>{group.status}</span><h2>{group.ticker} 异动调查{group.items.length>1&&<em className="group-count"> ×{group.items.length}</em>}</h2><p>{formatDate(group.started_at)} — {formatDate(group.ends_at)}</p></div><strong>{group.news_count}<small> 条新闻线索</small></strong>{group.last_error&&<p className="error">{group.last_error}</p>}</article>)}{!investigations.data?.length&&<div className="empty">尚未触发价格异动调查。</div>}</div>}

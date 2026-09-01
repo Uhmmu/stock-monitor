@@ -13,7 +13,6 @@ import {
 import { api } from './api'
 import QuantBacktests from './QuantBacktests'
 import QuantPaper from './QuantPaper'
-import QuantExecutionTest from './QuantExecutionTest'
 import './crypto-research.css'
 
 // ---------------------------------------------------------------------------
@@ -504,12 +503,12 @@ function DerivativeSparkline({ values, label }: { values: (string | null)[]; lab
 // page
 // ---------------------------------------------------------------------------
 
-export function CryptoResearchPage({ enabled = true, isAdmin = false }: { enabled?: boolean; isAdmin?: boolean }) {
+export function CryptoResearchPage({ enabled = true }: { enabled?: boolean }) {
   const [instrumentId, setInstrumentId] = useState<number | null>(() => parseInstrumentFromSearch(window.location.search))
   const [interval, setIntervalState] = useState<CryptoInterval>('1d')
   const [priceType, setPriceType] = useState<CryptoPriceType>('trade')
   const [query, setQuery] = useState('')
-  const [view, setView] = useState<'market' | 'quant' | 'paper' | 'test'>('market')
+  const [view, setView] = useState<'market' | 'quant' | 'paper'>('market')
 
   useEffect(() => {
     const onPop = () => setInstrumentId(parseInstrumentFromSearch(window.location.search))
@@ -633,12 +632,11 @@ export function CryptoResearchPage({ enabled = true, isAdmin = false }: { enable
       <button role="tab" aria-selected={view === 'market'} className={view === 'market' ? 'active' : ''} onClick={() => setView('market')}>市场研究 <small>Market Research</small></button>
       <button role="tab" aria-selected={view === 'quant'} className={view === 'quant' ? 'active' : ''} onClick={() => setView('quant')}>量化回测 <small>Quant Backtest</small></button>
       <button role="tab" aria-selected={view === 'paper'} className={view === 'paper' ? 'active' : ''} onClick={() => setView('paper')}>模拟交易 <small>Paper Trading</small></button>
-      {isAdmin && <button role="tab" aria-selected={view === 'test'} className={view === 'test' ? 'active' : ''} onClick={() => setView('test')}>测试执行 <small>TEST Execution</small></button>}
     </div>
 
     {!enabled && <div className="crypto-disabled">演示预览未加载加密数据，连接账户后读取已保存的市场数据。</div>}
 
-    {view === 'quant' ? <QuantBacktests enabled={enabled} /> : view === 'paper' ? <QuantPaper enabled={enabled} /> : view === 'test' ? <QuantExecutionTest enabled={enabled && isAdmin} /> : <>
+    {view === 'quant' ? <QuantBacktests enabled={enabled} /> : view === 'paper' ? <QuantPaper enabled={enabled} /> : <>
     <section className="crypto-search" aria-label="加密标的搜索">
       <label>
         <span>搜索标的</span>

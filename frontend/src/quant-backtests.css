@@ -89,6 +89,11 @@
 .quant-paper-page .paper-fills-detail p { margin:5px 0 0; opacity:.75; font-variant-numeric:tabular-nums; }
 .quant-paper-page .paper-position-table .quant-trade-head,
 .quant-paper-page .paper-position-table .quant-trade-row { grid-template-columns:minmax(90px,1fr) minmax(80px,1fr) minmax(80px,1fr) minmax(80px,1fr) minmax(90px,1fr) minmax(90px,1fr); }
+.paper-balance-strip,.paper-ledger-list { display:grid; gap:8px; margin-top:16px; }
+.paper-balance-strip span,.paper-ledger-list p { margin:0; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:rgba(88,86,214,.05); }
+.paper-inline-cancel { margin-left:8px; }
+.paper-reset-control { margin-top:18px; padding:12px; border:1px solid rgba(190,65,48,.34); border-radius:14px; }
+.paper-reset-control label { display:grid; gap:6px; max-width:320px; margin:12px 0; }
 
 /* Goal 6 test execution is deliberately visually distinct from PAPER/LIVE. */
 .test-environment-badge { display:inline-flex;align-items:center;width:max-content;padding:3px 7px;border:1px solid rgba(88,86,214,.38);border-radius:999px;background:rgba(88,86,214,.12);color:#4f46b8;font-size:10px;font-weight:800;letter-spacing:.08em;vertical-align:middle; }
@@ -114,3 +119,4 @@
 @media (prefers-contrast:more) { .test-environment-badge,.execution-token-once { border-width:2px; } }
 @media (prefers-contrast:more) { .paper-environment-badge { background:#fff; border-color:#b45309; } }
 @media (prefers-reduced-transparency:reduce) { .paper-environment-badge { background:var(--solid); } }
+@media (prefers-reduced-transparency:reduce) { .paper-balance-strip span,.paper-ledger-list p { background:var(--solid); } }

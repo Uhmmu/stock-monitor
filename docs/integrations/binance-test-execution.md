@@ -1,6 +1,17 @@
-# Binance TEST execution runbook
+# Binance Demo/Testnet execution runbook
 
-Goal 6 is TEST-only. The backend owns policies, expiring leases and audit rows;
+> **Archived 2026-09-01.** The product no longer pursues Binance Futures
+> Demo/Testnet or Live execution. Do not provision a Demo key, start the local
+> execution agent, or resume the canary below. The implementation and this
+> runbook remain only as historical audit/rollback evidence. Internal PAPER is
+> the active execution simulation and uses credential-free public market data.
+
+This is not the application's PAPER broker. Internal PAPER consumes real
+Binance production public market data and simulates all account state locally
+without keys. This agent only tests authenticated Binance API integration with
+Demo credentials. Binance Live remains unavailable and fail-closed.
+
+The archived Goal 6 implementation is TEST-only. The backend owns policies, expiring leases and audit rows;
 the standalone `execution-agent/` process owns the Binance Futures Demo HMAC
 secret and local SQLite journal. There is no live origin, environment selector,
 wallet, transfer or withdrawal method in this boundary.

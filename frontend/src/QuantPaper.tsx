@@ -18,6 +18,10 @@ export type PaperPositionView = {
   unrealized_pnl: string | null
   realized_pnl: string
   total_fees: string
+  market_type: string
+  leverage: string
+  margin_used: string
+  liquidation_price: string | null
 }
 
 export type PaperAccountView = {
@@ -29,12 +33,19 @@ export type PaperAccountView = {
   pause_reason: string | null
   initial_cash: string
   cash: string
+  locked_cash: string
+  available_balance: string
+  used_margin: string
+  available_margin: string
   nav: string
   gross_exposure: string
   exposure_ratio: string | null
   leverage_cap: string
   fill_policy: string
-  costs: { taker_fee_bps: string; spread_bps: string; slippage_bps: string }
+  costs: { maker_fee_bps: string; taker_fee_bps: string; spread_bps: string; slippage_bps: string }
+  balances: { asset: string; available: string; locked: string }[]
+  performance: Record<string, unknown>
+  current_run: Record<string, unknown> | null
   positions: PaperPositionView[]
   warnings: string[]
   last_funding_boundary: string | null
@@ -84,6 +95,10 @@ export type PaperOrderView = {
   instrument_symbol: string | null
   side: string
   status: string
+  market_type: string
+  order_type: string
+  limit_price: string | null
+  leverage: string
   intended_quantity: string
   filled_quantity: string
   reference_price: string
@@ -157,6 +172,10 @@ export function normalizePaperAccount(value: unknown): PaperAccountView | null {
     pause_reason: text(account.pause_reason) || null,
     initial_cash: text(account.initial_cash) || '0',
     cash: text(account.cash) || '0',
+    locked_cash: text(account.locked_cash) || '0',
+    available_balance: text(account.available_balance ?? account.cash) || '0',
+    used_margin: text(account.used_margin) || '0',
+    available_margin: text(account.available_margin) || '0',
     nav: text(account.nav) || '0',
     gross_exposure: text(account.gross_exposure) || '0',
     exposure_ratio: account.exposure_ratio == null ? null : text(account.exposure_ratio),
@@ -164,6 +183,7 @@ export function normalizePaperAccount(value: unknown): PaperAccountView | null {
     fill_policy: text(account.fill_policy) || 'paper-fill-v1',
     costs: {
       taker_fee_bps: text(costs.taker_fee_bps) || '0',
+      maker_fee_bps: text(costs.maker_fee_bps) || '0',
       spread_bps: text(costs.spread_bps) || '0',
       slippage_bps: text(costs.slippage_bps) || '0',
     },
@@ -180,8 +200,18 @@ export function normalizePaperAccount(value: unknown): PaperAccountView | null {
         unrealized_pnl: item.unrealized_pnl == null ? null : text(item.unrealized_pnl),
         realized_pnl: text(item.realized_pnl) || '0',
         total_fees: text(item.total_fees) || '0',
+        market_type: text(item.market_type) || 'futures',
+        leverage: text(item.leverage) || '1',
+        margin_used: text(item.margin_used) || '0',
+        liquidation_price: item.liquidation_price == null ? null : text(item.liquidation_price),
       }]
     }),
+    balances: asArray(account.balances).flatMap(row => {
+      const item = asRecord(row)
+      return item?.asset ? [{ asset: text(item.asset), available: text(item.available) || '0', locked: text(item.locked) || '0' }] : []
+    }),
+    performance: asRecord(account.performance) ?? {},
+    current_run: asRecord(account.current_run) ?? null,
     warnings: asArray(account.warnings).map(item => text(item)).filter(Boolean),
     last_funding_boundary: text(account.last_funding_boundary) || null,
     last_reconciliation: lastRec && lastRec.id ? {
@@ -267,6 +297,10 @@ export function normalizePaperOrders(value: unknown): PaperOrderView[] {
       instrument_symbol: item.instrument_symbol == null ? null : text(item.instrument_symbol),
       side: text(item.side),
       status: text(item.status),
+      market_type: text(item.market_type) || 'futures',
+      order_type: text(item.order_type) || 'market',
+      limit_price: item.limit_price == null ? null : text(item.limit_price),
+      leverage: text(item.leverage) || '1',
       intended_quantity: text(item.intended_quantity) || '0',
       filled_quantity: text(item.filled_quantity) || '0',
       reference_price: text(item.reference_price) || '0',
@@ -308,6 +342,8 @@ export function QuantPaper({ enabled = true }: { enabled?: boolean }) {
   const [accountErrors, setAccountErrors] = useState<string[]>([])
   const [deploymentForm, setDeploymentForm] = useState({ strategy_key: 'dual-ma-trend-v1', instrument_id: '', interval: '1h', target_exposure: '1' })
   const [deploymentError, setDeploymentError] = useState<string | null>(null)
+  const [orderForm, setOrderForm] = useState({ instrument_id: '', side: 'buy', order_type: 'market', quantity: '', limit_price: '', leverage: '1', position_side: 'BOTH' })
+  const [resetConfirm, setResetConfirm] = useState('')
 
   const paperQuery = useQuery({ queryKey: ['crypto-quant-paper'], queryFn: () => api<unknown>('/crypto/quant/paper'), enabled, staleTime: 10_000 })
   const account = normalizePaperAccount(paperQuery.data)
@@ -326,9 +362,15 @@ export function QuantPaper({ enabled = true }: { enabled?: boolean }) {
   const orders = normalizePaperOrders(ordersQuery.data)
   const reconciliationQuery = useQuery({ queryKey: ['crypto-quant-paper-reconciliations'], queryFn: () => api<unknown>('/crypto/quant/paper/reconciliations?limit=10'), enabled, staleTime: 30_000 })
   const reconciliations = asArray(asRecord(reconciliationQuery.data)?.items).map(row => asRecord(row)).filter((row): row is Record<string, unknown> => row !== null)
+  const configQuery = useQuery({ queryKey: ['crypto-quant-paper-config'], queryFn: () => api<unknown>('/crypto/quant/paper/config'), enabled: enabled && !!account, staleTime: 60_000 })
+  const executionInstruments = asArray(asRecord(configQuery.data)?.instruments).map(row => asRecord(row)).filter((row): row is Record<string, unknown> => row !== null)
+  const ledgerQuery = useQuery({ queryKey: ['crypto-quant-paper-ledger'], queryFn: () => api<unknown>('/crypto/quant/paper/ledger?limit=30'), enabled: enabled && !!account, staleTime: 10_000 })
+  const ledger = asArray(asRecord(ledgerQuery.data)?.items).map(row => asRecord(row)).filter((row): row is Record<string, unknown> => row !== null)
+  const runsQuery = useQuery({ queryKey: ['crypto-quant-paper-runs'], queryFn: () => api<unknown>('/crypto/quant/paper/runs'), enabled: enabled && !!account, staleTime: 10_000 })
+  const runs = asArray(asRecord(runsQuery.data)?.items).map(row => asRecord(row)).filter((row): row is Record<string, unknown> => row !== null)
 
   const invalidateAll = () => {
-    for (const key of ['crypto-quant-paper', 'crypto-quant-deployments', 'crypto-quant-signals', 'crypto-quant-paper-orders', 'crypto-quant-paper-reconciliations']) {
+    for (const key of ['crypto-quant-paper', 'crypto-quant-paper-config', 'crypto-quant-paper-ledger', 'crypto-quant-paper-runs', 'crypto-quant-deployments', 'crypto-quant-signals', 'crypto-quant-paper-orders', 'crypto-quant-paper-reconciliations']) {
       queryClient.invalidateQueries({ queryKey: [key] })
     }
   }
@@ -350,6 +392,13 @@ export function QuantPaper({ enabled = true }: { enabled?: boolean }) {
   const generate = useMutation({ mutationFn: () => post<unknown>('/crypto/quant/signals/generate', {}), onSuccess: invalidateAll })
   const process = useMutation({ mutationFn: () => post<unknown>('/crypto/quant/paper/process', {}), onSuccess: invalidateAll })
   const reconcile = useMutation({ mutationFn: () => post<unknown>('/crypto/quant/paper/reconcile', {}), onSuccess: invalidateAll })
+  const manualOrder = useMutation({ mutationFn: () => post<unknown>('/crypto/quant/paper/orders', {
+    instrument_id: Number(orderForm.instrument_id), side: orderForm.side, order_type: orderForm.order_type,
+    quantity: orderForm.quantity, limit_price: orderForm.order_type === 'limit' ? orderForm.limit_price : null,
+    leverage: orderForm.leverage, position_side: orderForm.position_side,
+  }), onSuccess: invalidateAll })
+  const cancelOrder = useMutation({ mutationFn: (id: number) => post<unknown>(`/crypto/quant/paper/orders/${id}/cancel`, {}), onSuccess: invalidateAll })
+  const reset = useMutation({ mutationFn: () => post<unknown>('/crypto/quant/paper/reset', { confirm: resetConfirm }), onSuccess: () => { setResetConfirm(''); invalidateAll() } })
 
   const submitAccount = (event: React.FormEvent) => {
     event.preventDefault()
@@ -366,14 +415,14 @@ export function QuantPaper({ enabled = true }: { enabled?: boolean }) {
   return <div className="quant-backtests-page quant-paper-page">
     <section className="quant-hero">
       <div>
-        <p className="crypto-eyebrow">PAPER TRADING · GOAL 5 <PaperBadge /></p>
-        <h2>模拟交易</h2>
-        <p>策略目标仓位 → 风险预检 → 虚拟订单/成交 → 台账对账。全部为虚拟资金演练，不连接交易所、不下真实订单，与实盘账户完全隔离。</p>
+        <p className="crypto-eyebrow">INTERNAL PAPER ENGINE <PaperBadge /></p>
+        <h2>内部模拟交易</h2>
+        <p>使用 Binance 正式环境公共行情，本地模拟订单、成交、费用、资金费与强平。无需交易 API Key，绝不会调用 Binance 认证下单端点。</p>
       </div>
       {account && <div className="quant-status-card">
         <span>账户状态 <PaperBadge /></span>
         <b>{account.status === 'active' ? '运行中' : '已暂停'}</b>
-        <small>NAV {formatPaperNumber(account.nav)} {account.base_currency} · 敞口 {formatPaperNumber(account.gross_exposure)}</small>
+        <small>权益 {formatPaperNumber(account.nav)} {account.base_currency} · 可用 {formatPaperNumber(account.available_balance)}</small>
       </div>}
     </section>
 
@@ -389,7 +438,7 @@ export function QuantPaper({ enabled = true }: { enabled?: boolean }) {
         {accountErrors.map(error => <p className="quant-error" role="alert" key={error}>{error}</p>)}
         {createAccount.error && <p className="quant-error" role="alert">创建失败：{wrapError(createAccount.error)}</p>}
         <button className="quant-primary-button" type="submit" disabled={!enabled || createAccount.isPending}>{createAccount.isPending ? '创建中…' : '创建虚拟账户'}</button>
-        <p className="quant-muted">成本假设沿用回测默认：taker 5 bps、价差 2 bps、滑点 2 bps；成交按决策 bar 收盘价加不利偏移模拟。</p>
+        <p className="quant-muted">MARKET 以实时 best bid/ask 加不利滑点成交；LIMIT 只有在盘口穿越限价时成交。所有状态持久化。</p>
       </form>
     </section>}
 
@@ -404,26 +453,49 @@ export function QuantPaper({ enabled = true }: { enabled?: boolean }) {
         </header>
         <dl className="quant-metrics">
           <div><dt>NAV</dt><dd>{formatPaperNumber(account.nav)}</dd></div>
-          <div><dt>现金</dt><dd>{formatPaperNumber(account.cash)}</dd></div>
+          <div><dt>可用余额</dt><dd>{formatPaperNumber(account.available_balance)}</dd></div>
+          <div><dt>锁定余额</dt><dd>{formatPaperNumber(account.locked_cash)}</dd></div>
+          <div><dt>已用保证金</dt><dd>{formatPaperNumber(account.used_margin)}</dd></div>
+          <div><dt>可用保证金</dt><dd>{formatPaperNumber(account.available_margin)}</dd></div>
           <div><dt>总敞口</dt><dd>{formatPaperNumber(account.gross_exposure)}</dd></div>
           <div><dt>敞口/NAV</dt><dd>{account.exposure_ratio ? formatPaperNumber(Number(account.exposure_ratio) * 100, 1) + '%' : '数据不足'}</dd></div>
           <div><dt>杠杆上限</dt><dd>{formatPaperNumber(account.leverage_cap, 1)}×</dd></div>
-          <div><dt>成本假设</dt><dd>taker {formatPaperNumber(account.costs.taker_fee_bps, 1)} · 价差 {formatPaperNumber(account.costs.spread_bps, 1)} · 滑点 {formatPaperNumber(account.costs.slippage_bps, 1)} bps</dd></div>
+          <div><dt>成本假设</dt><dd>maker {formatPaperNumber(account.costs.maker_fee_bps, 1)} · taker {formatPaperNumber(account.costs.taker_fee_bps, 1)} · 滑点 {formatPaperNumber(account.costs.slippage_bps, 1)} bps</dd></div>
         </dl>
         {account.pause_reason && <p className="quant-error" role="status">暂停原因：{account.pause_reason}（{formatPaperTime(account.paused_at)}）</p>}
         {account.warnings.map(warning => <p className="quant-error" role="status" key={warning}>{warning}</p>)}
         <div className="quant-trade-table paper-position-table">
-          <div className="quant-trade-head"><span>标的</span><span>数量</span><span>均价</span><span>标记价</span><span>未实现</span><span>已实现</span></div>
+          <div className="quant-trade-head"><span>标的</span><span>数量</span><span>均价</span><span>标记价</span><span>未实现</span><span>保证金/强平</span></div>
           {account.positions.map(position => <div className="quant-trade-row" key={position.instrument_id}>
             <span>{position.instrument_symbol || `#${position.instrument_id}`}</span>
             <span>{formatPaperNumber(position.quantity, 4)}</span>
             <span>{formatPaperNumber(position.avg_entry_price, 2)}</span>
             <span>{position.mark_price ? formatPaperNumber(position.mark_price, 2) : '数据不足'}</span>
             <span>{position.unrealized_pnl ? formatPaperNumber(position.unrealized_pnl, 2) : '数据不足'}</span>
-            <span>{formatPaperNumber(position.realized_pnl, 2)}</span>
+            <span>{position.market_type === 'spot' ? '现货' : `${formatPaperNumber(position.margin_used, 2)} · ${position.liquidation_price ? formatPaperNumber(position.liquidation_price, 2) : '—'}`}</span>
           </div>)}
           {!account.positions.length && <p className="quant-empty">暂无持仓。信号被消费后才会生成虚拟订单。</p>}
         </div>
+        <div className="paper-balance-strip" aria-label="模拟余额">
+          {account.balances.map(balance => <span key={balance.asset}><b>{balance.asset}</b> 可用 {formatPaperNumber(balance.available, 6)} · 锁定 {formatPaperNumber(balance.locked, 6)}</span>)}
+        </div>
+      </section>
+
+      <section className="quant-card quant-config" aria-label="手工模拟订单">
+        <header><div><p className="crypto-eyebrow">MANUAL ORDER <PaperBadge /></p><h3>手工模拟订单</h3></div><small>仅本地 PAPER，不发送交易所请求</small></header>
+        <form onSubmit={event => { event.preventDefault(); if (orderForm.instrument_id && orderForm.quantity) manualOrder.mutate() }}>
+          <div className="quant-form-grid">
+            <label><span>标的</span><select value={orderForm.instrument_id} onChange={event => setOrderForm({ ...orderForm, instrument_id: event.target.value })}><option value="">选择标的</option>{executionInstruments.map(row => <option key={text(row.id)} value={text(row.id)}>{text(row.provider_symbol)} · {text(row.market_type).toUpperCase()}</option>)}</select></label>
+            <label><span>方向</span><select value={orderForm.side} onChange={event => setOrderForm({ ...orderForm, side: event.target.value })}><option value="buy">BUY</option><option value="sell">SELL</option></select></label>
+            <label><span>订单类型</span><select value={orderForm.order_type} onChange={event => setOrderForm({ ...orderForm, order_type: event.target.value })}><option value="market">MARKET</option><option value="limit">LIMIT</option></select></label>
+            <label><span>数量</span><input type="number" min="0" step="any" value={orderForm.quantity} onChange={event => setOrderForm({ ...orderForm, quantity: event.target.value })} /></label>
+            {orderForm.order_type === 'limit' && <label><span>限价</span><input type="number" min="0" step="any" value={orderForm.limit_price} onChange={event => setOrderForm({ ...orderForm, limit_price: event.target.value })} /></label>}
+            <label><span>杠杆</span><input type="number" min="1" max={account.leverage_cap} step="0.1" value={orderForm.leverage} onChange={event => setOrderForm({ ...orderForm, leverage: event.target.value })} /></label>
+            <label><span>仓位方向</span><select value={orderForm.position_side} onChange={event => setOrderForm({ ...orderForm, position_side: event.target.value })}><option value="BOTH">BOTH / Spot</option><option value="LONG">LONG</option><option value="SHORT">SHORT</option></select></label>
+          </div>
+          <button className="quant-primary-button" type="submit" disabled={manualOrder.isPending || !orderForm.instrument_id || !orderForm.quantity}>提交 PAPER 订单</button>
+          {manualOrder.error && <p className="quant-error" role="alert">订单被拒绝：{wrapError(manualOrder.error)}</p>}
+        </form>
       </section>
 
       <section className="quant-card quant-config" aria-label="策略部署管理">
@@ -486,15 +558,15 @@ export function QuantPaper({ enabled = true }: { enabled?: boolean }) {
       <section className="quant-card" aria-label="虚拟订单与成交">
         <header><div><p className="crypto-eyebrow">ORDERS · FILLS <PaperBadge /></p><h3>虚拟订单与成交</h3></div></header>
         <div className="quant-trade-table">
-          <div className="quant-trade-head"><span>时间</span><span>标的</span><span>方向</span><span>数量</span><span>成交价</span><span>费用</span><span>状态</span></div>
+          <div className="quant-trade-head"><span>时间</span><span>标的</span><span>方向/类型</span><span>数量</span><span>成交/限价</span><span>费用</span><span>状态</span></div>
           {orders.map(order => <div className="quant-trade-row" key={order.id}>
             <span>{formatPaperTime(order.created_at)}</span>
             <span>{order.instrument_symbol || `#${order.client_order_id}`}</span>
-            <span>{order.side === 'buy' ? '买入' : '卖出'}</span>
+            <span>{order.side.toUpperCase()} · {order.market_type.toUpperCase()} · {order.order_type.toUpperCase()}</span>
             <span>{formatPaperNumber(order.filled_quantity, 4)} / {formatPaperNumber(order.intended_quantity, 4)}</span>
-            <span>{order.avg_fill_price ? formatPaperNumber(order.avg_fill_price, 2) : '—'}</span>
+            <span>{order.avg_fill_price ? formatPaperNumber(order.avg_fill_price, 2) : order.limit_price ? formatPaperNumber(order.limit_price, 2) : '—'}</span>
             <span>{formatPaperNumber(order.fee, 4)}</span>
-            <span>{order.status}{order.reject_reason ? `：${order.reject_reason}` : ''}{order.signal_id ? ` · 信号 #${order.signal_id}` : ''}</span>
+            <span>{order.status}{order.reject_reason ? `：${order.reject_reason}` : ''}{order.signal_id ? ` · 信号 #${order.signal_id}` : ''}{['pending', 'partially_filled'].includes(order.status) && <button className="paper-inline-cancel" onClick={() => cancelOrder.mutate(order.id)} disabled={cancelOrder.isPending}>撤单</button>}</span>
           </div>)}
           {!orders.length && <p className="quant-empty">暂无虚拟订单。</p>}
         </div>
@@ -506,6 +578,30 @@ export function QuantPaper({ enabled = true }: { enabled?: boolean }) {
         </div>}
       </section>
 
+      <section className="quant-card" aria-label="运行与流水">
+        <header><div><p className="crypto-eyebrow">RUNS · LEDGER <PaperBadge /></p><h3>运行与审计流水</h3></div></header>
+        <dl className="quant-metrics">
+          <div><dt>当前 run</dt><dd>#{text(account.current_run?.id)}</dd></div>
+          <div><dt>总收益</dt><dd>{formatPaperNumber(Number(text(account.performance.total_return)) * 100, 2)}%</dd></div>
+          <div><dt>已实现 / 未实现</dt><dd>{formatPaperNumber(account.performance.realized_pnl)} / {formatPaperNumber(account.performance.unrealized_pnl)}</dd></div>
+          <div><dt>费用 / 资金费</dt><dd>{formatPaperNumber(account.performance.fees_paid)} / {formatPaperNumber(account.performance.funding_pnl)}</dd></div>
+          <div><dt>胜率</dt><dd>{account.performance.win_rate == null ? '数据不足' : `${formatPaperNumber(Number(account.performance.win_rate) * 100, 1)}%`}</dd></div>
+          <div><dt>最大回撤</dt><dd>{formatPaperNumber(Number(text(account.performance.max_drawdown)) * 100, 2)}%</dd></div>
+        </dl>
+        <div className="paper-ledger-list">
+          {ledger.slice(0, 12).map(row => <p key={text(row.id)}><time>{formatPaperTime(text(row.event_time))}</time> · <b>{text(row.event_type)}</b> · 现金 {formatPaperNumber(text(row.cash_delta), 6)} · 数量 {formatPaperNumber(text(row.quantity_delta), 6)}</p>)}
+          {!ledger.length && <p className="quant-empty">暂无流水。</p>}
+        </div>
+        <details className="paper-reset-control">
+          <summary>开始新的 PAPER run</summary>
+          <p className="quant-muted">旧 run、订单、成交和流水会保留，只结束当前 session。</p>
+          <label><span>输入 RESET PAPER 确认</span><input value={resetConfirm} onChange={event => setResetConfirm(event.target.value)} /></label>
+          <button onClick={() => reset.mutate()} disabled={resetConfirm !== 'RESET PAPER' || reset.isPending}>重置并新建 run</button>
+          {reset.error && <p className="quant-error" role="alert">重置失败：{wrapError(reset.error)}</p>}
+        </details>
+        <p className="quant-muted">历史 run：{runs.map(row => `#${text(row.id)} ${text(row.status)}`).join(' · ') || '暂无'}</p>
+      </section>
+
       <section className="quant-card" aria-label="对账历史">
         <header><div><p className="crypto-eyebrow">RECONCILIATION <PaperBadge /></p><h3>对账历史</h3></div>
           <div className="quant-run-actions"><button onClick={() => reconcile.mutate()} disabled={reconcile.isPending}>立即对账</button></div>
@@ -515,7 +611,7 @@ export function QuantPaper({ enabled = true }: { enabled?: boolean }) {
           {formatPaperTime(text(row.created_at))} · {text(row.status) === 'ok' ? '账实一致' : text(row.status) === 'repaired' ? '发现偏差并已修复' : '存在未解释偏差'} · {text(row.fill_count)} 笔成交 / {text(row.funding_count)} 笔资金费 · 台账现金 {formatPaperNumber(text(row.cash_from_ledger))}
         </p>)}
         {!reconciliations.length && <p className="quant-empty">还没有对账记录。</p>}
-        <p className="quant-muted">对账从成交+资金费台账重建持仓与现金，与缓存不一致时自动修复并留档；这是模拟盘跨重启安全性的核心演练。</p>
+        <p className="quant-muted">后台对账只报告偏差，不会静默改账；显式 repair API 才能重建缓存。订单、成交、资金费和 run 均从数据库恢复。</p>
       </section>
     </>}
   </div>

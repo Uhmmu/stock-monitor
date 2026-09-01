@@ -3840,7 +3840,7 @@ class PaperAccount(Base):
 
     __tablename__ = "paper_accounts"
     __table_args__ = (
-        UniqueConstraint("user_id", "environment", name="uq_paper_accounts_user_env"),
+        UniqueConstraint("user_id", "environment", "account_key", name="uq_paper_accounts_user_env_key"),
         CheckConstraint("environment = 'paper'", name="ck_paper_accounts_paper_only"),
         CheckConstraint("status IN ('active', 'paused')", name="ck_paper_accounts_status"),
         CheckConstraint("CAST(initial_cash AS NUMERIC) > 0", name="ck_paper_accounts_initial_cash_positive"),
@@ -3853,20 +3853,85 @@ class PaperAccount(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    account_key: Mapped[str] = mapped_column(String(64), default="default", server_default="default")
+    name: Mapped[str] = mapped_column(String(96), default="Paper Account", server_default="Paper Account")
     environment: Mapped[str] = mapped_column(String(12), default="paper", server_default="paper")
     base_currency: Mapped[str] = mapped_column(String(8), default="USDT", server_default="USDT")
     initial_cash: Mapped[Decimal] = mapped_column(PreciseNumeric)
     cash: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    locked_cash: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
     status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
     taker_fee_bps: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("5"), server_default="5")
+    maker_fee_bps: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("2"), server_default="2")
     spread_bps: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("2"), server_default="2")
     slippage_bps: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("2"), server_default="2")
     leverage_cap: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("1"), server_default="1")
+    maintenance_margin_ratio: Mapped[Decimal] = mapped_column(
+        PreciseNumeric, default=Decimal("0.005"), server_default="0.005"
+    )
+    liquidation_fee_bps: Mapped[Decimal] = mapped_column(
+        PreciseNumeric, default=Decimal("50"), server_default="50"
+    )
     fill_policy: Mapped[str] = mapped_column(String(24), default="paper-fill-v1", server_default="paper-fill-v1")
+    current_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "paper_runs.id", ondelete="SET NULL", use_alter=True,
+            name="fk_paper_accounts_current_run_id",
+        ),
+        index=True,
+    )
     last_funding_boundary: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pause_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PaperRun(Base):
+    """One durable simulation session; reset completes it instead of deleting history."""
+
+    __tablename__ = "paper_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'completed')", name="ck_paper_runs_status"),
+        Index("ix_paper_runs_account_started", "account_id", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    initial_equity: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    ending_equity: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    peak_equity: Mapped[Decimal] = mapped_column(PreciseNumeric)
+    max_drawdown: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    configuration: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    strategy_metadata: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PaperBalance(Base):
+    """Derived per-run asset balance cache, including funds locked by limits."""
+
+    __tablename__ = "paper_balances"
+    __table_args__ = (
+        UniqueConstraint("run_id", "asset", name="uq_paper_balances_run_asset"),
+        CheckConstraint("CAST(available AS NUMERIC) >= 0", name="ck_paper_balances_available"),
+        CheckConstraint("CAST(locked AS NUMERIC) >= 0", name="ck_paper_balances_locked"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("paper_runs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    asset: Mapped[str] = mapped_column(String(16))
+    available: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    locked: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -3879,7 +3944,9 @@ class PaperOrder(Base):
     __table_args__ = (
         UniqueConstraint("client_order_id", name="uq_paper_orders_client_order_id"),
         CheckConstraint("side IN ('buy', 'sell')", name="ck_paper_orders_side"),
-        CheckConstraint("order_type = 'market'", name="ck_paper_orders_market_only"),
+        CheckConstraint("order_type IN ('market', 'limit')", name="ck_paper_orders_type"),
+        CheckConstraint("market_type IN ('spot', 'futures')", name="ck_paper_orders_market_type"),
+        CheckConstraint("position_side IN ('BOTH', 'LONG', 'SHORT')", name="ck_paper_orders_position_side"),
         CheckConstraint(
             "status IN ('pending', 'partially_filled', 'filled', 'rejected', 'expired', 'cancelled')",
             name="ck_paper_orders_status",
@@ -3892,6 +3959,10 @@ class PaperOrder(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("paper_runs.id", ondelete="CASCADE", name="fk_paper_orders_run_id"),
+        index=True,
+    )
     signal_id: Mapped[int | None] = mapped_column(
         ForeignKey("quant_signals.id", ondelete="SET NULL"), index=True
     )
@@ -3900,7 +3971,11 @@ class PaperOrder(Base):
         ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
     )
     side: Mapped[str] = mapped_column(String(8))
+    market_type: Mapped[str] = mapped_column(String(12), default="futures", server_default="futures")
+    position_side: Mapped[str] = mapped_column(String(8), default="BOTH", server_default="BOTH")
     order_type: Mapped[str] = mapped_column(String(12), default="market", server_default="market")
+    limit_price: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    leverage: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("1"), server_default="1")
     intended_quantity: Mapped[Decimal] = mapped_column(PreciseNumeric)
     filled_quantity: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
     reference_price: Mapped[Decimal] = mapped_column(PreciseNumeric)
@@ -3911,6 +3986,7 @@ class PaperOrder(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
     reason: Mapped[str | None] = mapped_column(Text)
     reject_reason: Mapped[str | None] = mapped_column(Text)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -3923,7 +3999,9 @@ class PaperFill(Base):
     __tablename__ = "paper_fills"
     __table_args__ = (
         CheckConstraint("side IN ('buy', 'sell')", name="ck_paper_fills_side"),
+        CheckConstraint("liquidity IN ('maker', 'taker')", name="ck_paper_fills_liquidity"),
         CheckConstraint("CAST(quantity AS NUMERIC) > 0", name="ck_paper_fills_quantity_positive"),
+        UniqueConstraint("event_key", name="uq_paper_fills_event_key"),
         Index("ix_paper_fills_account_time", "account_id", "fill_time"),
         Index("ix_paper_fills_order", "order_id"),
     )
@@ -3931,17 +4009,25 @@ class PaperFill(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[int] = mapped_column(ForeignKey("paper_orders.id", ondelete="CASCADE"), index=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("paper_runs.id", ondelete="CASCADE", name="fk_paper_fills_run_id"),
+        index=True,
+    )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     instrument_id: Mapped[int] = mapped_column(
         ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
     )
     side: Mapped[str] = mapped_column(String(8))
+    event_key: Mapped[str] = mapped_column(String(128))
+    liquidity: Mapped[str] = mapped_column(String(8), default="taker", server_default="taker")
     quantity: Mapped[Decimal] = mapped_column(PreciseNumeric)
     price: Mapped[Decimal] = mapped_column(PreciseNumeric)
     fee: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
     spread_cost: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
     slippage_cost: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
     realized_pnl: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    mark_price: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    reason: Mapped[str | None] = mapped_column(String(32))
     fill_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -3951,12 +4037,16 @@ class PaperFundingEntry(Base):
 
     __tablename__ = "paper_funding_entries"
     __table_args__ = (
-        UniqueConstraint("account_id", "instrument_id", "boundary", name="uq_paper_funding_entries_boundary"),
+        UniqueConstraint("run_id", "instrument_id", "boundary", name="uq_paper_funding_entries_run_boundary"),
         Index("ix_paper_funding_entries_account_boundary", "account_id", "boundary"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("paper_runs.id", ondelete="CASCADE", name="fk_paper_funding_entries_run_id"),
+        index=True,
+    )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     instrument_id: Mapped[int] = mapped_column(
         ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
@@ -3974,19 +4064,29 @@ class PaperPosition(Base):
 
     __tablename__ = "paper_positions"
     __table_args__ = (
-        UniqueConstraint("account_id", "instrument_id", name="uq_paper_positions_account_instrument"),
+        UniqueConstraint("run_id", "instrument_id", name="uq_paper_positions_run_instrument"),
         Index("ix_paper_positions_account", "account_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("paper_runs.id", ondelete="CASCADE", name="fk_paper_positions_run_id"),
+        index=True,
+    )
     instrument_id: Mapped[int] = mapped_column(
         ForeignKey("crypto_instruments.id", ondelete="CASCADE"), index=True
     )
     quantity: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    locked_quantity: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
     avg_entry_price: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
     realized_pnl: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
     total_fees: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    leverage: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("1"), server_default="1")
+    margin_used: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    mark_price: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
+    unrealized_pnl: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    liquidation_price: Mapped[Decimal | None] = mapped_column(PreciseNumeric)
     last_fill_id: Mapped[int | None] = mapped_column(
         ForeignKey("paper_fills.id", ondelete="SET NULL"), index=True
     )
@@ -4007,6 +4107,10 @@ class PaperReconciliation(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("paper_runs.id", ondelete="CASCADE", name="fk_paper_reconciliations_run_id"),
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(16))
     fill_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     funding_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
@@ -4014,6 +4118,39 @@ class PaperReconciliation(Base):
     cash_cached: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
     mismatches: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
     warnings: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PaperLedgerEvent(Base):
+    """Append-only audit record for every paper financial mutation."""
+
+    __tablename__ = "paper_ledger_events"
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_paper_ledger_events_event_key"),
+        CheckConstraint(
+            "event_type IN ('INITIAL_DEPOSIT', 'ORDER_FILL', 'TRADING_FEE', 'REALIZED_PNL', "
+            "'FUNDING', 'LIQUIDATION', 'MANUAL_RESET')",
+            name="ck_paper_ledger_events_type",
+        ),
+        Index("ix_paper_ledger_events_run_time", "run_id", "event_time"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("paper_accounts.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("paper_runs.id", ondelete="CASCADE"), index=True)
+    event_key: Mapped[str] = mapped_column(String(160))
+    event_type: Mapped[str] = mapped_column(String(24))
+    instrument_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crypto_instruments.id", ondelete="SET NULL"), index=True
+    )
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("paper_orders.id", ondelete="SET NULL"), index=True)
+    fill_id: Mapped[int | None] = mapped_column(ForeignKey("paper_fills.id", ondelete="SET NULL"), index=True)
+    asset: Mapped[str] = mapped_column(String(16), default="USDT", server_default="USDT")
+    cash_delta: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    quantity_delta: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    amount: Mapped[Decimal] = mapped_column(PreciseNumeric, default=Decimal("0"), server_default="0")
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
