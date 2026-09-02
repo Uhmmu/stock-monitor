@@ -12,6 +12,7 @@ import http from "node:http";
 import { runAgentResearch } from "./agent-runner.mjs";
 
 const PORT = Number(process.env.PORT || 3001);
+const HOST = (process.env.PI_AGENT_HOST || "0.0.0.0").trim();
 const AGENT_TOKEN = (process.env.AGENT_GATEWAY_TOKEN || "").trim();
 const BACKEND_BASE_URL = (process.env.BACKEND_BASE_URL || "http://api:8000").replace(/\/$/, "");
 const MAX_CONCURRENT_RUNS = Number(process.env.MAX_CONCURRENT_RUNS || 2);
@@ -85,6 +86,6 @@ const server = http.createServer(async (req, res) => {
 
 server.requestTimeout = 0; // long research runs
 server.headersTimeout = 60_000;
-server.listen(PORT, () => {
-  console.log(`[pi-agent] listening on :${PORT}, backend=${BACKEND_BASE_URL}`);
+server.listen(PORT, HOST, () => {
+  console.log(`[pi-agent] listening on ${HOST}:${PORT}, backend=${BACKEND_BASE_URL}`);
 });

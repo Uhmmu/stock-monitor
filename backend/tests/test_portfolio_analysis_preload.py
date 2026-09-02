@@ -218,6 +218,21 @@ def test_force_only_bypasses_time_window(monkeypatch):
     assert jobs.capacity_guard(now=off_window, force=True) == (False, "memory_low")
 
 
+def test_read_system_capacity_uses_vm_stat_on_macos(monkeypatch):
+    vm_stat = """Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 100.\nPages inactive: 200.\nPages speculative: 50.\n"""
+    monkeypatch.setattr(jobs.sys, "platform", "darwin")
+    monkeypatch.setattr(jobs.Path, "read_text", lambda _self: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(
+        jobs.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type("Result", (), {"stdout": vm_stat})(),
+    )
+
+    _load, available = jobs.read_system_capacity()
+
+    assert available == 350 * 16384
+
+
 def test_enqueue_failure_marks_claimed_rows_failed(db, monkeypatch):
     portfolio = _portfolio(db, "enqueue")
     monkeypatch.setattr(jobs, "capacity_guard", lambda **_kwargs: (True, None))

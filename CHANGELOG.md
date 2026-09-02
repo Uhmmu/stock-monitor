@@ -2,6 +2,31 @@
 
 本文件从 v0.9.1 开始维护；更早版本请查看 [Git 标签](https://github.com/Uhmmu/stock-monitor/tags) 与提交记录。
 
+## v0.9.2（2026-09-03）
+
+### 亮点
+
+- **加密资产研究与量化工作台**：新增统一加密资产身份、Binance 公共行情与 K 线管线、衍生品和基本面研究、技术分析、回测、信号及内部模拟交易页面；`/crypto` 现为独立入口。
+- **安全的模拟执行链路**：新增隔离的 execution agent 与 TEST-only 控制面，带幂等、审计、风险限制和故障关闭；公开产品仅暴露内部 PAPER 模拟执行，不启用真实下单。
+- **IBKR Gateway 持仓同步**：Client Portal Gateway 与 Flex 双来源独立展示；Gateway 手动同步成为当前数量的最高优先级来源，并修复 `1578` 与 `1578.T` 的已知映射。
+- **实时行情自愈**：完善流式行情连接监督、陈旧检测和恢复逻辑，降低服务存活但报价停止刷新的风险。
+- **macOS 原生开发环境**：本地开发改用 Homebrew、Python 3.12、Node 22、PostgreSQL 和 Redis 原生进程，提供 `make native-*`、安全本地 Celery beat、空库迁移引导和本机 Playwright 支持；Docker Compose 继续作为 Linux/VPS 生产路径。
+
+### 变更范围
+
+- 新增迁移 `0066_crypto_identity_assets` 至 `0080_internal_paper_engine`，覆盖加密资产、行情、研究、IBKR Gateway、量化回测/信号/模拟账本和 TEST-only 执行记录。
+- 新增加密资产搜索、行情概览、UTC 多周期图表、衍生品研究、回测与模拟交易界面。
+- 新增 Binance/CoinGecko/DefiLlama 固定夹具、行情精度回放、策略和执行安全测试。
+- 修正 execution agent 协议兼容、部署主机记录、SQLite lease 更新和控制 URL 示例。
+- 更新生产域名、IBKR 历史交接说明及本地开发文档，避免沿用过时主机和路径。
+
+### 升级注意
+
+- 升级前备份 PostgreSQL；本版本包含迁移 `0066`–`0080`。
+- 后端、前端、Celery worker、`market-stream` 和队列配置均有变化，生产部署应按实际 Compose 拓扑重建相关服务。
+- 量化信号、模拟交易、公共加密行情与 execution control 均由显式环境开关控制；默认保持关闭或暂停，不应在升级时自动启用。
+- macOS 原生配置仅用于本地开发，不替代生产 Docker/Compose，也不会改变 IBKR 必须经 VPS `socks5h` 代理且 fail-closed 的约束。
+
 ## v0.9.1（2026-08-24）
 
 ### 亮点

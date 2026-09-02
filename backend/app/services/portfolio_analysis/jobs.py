@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import copy
 import os
+import re
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -270,6 +273,26 @@ def read_system_capacity() -> tuple[float | None, int | None]:
                 break
     except (OSError, ValueError, IndexError):
         pass
+    if available is None and sys.platform == "darwin":
+        try:
+            output = subprocess.run(
+                ["vm_stat"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            ).stdout
+            page_size_match = re.search(r"page size of (\d+) bytes", output)
+            page_size = int(page_size_match.group(1)) if page_size_match else 4096
+            page_counts: dict[str, int] = {}
+            for line in output.splitlines():
+                match = re.match(r"Pages (free|inactive|speculative):\s+(\d+)\.", line)
+                if match:
+                    page_counts[match.group(1)] = int(match.group(2))
+            if page_counts:
+                available = sum(page_counts.values()) * page_size
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
     return load_1m, available
 
 

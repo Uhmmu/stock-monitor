@@ -6,6 +6,9 @@ desktop/build/
 venv/
 *.pyc
 .env
+.env.macos
+.local/
+.venv-finnhub-mcp/
 .git
 .claude/
 CLAUDE.md

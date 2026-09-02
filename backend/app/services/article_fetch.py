@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 import httpx
 from bs4 import BeautifulSoup
 
+from app.config import get_settings
+
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:  # Unit-test and lightweight environments may omit Chromium.
@@ -282,11 +284,14 @@ def _fetch_with_browser(url: str) -> ArticleFetchResult:
     browser = None
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                executable_path="/usr/bin/chromium",
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
+            launch_options: dict[str, Any] = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+            }
+            executable_path = get_settings().article_fetch_browser_executable.strip()
+            if executable_path:
+                launch_options["executable_path"] = executable_path
+            browser = playwright.chromium.launch(**launch_options)
             context = browser.new_context(
                 user_agent=_HEADERS["User-Agent"],
                 locale="en-US",

@@ -1,7 +1,7 @@
 # Stock Monitor Native Qt Desktop — Architecture Audit & Development Blueprint
 
 审计日期：2026-08-18  
-审计范围：`/home/jiale/test/stock-monitor` 当前工作树；只读检查源码、OpenAPI、前端调用、迁移、任务、部署与本机 CachyOS/Arch 包元数据。本文不进入 Phase 1，不修改任何生产代码。
+审计范围：本文是在旧 Linux checkout `/home/jiale/test/stock-monitor` 上完成的历史快照；当前 macOS checkout 为 `/Users/jiale/project/stock-monitor`，后续任务应以 `git rev-parse --show-toplevel` 的结果为准。审计只读检查源码、OpenAPI、前端调用、迁移、任务、部署与当时的 CachyOS/Arch 包元数据，不进入 Phase 1，不修改任何生产代码。
 
 # 1. Executive Summary
 

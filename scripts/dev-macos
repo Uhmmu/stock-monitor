@@ -1,0 +1,172 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+backend_venv="$repo_root/.venv"
+finnhub_venv="$repo_root/.venv-finnhub-mcp"
+execution_venv="$repo_root/execution-agent/.venv"
+env_launcher="$repo_root/scripts/macos_env.py"
+
+usage() {
+  cat <<'EOF'
+usage: scripts/dev-macos COMMAND
+
+  bootstrap       install/sync native Python and Node project dependencies
+  services-start  start Homebrew PostgreSQL and Redis
+  services-stop   stop Homebrew PostgreSQL and Redis
+  doctor          verify native tools, services, paths, and imports
+  migrate         apply Alembic migrations to the native PostgreSQL database
+  api             run FastAPI with reload on 127.0.0.1:8000
+  api-no-reload   run FastAPI without the reload supervisor
+  worker          run the local Celery worker on the default queue
+  beat            run the safe local beat schedule (native heartbeat only)
+  frontend        run the React/Vite frontend on 127.0.0.1:5173
+  finnhub         run the Finnhub MCP sidecar natively on 127.0.0.1:8125
+  pi-agent        run the optional Node Pi Agent sidecar on 127.0.0.1:3001
+  test-backend    run backend pytest natively
+  test-frontend   run frontend tests and production build natively
+  status          show native service and development-port status
+EOF
+}
+
+require_runtime() {
+  if [ ! -x "$backend_venv/bin/python" ]; then
+    printf 'native Python environment missing; run scripts/dev-macos bootstrap\n' >&2
+    exit 1
+  fi
+  if [ ! -f "$repo_root/.env.macos" ]; then
+    printf 'missing .env.macos; copy .env.macos.example first\n' >&2
+    exit 1
+  fi
+}
+
+run_env() {
+  require_runtime
+  "$backend_venv/bin/python" "$env_launcher" -- "$@"
+}
+
+wait_for_native_services() {
+  attempts=0
+  until pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1 \
+    && redis-cli -h 127.0.0.1 -n 15 ping >/dev/null 2>&1; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 30 ]; then
+      echo 'PostgreSQL or Redis did not become ready within 30 seconds' >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+command=${1:-}
+case "$command" in
+  bootstrap)
+    command -v brew >/dev/null 2>&1 || { echo 'Homebrew is required' >&2; exit 1; }
+    command -v uv >/dev/null 2>&1 || { echo 'uv is required; run brew bundle' >&2; exit 1; }
+    mkdir -p "$repo_root/.local/data"
+    [ -f "$repo_root/.env.macos" ] || cp "$repo_root/.env.macos.example" "$repo_root/.env.macos"
+    uv venv --clear --python 3.12 "$backend_venv"
+    uv pip install --python "$backend_venv/bin/python" -r "$repo_root/backend/requirements.txt"
+    "$backend_venv/bin/python" -m playwright install chromium
+    uv venv --clear --python 3.12 "$finnhub_venv"
+    uv pip install --python "$finnhub_venv/bin/python" \
+      'mcp==1.28.1' \
+      'httpx[socks]' \
+      'git+https://github.com/cfdude/mcp-finnhub.git@b7a2651b88efa7807b8d2486f0a736f51fd33332'
+    uv venv --clear --python 3.12 "$execution_venv"
+    uv pip install --python "$execution_venv/bin/python" -e "$repo_root/execution-agent[test]"
+    npm --prefix "$repo_root/frontend" ci
+    npm --prefix "$repo_root/frontend-ios" ci
+    npm --prefix "$repo_root/pi-agent" ci
+    ;;
+  services-start)
+    brew services start postgresql@16
+    brew services start redis
+    wait_for_native_services
+    ;;
+  services-stop)
+    brew services stop redis
+    brew services stop postgresql@16
+    ;;
+  doctor)
+    require_runtime
+    command -v node >/dev/null
+    command -v psql >/dev/null
+    command -v redis-cli >/dev/null
+    pg_isready -h 127.0.0.1 -p 5432
+    redis-cli -h 127.0.0.1 -n 15 ping
+    run_env "$backend_venv/bin/python" -c \
+      'import fastapi, celery, psycopg, sqlalchemy; print("native backend imports: ok")'
+    printf 'node=%s python=%s postgres=%s redis=%s\n' \
+      "$(node --version)" \
+      "$($backend_venv/bin/python --version 2>&1)" \
+      "$(psql --version | awk '{print $3}')" \
+      "$(redis-cli --version | awk '{print $2}')"
+    ;;
+  migrate)
+    cd "$repo_root/backend"
+    run_env "$backend_venv/bin/alembic" upgrade head
+    ;;
+  api)
+    cd "$repo_root"
+    exec "$backend_venv/bin/python" "$env_launcher" -- \
+      "$backend_venv/bin/uvicorn" app.main:app --app-dir backend \
+      --host 127.0.0.1 --port 8000 --reload --reload-dir backend
+    ;;
+  api-no-reload)
+    cd "$repo_root"
+    exec "$backend_venv/bin/python" "$env_launcher" -- \
+      "$backend_venv/bin/uvicorn" app.main:app --app-dir backend --host 127.0.0.1 --port 8000
+    ;;
+  worker)
+    cd "$repo_root/backend"
+    exec "$backend_venv/bin/python" "$env_launcher" -- \
+      "$backend_venv/bin/celery" -A app.tasks.local_dev_celery worker \
+      --loglevel=info --concurrency=2 -Q celery -n 'local@%h'
+    ;;
+  beat)
+    mkdir -p "$repo_root/.local"
+    cd "$repo_root/backend"
+    exec "$backend_venv/bin/python" "$env_launcher" -- \
+      "$backend_venv/bin/celery" -A app.tasks.local_dev_celery beat \
+      --loglevel=info --schedule "$repo_root/.local/celerybeat-schedule"
+    ;;
+  frontend)
+    cd "$repo_root/frontend"
+    exec npm run dev -- --host 127.0.0.1 --port 5173
+    ;;
+  finnhub)
+    require_runtime
+    [ -x "$finnhub_venv/bin/mcp-finnhub" ] || { echo 'Finnhub venv missing; run bootstrap' >&2; exit 1; }
+    cd "$repo_root"
+    exec "$backend_venv/bin/python" "$env_launcher" -- \
+      "$finnhub_venv/bin/mcp-finnhub" --transport http --host 127.0.0.1 --port 8125
+    ;;
+  pi-agent)
+    cd "$repo_root/pi-agent"
+    exec "$backend_venv/bin/python" "$env_launcher" -- node server.mjs
+    ;;
+  test-backend)
+    cd "$repo_root"
+    # Keep the native safety gates for application runs while enabling the
+    # feature branches whose unit tests intentionally exercise them.
+    run_env /usr/bin/env \
+      OPTIONS_ENABLED=true \
+      REALTIME_PRICE_DIVERGENCE_WARN_PCT=0.5 \
+      "$backend_venv/bin/pytest" backend
+    ;;
+  test-frontend)
+    npm --prefix "$repo_root/frontend" test
+    npm --prefix "$repo_root/frontend" run build
+    ;;
+  status)
+    brew services list | awk 'NR == 1 || $1 ~ /^(postgresql@16|redis)$/ {print}'
+    pg_isready -h 127.0.0.1 -p 5432 || true
+    redis-cli -h 127.0.0.1 -n 15 ping || true
+    lsof -nP -iTCP:8000 -iTCP:5173 -iTCP:8125 -iTCP:3001 -sTCP:LISTEN 2>/dev/null || true
+    ;;
+  *)
+    usage
+    [ -z "$command" ] || exit 2
+    ;;
+esac

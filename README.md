@@ -55,52 +55,81 @@ flowchart LR
 
 ## 快速开始
 
-### 要求
+### macOS 原生开发要求
 
-- Docker Engine
-- Docker Compose v2
-- 建议至少 4 GB 内存
+- Apple Silicon 或 Intel Mac
+- Homebrew
+- 建议至少 8 GB 内存
+
+本地开发默认原生运行 Python、Node、PostgreSQL、Redis、FastAPI、Celery
+和 Vite，不需要 Docker 或 Linux VM。Docker Compose 仅保留给 Linux/VPS
+生产部署与必要的生产一致性检查。
 
 ### 1. 获取代码
 
 ```bash
 git clone https://github.com/Uhmmu/stock-monitor.git
 cd stock-monitor
-cp .env.example .env
 ```
 
-### 2. 配置基础环境
+### 2. 安装原生依赖
 
-编辑 `.env`，至少设置以下值：
+```bash
+make native-bootstrap
+make native-services
+```
+
+`native-bootstrap` 使用 Python 3.12 创建本机 arm64 `.venv`，按
+`backend/requirements.txt` 安装直接依赖及其传递依赖，安装 Playwright 原生 Chromium，
+并为 Finnhub MCP 与本地 execution agent 创建互相隔离的 venv。Node 依赖
+始终从 lockfile 通过 `npm ci` 安装。
+
+PostgreSQL 使用与生产一致的 16.x；Homebrew 当前没有 Redis 7 配方，
+本机使用向后兼容的 Redis 8.x，生产仍保持 `redis:7-alpine`。
+
+### 3. 配置本地环境
+
+首次 bootstrap 会从 `.env.macos.example` 创建不会提交的 `.env.macos`。
+本地启动器先读取现有 `.env` 中的可选 API Key，再用 `.env.macos` 覆盖
+数据库、Redis、路径与安全门控。不要把生产数据库地址写入 `.env.macos`。
+
+本地基础配置默认是：
 
 ```env
-POSTGRES_DB=stock_monitor
-POSTGRES_USER=stock
-POSTGRES_PASSWORD=replace-with-a-strong-password
-DATABASE_URL=postgresql+psycopg://stock:replace-with-a-strong-password@postgres:5432/stock_monitor
-
-JWT_SECRET=replace-with-a-long-random-secret
+APP_ENV=development
+DATABASE_URL=postgresql+psycopg://stock:stock@127.0.0.1:5432/stock_monitor
+REDIS_URL=redis://127.0.0.1:6379/15
 ADMIN_USERNAME=admin
-ADMIN_INIT_PASSWORD=replace-with-a-strong-admin-password
-SEC_USER_AGENT=Stock Monitor admin@example.com
+ADMIN_INIT_PASSWORD=stock-monitor-local-dev
 ```
 
-`POSTGRES_PASSWORD` 必须与 `DATABASE_URL` 中的密码一致。可用 `openssl rand -base64 48` 生成 `JWT_SECRET`。
-
-### 3. 启动
+运行一次数据库迁移和环境检查：
 
 ```bash
-docker compose up -d --build
-docker compose ps
+make native-migrate
+make native-doctor
 ```
 
-本地预览地址：<http://127.0.0.1:8080>
+### 4. 启动本地开发进程
+
+分别在终端中运行：
 
 ```bash
-curl http://127.0.0.1:8080/api/health
+make native-api       # http://127.0.0.1:8000
+make native-worker    # 默认 Celery queue
+make native-beat      # 安全本地 schedule，只派发原生开发 heartbeat
+make native-frontend  # http://127.0.0.1:5173
 ```
 
-API 启动时会自动执行 Alembic 迁移。数据库中没有管理员时，应用会使用 `ADMIN_USERNAME` 和 `ADMIN_INIT_PASSWORD` 创建首个管理员。通过注册入口申请的账号需要管理员审核激活后才能登录；管理员也可以在设置面板的用户管理中直接创建账号。
+可选的 Finnhub MCP 原生 sidecar：
+
+```bash
+./scripts/dev-macos finnhub
+```
+
+数据库中没有管理员时，应用会使用本地 `ADMIN_USERNAME` 和
+`ADMIN_INIT_PASSWORD` 创建首个管理员。通过注册入口申请的账号仍需管理员
+审核激活。
 
 ## 可选集成
 
@@ -122,6 +151,15 @@ API 启动时会自动执行 Alembic 迁移。数据库中没有管理员时，�
 所有 Key 仅由服务端读取。IBKR 连接必须使用经过验证的 `socks5h` 代理并 fail closed，禁止代理失败后直连；详见 [IBKR 集成文档](docs/integrations/ibkr.md)。
 
 ## 生产部署
+
+生产部署继续使用 Linux、Dockerfile 与 `compose.yaml`。macOS 原生配置不会
+被复制到生产，也不会改变容器内的服务名、数据卷或 `/data` 路径。
+
+首次部署先从 `.env.example` 创建生产 `.env`，并设置强密码与密钥：
+
+```bash
+cp .env.example .env
+```
 
 设置域名和 Caddy Basic Auth：
 
@@ -145,14 +183,12 @@ Caddy 提供 HTTPS；桌面端位于 `/`，Beta 市场工作台位于 `/beta/`�
 ## 开发与验证
 
 ```bash
-# 后端
-PYTHONPATH=backend .venv/bin/pytest
+# 完整原生 Web 栈验证
+make native-test
 
-# 桌面 Web
-cd frontend
-npm ci
-npm test
-npm run build
+# 单独运行
+./scripts/dev-macos test-backend
+./scripts/dev-macos test-frontend
 
 # iPhone PWA
 cd ../frontend-ios
@@ -161,7 +197,9 @@ npm test
 npm run build
 ```
 
-常用 Compose 操作也可通过 `make up`、`make down`、`make logs`、`make migrate`、`make backup` 和 `make restore FILE=backup.sql.gz` 执行。
+`make up`、`make down`、`make logs`、`make migrate`、`make backup` 和
+`make restore FILE=backup.sql.gz` 仍是 Docker/生产兼容命令，不是 macOS
+本地开发默认路径。
 
 Qt 客户端需要 Qt 6.8+、CMake 和 Ninja：
 
