@@ -6,13 +6,14 @@ accounting semantics from free-form descriptions.
 """
 from __future__ import annotations
 
+import bisect
 import hashlib
 from collections import defaultdict, deque
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import HistoricalPrice, Portfolio, Security
@@ -121,10 +122,56 @@ def drawdown_series(returns: list[Decimal | None]) -> list[tuple[Decimal | None,
     return output
 
 
-def _source_rows(db: Session, run_id: int, sections: tuple[str, ...]) -> list[IbkrFlexRecord]:
-    return list(db.scalars(select(IbkrFlexRecord).where(
-        IbkrFlexRecord.sync_run_id == run_id, IbkrFlexRecord.section.in_(sections),
-    ).order_by(IbkrFlexRecord.occurred_at, IbkrFlexRecord.report_date, IbkrFlexRecord.source_index)).all())
+def _source_sort_key(row: IbkrFlexRecord) -> tuple[datetime, date, int]:
+    occurred = row.occurred_at
+    if occurred is not None and occurred.tzinfo is None:
+        occurred = occurred.replace(tzinfo=UTC)
+    return (occurred or datetime.min.replace(tzinfo=UTC), row.report_date or date.min, row.source_index)
+
+
+def _source_rows(db: Session, run: IbkrFlexSyncRun, sections: tuple[str, ...]) -> list[IbkrFlexRecord]:
+    """Window-aware source rows for analytics rebuilds.
+
+    Flex queries are commonly configured with a rolling period (for example
+    ``Last365CalendarDays``), so each new report starts a little later than
+    the previous one.  Rebuilding only from the newest report would silently
+    truncate account history as the window slides.  Rows dated strictly
+    before the current window start are therefore unioned back in from
+    earlier imported runs; ``source_id`` hashes the full row content, so
+    identical rows collapse and the newest report wins any conflict.
+    """
+    current = list(db.scalars(select(IbkrFlexRecord).where(
+        IbkrFlexRecord.sync_run_id == run.id, IbkrFlexRecord.section.in_(sections),
+    )).all())
+    prior: list[IbkrFlexRecord] = []
+    if run.report_from_date is not None:
+        prior_run_ids = list(db.scalars(select(IbkrFlexSyncRun.id).where(
+            IbkrFlexSyncRun.user_id == run.user_id,
+            IbkrFlexSyncRun.id != run.id,
+            IbkrFlexSyncRun.normalized_record_count > 0,
+        )).all())
+        if prior_run_ids:
+            window_start = datetime.combine(run.report_from_date, datetime.min.time(), tzinfo=UTC)
+            prior = list(db.scalars(select(IbkrFlexRecord).where(
+                IbkrFlexRecord.sync_run_id.in_(prior_run_ids),
+                IbkrFlexRecord.section.in_(sections),
+                or_(
+                    IbkrFlexRecord.report_date < run.report_from_date,
+                    and_(
+                        IbkrFlexRecord.report_date.is_(None),
+                        IbkrFlexRecord.occurred_at.is_not(None),
+                        IbkrFlexRecord.occurred_at < window_start,
+                    ),
+                ),
+            ).order_by(IbkrFlexRecord.sync_run_id, IbkrFlexRecord.id)).all())
+    by_source: dict[str, IbkrFlexRecord] = {}
+    for row in prior:
+        by_source[row.source_id] = row
+    current_ids = {row.source_id for row in current}
+    merged = [row for source_id, row in by_source.items() if source_id not in current_ids]
+    merged.extend(current)
+    merged.sort(key=_source_sort_key)
+    return merged
 
 
 def rebuild_cash_flows(db: Session, run: IbkrFlexSyncRun) -> int:
@@ -133,7 +180,7 @@ def rebuild_cash_flows(db: Session, run: IbkrFlexSyncRun) -> int:
         IbkrNormalizedCashFlow.calculation_version == CALCULATION_VERSION,
     ))
     count = 0
-    source_rows = _source_rows(db, run.id, ("cash_ledger", "cash_transactions", "transfers", "interest"))
+    source_rows = _source_rows(db, run, ("cash_ledger", "cash_transactions", "transfers", "interest"))
     portfolio = db.scalar(select(Portfolio).where(Portfolio.user_id == run.user_id, Portfolio.slug == "default"))
     base_currency = portfolio.base_currency if portfolio else None
 
@@ -178,11 +225,7 @@ def rebuild_cash_flows(db: Session, run: IbkrFlexSyncRun) -> int:
             _, external, rule, _ = classify_cash_flow(fields, description)
             normalized_rows.append((row, category, external, rule, warnings, converted))
 
-    normalized_rows.sort(key=lambda item: (
-        item[0].occurred_at or datetime.min.replace(tzinfo=UTC),
-        item[0].report_date or date.min,
-        item[0].source_index,
-    ))
+    normalized_rows.sort(key=lambda item: _source_sort_key(item[0]))
     for row, category, external, rule, warnings, amount in normalized_rows:
         fields = row.raw_payload or {}
         description = row.description or fields.get("activityDescription") or fields.get("description")
@@ -208,7 +251,7 @@ def rebuild_dividends(db: Session, run: IbkrFlexSyncRun) -> int:
         IbkrDividendEvent.calculation_version == CALCULATION_VERSION,
     ))
     count = 0
-    for row in _source_rows(db, run.id, ("dividends",)):
+    for row in _source_rows(db, run, ("dividends",)):
         fields = row.raw_payload or {}
         source_tag = str(fields.get("sourceTag") or "")
         code = str(fields.get("code") or fields.get("action") or "").upper()
@@ -254,14 +297,14 @@ def rebuild_round_trips(db: Session, run: IbkrFlexSyncRun) -> int:
     ))
     securities = {row.ibkr_conid: row.id for row in db.scalars(select(Security).where(Security.ibkr_conid.is_not(None))).all()}
     explicit: dict[str, Decimal] = {}
-    for row in _source_rows(db, run.id, ("fifo_performance", "tax_lots")):
+    for row in _source_rows(db, run, ("fifo_performance", "tax_lots")):
         pnl = decimal_value(row.raw_payload, "fifoPnlRealized", "realizedPnl", "mtmPnl", "pnl")
         link = next((str(row.raw_payload.get(key)) for key in ("transactionID", "tradeID", "closingTransactionID") if row.raw_payload.get(key)), None)
         if pnl is not None and link:
             explicit[link] = pnl
     lots: dict[tuple[str | None, str | None], deque[dict[str, Any]]] = defaultdict(deque)
     count = 0
-    for row in _source_rows(db, run.id, ("trades",)):
+    for row in _source_rows(db, run, ("trades",)):
         fields = row.raw_payload or {}
         side = _trade_side(fields)
         quantity = abs(row.quantity or decimal_value(fields, "quantity", "tradeQuantity") or ZERO)
@@ -327,8 +370,8 @@ def rebuild_daily_performance(db: Session, run: IbkrFlexSyncRun) -> int:
             flow_by_date[flow.flow_date].append(flow)
     portfolio = db.scalar(select(Portfolio).where(Portfolio.user_id == run.user_id, Portfolio.slug == "default"))
     base_currency = portfolio.base_currency if portfolio else None
-    candidates: list[dict[str, Any]] = []
-    for row in _source_rows(db, run.id, ("performance",)):
+    candidates_by_date: dict[date, dict[str, Any]] = {}
+    for row in _source_rows(db, run, ("performance",)):
         fields = row.raw_payload or {}
         perf_date = row.report_date or date_value(fields, "reportDate", "date")
         if not perf_date or str(fields.get("sourceTag")) not in {"EquitySummaryByReportDateInBase", "SymbolSummary"}:
@@ -338,6 +381,12 @@ def rebuild_daily_performance(db: Session, run: IbkrFlexSyncRun) -> int:
         ending_cash = decimal_value(fields, "endingCash", "cash")
         if ending is None:
             continue
+        # The same day can appear in several historical reports with a
+        # different source_id when the broker restates early values; keep the
+        # newest report's version only.
+        previous = candidates_by_date.get(perf_date)
+        if previous is not None and (previous["row"].sync_run_id or 0) >= (row.sync_run_id or 0):
+            continue
         all_daily_flows = flow_by_date.get(perf_date, [])
         daily_flows = [flow for flow in all_daily_flows if not flow.is_external or not base_currency or flow.currency == base_currency]
         excluded_external = [flow for flow in all_daily_flows if flow.is_external and base_currency and flow.currency != base_currency]
@@ -345,10 +394,35 @@ def rebuild_daily_performance(db: Session, run: IbkrFlexSyncRun) -> int:
         withdrawals = sum((abs(f.amount or ZERO) for f in daily_flows if f.normalized_category == "withdrawal"), ZERO)
         net_external = deposits - withdrawals
         warnings = (["存在非基础币种外部现金流且缺少可审计的同日换算，daily return 保持 null"] if excluded_external else [])
-        candidates.append({"date": perf_date, "row": row, "beginning": beginning, "ending": ending,
-                           "ending_cash": ending_cash, "deposits": deposits, "withdrawals": withdrawals,
-                           "net_external": None if excluded_external else net_external, "warnings": warnings})
-    candidates.sort(key=lambda item: item["date"])
+        candidates_by_date[perf_date] = {"date": perf_date, "row": row, "beginning": beginning, "ending": ending,
+                                         "ending_cash": ending_cash, "deposits": deposits, "withdrawals": withdrawals,
+                                         "net_external": None if excluded_external else net_external, "warnings": warnings,
+                                         "excluded_external": bool(excluded_external)}
+    candidates = sorted(candidates_by_date.values(), key=lambda item: item["date"])
+    # External transfers dated before the first covered equity-summary day
+    # (Flex leaves the account's opening days blank) still belong to the
+    # capital base; attach them to the next covered day so cumulative
+    # contributions stay complete.
+    candidate_dates = [item["date"] for item in candidates]
+    for flow in flows:
+        if not candidates or not flow.is_external or not flow.flow_date or flow.flow_date in candidates_by_date:
+            continue
+        position = bisect.bisect_left(candidate_dates, flow.flow_date)
+        if position >= len(candidates):
+            position = len(candidates) - 1
+        target = candidates[position]
+        if base_currency and flow.currency != base_currency:
+            target["excluded_external"] = True
+            target["net_external"] = None
+            if "存在非基础币种外部现金流且缺少可审计的同日换算，daily return 保持 null" not in target["warnings"]:
+                target["warnings"].append("存在非基础币种外部现金流且缺少可审计的同日换算，daily return 保持 null")
+            continue
+        if flow.normalized_category == "deposit":
+            target["deposits"] += flow.amount or ZERO
+        elif flow.normalized_category == "withdrawal":
+            target["withdrawals"] += abs(flow.amount or ZERO)
+        if not target["excluded_external"]:
+            target["net_external"] = target["deposits"] - target["withdrawals"]
     previous_nav = previous_cash = None
     for item in candidates:
         if item["beginning"] is None:
@@ -394,17 +468,20 @@ def rebuild_position_performance(db: Session, run: IbkrFlexSyncRun) -> int:
     ))
     securities = {row.ibkr_conid: row.id for row in db.scalars(select(Security).where(Security.ibkr_conid.is_not(None))).all()}
     count = 0
-    seen: set[tuple[date, str]] = set()
-    for row in _source_rows(db, run.id, ("performance",)):
+    winners: dict[tuple[date, str], tuple[IbkrFlexRecord, date, str]] = {}
+    for row in _source_rows(db, run, ("performance",)):
         fields = row.raw_payload or {}
         perf_date = row.report_date or date_value(fields, "reportDate", "date")
         conid = row.conid or str(fields.get("conid") or "")
         if not perf_date or not conid or not row.symbol:
             continue
         identity = (perf_date, conid)
-        if identity in seen:
+        winner = winners.get(identity)
+        if winner is not None and (winner[0].sync_run_id or 0) >= (row.sync_run_id or 0):
             continue
-        seen.add(identity)
+        winners[identity] = (row, perf_date, conid)
+    for row, perf_date, conid in sorted(winners.values(), key=lambda item: item[1]):
+        fields = row.raw_payload or {}
         close = db.scalar(select(HistoricalPrice).where(
             HistoricalPrice.symbol == row.symbol, HistoricalPrice.date <= perf_date,
         ).order_by(HistoricalPrice.date.desc(), HistoricalPrice.source.asc()).limit(1))

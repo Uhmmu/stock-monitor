@@ -381,6 +381,180 @@ def test_analytics_rebuild_is_idempotent_and_matches_partial_fifo(db):
     assert {row.source_sync_run_id for row in db.query(IbkrAccountDailyPerformance).all()} == {second_run.id}
 
 
+def _dated_record(run, section, index, *, source_id, report_date=None, occurred_at=None, **fields):
+    payload = {"sourceTag": fields.pop("sourceTag", "Test"), **fields}
+    return IbkrFlexRecord(
+        sync_run_id=run.id, section=section, source_id=source_id, source_index=index,
+        account_id="DU000000", symbol=fields.get("symbol"), conid=fields.get("conid"),
+        currency=fields.get("currency", "USD"), report_date=report_date, occurred_at=occurred_at,
+        quantity=Decimal(str(fields["quantity"])) if "quantity" in fields else None,
+        price=Decimal(str(fields["tradePrice"])) if "tradePrice" in fields else None,
+        amount=Decimal(str(fields["amount"])) if "amount" in fields else None,
+        raw_payload=payload,
+    )
+
+
+def _rolling_window_runs(db):
+    """Two imported runs whose rolling window slid forward, like Last365CalendarDays."""
+    user, portfolio, _, _, first = _setup_run(db)
+    first.report_from_date = date(2026, 1, 1)
+    first.report_to_date = date(2026, 6, 30)
+    first.normalized_record_count = 2
+    first.status = "completed"
+    first.stage = "completed"
+    first.completed_at = datetime(2026, 6, 30, tzinfo=UTC)
+    second = IbkrFlexSyncRun(
+        user_id=user.id, account_id="DU000000", report_from_date=date(2026, 2, 1),
+        report_to_date=date(2026, 7, 31), status="running", stage="rebuilding",
+        source_hash="b" * 64, parser_version="test", normalized_record_count=2,
+        section_counts={"cash_ledger": 1, "performance": 2},
+    )
+    db.add(second)
+    db.flush()
+    return user, portfolio, first, second
+
+
+def test_rolling_window_rebuild_keeps_prewindow_deposits_and_head_flows(db):
+    user, portfolio, first, second = _rolling_window_runs(db)
+    db.add_all([
+        _dated_record(first, "cash_ledger", 0, source_id="dep-jan", report_date=date(2026, 1, 5),
+                      sourceTag="StatementOfFundsLine", activityCode="DEP", amount="1000",
+                      currency="USD", levelOfDetail="BaseCurrency"),
+        _dated_record(first, "performance", 1, source_id="perf-jan-10", report_date=date(2026, 1, 10),
+                      sourceTag="EquitySummaryByReportDateInBase", endingValue="1000",
+                      endingCash="1000", reportDate="20260110"),
+    ])
+    db.flush()
+    rebuild_all_analytics(db, first)
+    db.add_all([
+        _dated_record(second, "cash_ledger", 0, source_id="dep-feb", report_date=date(2026, 2, 10),
+                      sourceTag="StatementOfFundsLine", activityCode="DEP", amount="500",
+                      currency="USD", levelOfDetail="BaseCurrency"),
+        _dated_record(second, "performance", 1, source_id="perf-feb-10", report_date=date(2026, 2, 10),
+                      sourceTag="EquitySummaryByReportDateInBase", endingValue="1500",
+                      endingCash="1500", reportDate="20260210"),
+        _dated_record(second, "performance", 2, source_id="perf-feb-15", report_date=date(2026, 2, 15),
+                      sourceTag="EquitySummaryByReportDateInBase", endingValue="1500",
+                      endingCash="1500", reportDate="20260215"),
+    ])
+    db.flush()
+
+    rebuild_all_analytics(db, second)
+
+    flows = db.query(IbkrNormalizedCashFlow).filter(IbkrNormalizedCashFlow.is_external.is_(True)).all()
+    assert {(flow.flow_date, flow.amount) for flow in flows} == {
+        (date(2026, 1, 5), Decimal("1000")), (date(2026, 2, 10), Decimal("500")),
+    }
+    assert {flow.source_sync_run_id for flow in flows} == {second.id}
+    daily = {row.performance_date: row for row in db.query(IbkrAccountDailyPerformance).all()}
+    assert set(daily) == {date(2026, 1, 10), date(2026, 2, 10), date(2026, 2, 15)}
+    assert {row.source_sync_run_id for row in daily.values()} == {second.id}
+    # The January deposit has no equity-summary day of its own, so it folds
+    # into the next covered day instead of vanishing from contributions.
+    assert daily[date(2026, 1, 10)].external_deposits == Decimal("1000")
+    assert daily[date(2026, 2, 10)].external_deposits == Decimal("500")
+    assert daily[date(2026, 2, 10)].beginning_nav == Decimal("1000")
+    assert daily[date(2026, 2, 15)].net_external_cash_flow == Decimal("0")
+    assert daily[date(2026, 2, 15)].beginning_nav == Decimal("1500")
+
+    second.status = "completed"
+    second.stage = "completed"
+    second.completed_at = datetime.now(UTC)
+    db.flush()
+    series = performance_series(db, portfolio)
+    assert series["items"][-1]["net_contributions"] == 1500
+    assert series["items"][0]["date"] == date(2026, 1, 10)
+
+
+def test_restated_history_day_uses_newest_report_version(db):
+    user, _, first, second = _rolling_window_runs(db)
+    second.status = "completed"
+    second.stage = "completed"
+    second.completed_at = datetime(2026, 7, 31, tzinfo=UTC)
+    third = IbkrFlexSyncRun(
+        user_id=user.id, account_id="DU000000", report_from_date=date(2026, 6, 1),
+        report_to_date=date(2026, 7, 31), status="running", stage="rebuilding",
+        source_hash="c" * 64, parser_version="test", normalized_record_count=1,
+    )
+    db.add(third)
+    db.flush()
+    db.add_all([
+        _dated_record(first, "performance", 0, source_id="perf-jan-10-v1", report_date=date(2026, 1, 10),
+                      sourceTag="EquitySummaryByReportDateInBase", endingValue="900",
+                      endingCash="900", reportDate="20260110"),
+        _dated_record(second, "performance", 0, source_id="perf-jan-10-v2", report_date=date(2026, 1, 10),
+                      sourceTag="EquitySummaryByReportDateInBase", endingValue="1000",
+                      endingCash="1000", reportDate="20260110"),
+        _dated_record(third, "performance", 0, source_id="perf-jul", report_date=date(2026, 7, 15),
+                      sourceTag="EquitySummaryByReportDateInBase", startingValue="1000",
+                      endingValue="1100", endingCash="1100", reportDate="20260715"),
+    ])
+    db.flush()
+
+    rebuild_all_analytics(db, third)
+
+    daily = {row.performance_date: row for row in db.query(IbkrAccountDailyPerformance).all()}
+    assert set(daily) == {date(2026, 1, 10), date(2026, 7, 15)}
+    assert daily[date(2026, 1, 10)].ending_nav == Decimal("1000")
+    assert daily[date(2026, 1, 10)].source_sync_run_id == third.id
+
+
+def test_missing_window_metadata_rebuilds_current_run_only(db):
+    user, _, first, second = _rolling_window_runs(db)
+    db.add(_dated_record(first, "cash_ledger", 0, source_id="dep-jan", report_date=date(2026, 1, 5),
+                         sourceTag="StatementOfFundsLine", activityCode="DEP", amount="1000",
+                         currency="USD", levelOfDetail="BaseCurrency"))
+    db.flush()
+    rebuild_all_analytics(db, first)
+    second.report_from_date = None
+    db.add(_dated_record(second, "cash_ledger", 0, source_id="dep-mar", report_date=date(2026, 3, 1),
+                         sourceTag="StatementOfFundsLine", activityCode="DEP", amount="300",
+                         currency="USD", levelOfDetail="BaseCurrency"))
+    db.flush()
+
+    rebuild_all_analytics(db, second)
+
+    flows = db.query(IbkrNormalizedCashFlow).filter(IbkrNormalizedCashFlow.is_external.is_(True)).all()
+    assert {(flow.flow_date, flow.amount) for flow in flows} == {(date(2026, 3, 1), Decimal("300"))}
+
+
+def test_identical_history_row_collapses_across_runs(db):
+    user, _, first, second = _rolling_window_runs(db)
+    for run in (first, second):
+        db.add(_dated_record(run, "cash_ledger", 0, source_id="dep-shared", report_date=date(2026, 1, 5),
+                             sourceTag="StatementOfFundsLine", activityCode="DEP", amount="1000",
+                             currency="USD", levelOfDetail="BaseCurrency"))
+    db.flush()
+
+    rebuild_all_analytics(db, second)
+
+    flows = db.query(IbkrNormalizedCashFlow).filter(IbkrNormalizedCashFlow.is_external.is_(True)).all()
+    assert len(flows) == 1
+    assert flows[0].amount == Decimal("1000")
+    assert flows[0].source_sync_run_id == second.id
+
+
+def test_prewindow_trades_recover_via_occurred_at_for_round_trips(db):
+    user, _, first, second = _rolling_window_runs(db)
+    db.add_all([
+        _dated_record(first, "trades", 0, source_id="trade-buy", occurred_at=datetime(2026, 1, 10, 15, tzinfo=UTC),
+                      sourceTag="Trade", symbol="EXAMPLE", conid="10001", buySell="BUY",
+                      quantity="10", tradePrice="10", ibCommission="-1"),
+        _dated_record(first, "trades", 1, source_id="trade-sell", occurred_at=datetime(2026, 1, 20, 15, tzinfo=UTC),
+                      sourceTag="Trade", symbol="EXAMPLE", conid="10001", buySell="SELL",
+                      quantity="4", tradePrice="15", ibCommission="-1"),
+    ])
+    db.flush()
+    rebuild_all_analytics(db, first)
+
+    rebuild_all_analytics(db, second)
+
+    trips = db.query(IbkrTradeRoundTrip).all()
+    assert len(trips) == 1
+    assert trips[0].quantity == Decimal("4")
+    assert trips[0].source_sync_run_id == second.id
+
+
 def test_duplicate_manual_sync_returns_existing_active_run(db):
     user = User(username="sync-lock", password_hash="x", role="user", status="active")
     db.add(user); db.commit()
