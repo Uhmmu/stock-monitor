@@ -89,6 +89,27 @@ CRYPTO_SYMBOL_PATTERN = re.compile(
     r"|(?<![a-z0-9])usdt(?![a-z0-9])"
 )
 
+CONTINUATION_MESSAGES = {
+    "继续", "继续分析", "继续查", "继续说", "接着", "接着分析", "接着查", "接着说",
+    "往下说", "然后呢", "goon", "continue", "keepgoing",
+}
+
+
+def is_continuation_message(message: str) -> bool:
+    normalized = re.sub(r"[\s\W_]+", "", message.casefold(), flags=re.UNICODE)
+    return normalized in CONTINUATION_MESSAGES
+
+
+def resolve_tool_intent_message(message: str, prior_user_messages: list[str] | None = None) -> str:
+    """Carry the last concrete user intent into short continuation turns."""
+    if not is_continuation_message(message):
+        return message
+    for previous in reversed(prior_user_messages or []):
+        previous = previous.strip()
+        if previous and not is_continuation_message(previous):
+            return f"{previous}\n{message}"
+    return message
+
 
 def has_crypto_symbol(message: str) -> bool:
     """Match standalone crypto symbols without substring false positives."""

@@ -11,6 +11,8 @@ from app.ai.providers.schemas import (
     ProviderStreamEvent,
     ProviderToolCall,
 )
+from app.ai.enums import AIErrorCode
+from app.ai.exceptions import ProviderError
 from app.ai.router import router
 from app.ai.schemas import (
     AIRespondRequest,
@@ -105,6 +107,46 @@ def test_orchestrator_falls_back_from_luna_to_haiku():
         assert primary.requests and all(request.model == "gpt-5.6-luna" for request in primary.requests)
         assert fallback.requests[0].model == "claude-haiku-4-5-20251001"
         assert result.warnings[-1] == "gpt-5.6-luna 不可用，已自动切换到 claude-haiku-4-5-20251001。"
+    finally:
+        for field, value in zip(fields, old, strict=True):
+            setattr(settings, field, value)
+
+
+def test_orchestrator_tries_terra_before_cross_provider_fallback_for_sol():
+    class ModelAwareProvider(MockProvider):
+        async def create_response(self, request):
+            self.requests.append(request.model_copy(deep=True))
+            if request.model == "gpt-5.6-sol":
+                raise ProviderError(
+                    AIErrorCode.provider_unavailable,
+                    "temporary failure",
+                    retryable=True,
+                    status_code=503,
+                )
+            return ProviderResponse(content="Terra 正常回答", finish_reason="stop")
+
+    provider = ModelAwareProvider()
+    settings = get_settings()
+    fields = ("ai_provider", "ai_model", "ai_allowed_models", "ai_enabled", "ai_api_base", "ai_api_key")
+    old = tuple(getattr(settings, field) for field in fields)
+    settings.ai_provider = "mock"
+    settings.ai_model = "gpt-5.6-sol"
+    settings.ai_allowed_models = "gpt-5.6-sol,gpt-5.6-terra"
+    settings.ai_enabled = True
+    settings.ai_api_base = "https://gpt.test/v1"
+    settings.ai_api_key = "gpt-key"
+    providers = ProviderRegistry()
+    providers.register(provider)
+    try:
+        result = asyncio.run(AIOrchestrator(
+            registry=tool_registry, executor=Executor(), provider_registry=providers,
+        ).respond(
+            request=AIRespondRequest(message="hello", stream=False),
+            user=SimpleNamespace(id=1), request_id="sol-fallback",
+        ))
+        assert [item.model for item in provider.requests] == ["gpt-5.6-sol", "gpt-5.6-terra"]
+        assert "Terra 正常回答" in result.answer
+        assert result.warnings[-1] == "gpt-5.6-sol 不可用，已自动切换到 gpt-5.6-terra。"
     finally:
         for field, value in zip(fields, old, strict=True):
             setattr(settings, field, value)

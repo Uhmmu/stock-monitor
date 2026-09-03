@@ -15,12 +15,25 @@ MODEL_FALLBACKS = {
     "gpt-5.6-terra": "claude-sonnet-4-6",
 }
 
+# Chat requests benefit from trying another model on the primary endpoint
+# before crossing over to the translation endpoint.  The latter remains the
+# final fallback for a gateway-wide outage.
+ORCHESTRATOR_MODEL_FALLBACKS = {
+    "gpt-5.6-luna": ("claude-haiku-4-5-20251001",),
+    "gpt-5.6-sol": ("gpt-5.6-terra", "claude-opus-5"),
+    "gpt-5.6-terra": ("claude-sonnet-4-6",),
+}
+
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
 
 def fallback_model(model: str) -> str | None:
     return MODEL_FALLBACKS.get(model.strip().lower())
+
+
+def orchestrator_fallback_models(model: str) -> tuple[str, ...]:
+    return ORCHESTRATOR_MODEL_FALLBACKS.get(model.strip().lower(), ())
 
 
 def model_candidates(model: str) -> tuple[str, ...]:

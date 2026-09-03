@@ -10,7 +10,7 @@ from .exceptions import AIError
 from .prompt_builder import build_initial_messages
 from .providers.schemas import ProviderMessage
 from .schemas import AIRespondRequest
-from .tool_selector import ToolSelector
+from .tool_selector import ToolSelector, resolve_tool_intent_message
 
 
 class BuiltContext(BaseModel):
@@ -32,10 +32,19 @@ class ContextBuilder:
         *,
         history: list[ProviderMessage] | None = None,
         application_context: list[str] | None = None,
+        selection_message: str | None = None,
     ) -> BuiltContext:
+        intent_message = selection_message or resolve_tool_intent_message(
+            request.message,
+            [
+                item.content
+                for item in (history or [])
+                if item.role == "user" and item.content
+            ],
+        )
         try:
             selection = self.selector.select(
-                message=request.message, page_context=request.page_context,
+                message=intent_message, page_context=request.page_context,
                 active_symbol=request.active_symbol, allowed_tools=set(request.allowed_tools) if request.allowed_tools is not None else None,
                 denied_tools=set(request.denied_tools),
                 web_access_mode=request.web_access_mode,

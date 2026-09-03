@@ -13,7 +13,7 @@ from app.ai_tools.executor import ToolExecutor
 from app.ai_tools.registry import ToolRegistry
 from app.ai_tools.schemas import ToolExecutionContext
 from app.config import get_settings
-from app.model_fallbacks import fallback_model
+from app.model_fallbacks import orchestrator_fallback_models
 from app.services.price_snapshots import (
     build_ai_price_snapshot_context,
     get_latest_persisted_price_snapshot,
@@ -38,7 +38,7 @@ from .providers.schemas import ProviderMessage, ProviderRequest, ProviderToolDef
 from .schemas import AIRespondRequest, AIRespondResponse, AIStreamEvent, AIUsageSummary
 from .streaming import answer_chunks
 from .tool_loop import ToolCallingLoop
-from .tool_selector import ToolSelector, has_current_portfolio_intent
+from .tool_selector import ToolSelector, has_current_portfolio_intent, resolve_tool_intent_message
 
 TOOL_DISPLAY_NAMES = {
     "get_portfolio_summary": "正在读取组合摘要", "get_position_detail": "正在读取持仓详情",
@@ -67,21 +67,25 @@ TOOL_DISPLAY_NAMES = {
 }
 logger = logging.getLogger(__name__)
 
-def _needs_current_portfolio_context(request: AIRespondRequest) -> bool:
+def _needs_current_portfolio_context(request: AIRespondRequest, intent_message: str | None = None) -> bool:
     return (
         request.page_context == "portfolio"
         or request.active_portfolio_id is not None
-        or has_current_portfolio_intent(request.message)
+        or has_current_portfolio_intent(intent_message or request.message)
     )
 
 
-def _build_current_portfolio_context(gateway: Any, request: AIRespondRequest) -> str | None:
+def _build_current_portfolio_context(
+    gateway: Any,
+    request: AIRespondRequest,
+    intent_message: str | None = None,
+) -> str | None:
     """Read the same unified ledger used by the Holdings page.
 
     This application-owned snapshot prevents old chat text, memories, or
     persisted analysis runs from being mistaken for current positions.
     """
-    if gateway is None or not _needs_current_portfolio_context(request):
+    if gateway is None or not _needs_current_portfolio_context(request, intent_message):
         return None
     try:
         summary = gateway.portfolio_summary(request.active_portfolio_id)
@@ -140,7 +144,15 @@ class AIOrchestrator:
             })
         application_context = []
         gateway = getattr(self.executor, "gateway", None)
-        portfolio_context = _build_current_portfolio_context(gateway, request)
+        intent_message = resolve_tool_intent_message(
+            request.message,
+            [
+                item.content
+                for item in (history or [])
+                if item.role == "user" and item.content
+            ],
+        )
+        portfolio_context = _build_current_portfolio_context(gateway, request, intent_message)
         if portfolio_context:
             application_context.append(portfolio_context)
         if request.active_symbol and gateway is not None:
@@ -161,6 +173,7 @@ class AIOrchestrator:
             budget,
             history=history,
             application_context=application_context,
+            selection_message=intent_message,
         )
         if event_sink:
             await event_sink("context.ready", {"selected_tools": context.allowed_tool_names, "estimated_context_tokens": context.estimated_tokens})
@@ -286,19 +299,40 @@ class AIOrchestrator:
                 request=request, user=user, request_id=request_id, event_sink=event_sink,
                 use_provider_stream=use_provider_stream, history=history, conversation_id=conversation_id,
             )
-        except Exception:
-            fallback = fallback_model(model)
-            if not fallback:
+        except Exception as primary_error:
+            settings = get_settings()
+            configured = set(allowed_models(settings))
+            fallbacks = [
+                candidate
+                for candidate in orchestrator_fallback_models(model)
+                if candidate in configured and all(endpoint_for_model(candidate, settings))
+            ]
+            if not fallbacks:
                 raise
-            if event_sink:
-                await event_sink("response.reset", {})
-            result, invalid, repaired = await self._execute_once(
-                request=request.model_copy(update={"model": fallback}), user=user, request_id=request_id,
-                event_sink=event_sink, use_provider_stream=use_provider_stream, history=history,
-                conversation_id=conversation_id,
+            logger.warning(
+                "ai_model_primary_failed request_id=%s model=%s error=%s",
+                request_id, model, type(primary_error).__name__,
             )
-            result.warnings.append(f"{model} 不可用，已自动切换到 {fallback}。")
-            return result, invalid, repaired
+            last_error = primary_error
+            for fallback in fallbacks:
+                if event_sink:
+                    await event_sink("response.reset", {})
+                try:
+                    result, invalid, repaired = await self._execute_once(
+                        request=request.model_copy(update={"model": fallback}), user=user, request_id=request_id,
+                        event_sink=event_sink, use_provider_stream=use_provider_stream, history=history,
+                        conversation_id=conversation_id,
+                    )
+                except Exception as fallback_error:
+                    last_error = fallback_error
+                    logger.warning(
+                        "ai_model_fallback_failed request_id=%s primary=%s fallback=%s error=%s",
+                        request_id, model, fallback, type(fallback_error).__name__,
+                    )
+                    continue
+                result.warnings.append(f"{model} 不可用，已自动切换到 {fallback}。")
+                return result, invalid, repaired
+            raise last_error
 
     async def respond(
         self, *, request: AIRespondRequest, user: Any, request_id: str,

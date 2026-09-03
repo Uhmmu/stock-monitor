@@ -63,6 +63,20 @@ def test_selector_allow_deny_unknown_and_context_builder_injection_boundary():
     assert injected.messages[-1].content.endswith("MSFT 怎么样")
 
 
+def test_continuation_inherits_previous_user_tool_intent_without_rewriting_message():
+    built = ContextBuilder(ToolSelector(tool_registry)).build(
+        AIRespondRequest(message="继续"),
+        OrchestratorBudget(),
+        history=[
+            ProviderMessage(role="user", content="看看我的仓位和各个股票的支撑压力"),
+            ProviderMessage(role="assistant", content="正在分析。"),
+        ],
+    )
+    assert {"get_portfolio_positions", "get_technical_levels"} <= set(built.allowed_tool_names)
+    assert built.messages[-1].content.endswith("继续")
+    assert "看看我的仓位" in built.messages[-3].content
+
+
 def test_portfolio_intent_excludes_historical_analysis_and_injects_current_ledger():
     selection = ToolSelector(tool_registry).select(
         message="哪些持仓违背我的组合策略",
@@ -130,6 +144,27 @@ def test_natural_personal_stock_return_question_gets_current_portfolio_context()
     )
     assert context is not None
     assert '"daily_change_percent":1.25' in context
+
+
+def test_continuation_intent_can_inject_current_portfolio_ledger():
+    class Gateway:
+        def portfolio_summary(self, portfolio_id):
+            return type("Response", (), {"data": {"portfolio_id": 3}})()
+
+        def portfolio_positions(self, portfolio_id, page, page_size, sort):
+            return type("Response", (), {
+                "data": [{"symbol": "MSFT"}],
+                "freshness": None,
+                "meta": type("Meta", (), {"total": 1})(),
+            })()
+
+    context = _build_current_portfolio_context(
+        Gateway(),
+        AIRespondRequest(message="继续"),
+        "看看我的仓位和各个股票的支撑压力\n继续",
+    )
+    assert context is not None
+    assert '"symbol":"MSFT"' in context
 
 
 def test_company_profit_question_does_not_open_private_portfolio_tools():
