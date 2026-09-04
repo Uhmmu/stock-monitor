@@ -555,6 +555,145 @@ def test_prewindow_trades_recover_via_occurred_at_for_round_trips(db):
     assert trips[0].source_sync_run_id == second.id
 
 
+def _three_runs(db):
+    """Three imported runs with sliding windows plus restated row content."""
+    user, portfolio, first, second = _rolling_window_runs(db)
+    second.status = "completed"
+    second.stage = "completed"
+    second.completed_at = datetime(2026, 7, 31, tzinfo=UTC)
+    third = IbkrFlexSyncRun(
+        user_id=user.id, account_id="DU000000", report_from_date=date(2026, 6, 1),
+        report_to_date=date(2026, 12, 31), status="completed", stage="completed",
+        completed_at=datetime(2026, 12, 31, tzinfo=UTC), source_hash="c" * 64,
+        parser_version="test", normalized_record_count=1,
+    )
+    db.add(third)
+    db.flush()
+    return user, portfolio, first, second, third
+
+
+def test_restatement_across_reports_does_not_double_count_deposits(db):
+    user, portfolio, first, second, third = _three_runs(db)
+    db.add_all([
+        _dated_record(first, "cash_ledger", 0, source_id="dep-v1", report_date=date(2026, 1, 5),
+                      sourceTag="StatementOfFundsLine", activityCode="DEP", amount="256.40",
+                      currency="USD", levelOfDetail="BaseCurrency", activityDescription="Electronic Fund Transfer"),
+        # Same deposit in a later report with drifted row content: a different
+        # description means a different source_id even though the business
+        # event is identical.
+        _dated_record(second, "cash_ledger", 0, source_id="dep-v2", report_date=date(2026, 1, 5),
+                      sourceTag="StatementOfFundsLine", activityCode="DEP", amount="256.40",
+                      currency="USD", levelOfDetail="BaseCurrency", activityDescription="ELECTRONIC FUND TRANSFER"),
+        _dated_record(third, "performance", 0, source_id="perf-dec", report_date=date(2026, 12, 15),
+                      sourceTag="EquitySummaryByReportDateInBase", startingValue="256.40",
+                      endingValue="260", endingCash="260", reportDate="20261215"),
+    ])
+    db.flush()
+
+    rebuild_all_analytics(db, third)
+
+    flows = db.query(IbkrNormalizedCashFlow).filter(IbkrNormalizedCashFlow.is_external.is_(True)).all()
+    assert [(flow.flow_date, flow.amount) for flow in flows] == [(date(2026, 1, 5), Decimal("256.40"))]
+
+
+def test_genuine_same_day_equal_deposits_keep_multiplicity(db):
+    user, portfolio, first, second, third = _three_runs(db)
+    db.add_all([
+        _dated_record(first, "cash_ledger", 0, source_id="dep-a", report_date=date(2026, 1, 5),
+                      sourceTag="StatementOfFundsLine", activityCode="DEP", amount="256.40",
+                      currency="USD", levelOfDetail="BaseCurrency", dateTime="20260105;150000"),
+        _dated_record(first, "cash_ledger", 1, source_id="dep-b", report_date=date(2026, 1, 5),
+                      sourceTag="StatementOfFundsLine", activityCode="DEP", amount="256.40",
+                      currency="USD", levelOfDetail="BaseCurrency", dateTime="20260105;160000"),
+        # Both deposits restated in the later report (drifted content again).
+        _dated_record(second, "cash_ledger", 0, source_id="dep-a2", report_date=date(2026, 1, 5),
+                      sourceTag="StatementOfFundsLine", activityCode="DEP", amount="256.40",
+                      currency="USD", levelOfDetail="BaseCurrency", dateTime="20260105;150000",
+                      activityDescription="ELECTRONIC FUND TRANSFER"),
+        _dated_record(second, "cash_ledger", 1, source_id="dep-b2", report_date=date(2026, 1, 5),
+                      sourceTag="StatementOfFundsLine", activityCode="DEP", amount="256.40",
+                      currency="USD", levelOfDetail="BaseCurrency", dateTime="20260105;160000",
+                      activityDescription="ELECTRONIC FUND TRANSFER"),
+    ])
+    db.flush()
+
+    rebuild_all_analytics(db, third)
+
+    flows = db.query(IbkrNormalizedCashFlow).filter(IbkrNormalizedCashFlow.is_external.is_(True)).all()
+    deposits = [flow for flow in flows if flow.flow_date == date(2026, 1, 5)]
+    assert len(deposits) == 2
+    assert sum((flow.amount for flow in deposits), Decimal("0")) == Decimal("512.80")
+
+
+def test_internal_flow_restatement_collapses_across_reports(db):
+    user, portfolio, first, second, third = _three_runs(db)
+    db.add_all([
+        _dated_record(first, "cash_ledger", 0, source_id="fee-v1", report_date=date(2026, 1, 6),
+                      sourceTag="StatementOfFundsLine", activityCode="COMM", amount="-1.50",
+                      currency="USD", activityDescription="COMMISSION"),
+        _dated_record(second, "cash_ledger", 0, source_id="fee-v2", report_date=date(2026, 1, 6),
+                      sourceTag="StatementOfFundsLine", activityCode="COMM", amount="-1.50",
+                      currency="USD", activityDescription="commission"),
+    ])
+    db.flush()
+
+    rebuild_all_analytics(db, third)
+
+    commissions = db.query(IbkrNormalizedCashFlow).filter(
+        IbkrNormalizedCashFlow.normalized_category == "commission").all()
+    assert len(commissions) == 1
+    assert commissions[0].amount == Decimal("-1.50")
+
+
+def test_trade_history_spans_window_and_restatement_does_not_duplicate(db):
+    user, portfolio, first, second, third = _three_runs(db)
+    db.add_all([
+        _dated_record(first, "trades", 0, source_id="buy-v1", occurred_at=datetime(2026, 1, 10, 15, tzinfo=UTC),
+                      sourceTag="Trade", symbol="EXAMPLE", conid="10001", buySell="BUY",
+                      transactionID="9001", quantity="10", tradePrice="10", ibCommission="-1"),
+        _dated_record(first, "trades", 1, source_id="sell-v1", occurred_at=datetime(2026, 1, 20, 15, tzinfo=UTC),
+                      sourceTag="Trade", symbol="EXAMPLE", conid="10001", buySell="SELL",
+                      transactionID="9002", quantity="10", tradePrice="12", ibCommission="-1"),
+        # Same executions in the later report with a drifted commission field.
+        _dated_record(second, "trades", 0, source_id="buy-v2", occurred_at=datetime(2026, 1, 10, 15, tzinfo=UTC),
+                      sourceTag="Trade", symbol="EXAMPLE", conid="10001", buySell="BUY",
+                      transactionID="9001", quantity="10", tradePrice="10", ibCommission="-1.0"),
+        _dated_record(second, "trades", 1, source_id="sell-v2", occurred_at=datetime(2026, 1, 20, 15, tzinfo=UTC),
+                      sourceTag="Trade", symbol="EXAMPLE", conid="10001", buySell="SELL",
+                      transactionID="9002", quantity="10", tradePrice="12", ibCommission="-1.0"),
+    ])
+    db.flush()
+    rebuild_all_analytics(db, third)
+
+    trips = db.query(IbkrTradeRoundTrip).all()
+    assert len(trips) == 1
+    assert trips[0].quantity == Decimal("10")
+
+    events = [item for item in transaction_events(db, portfolio) if item["source_type"] == "ibkr_flex"]
+    assert {(item["event_type"], item["quantity"]) for item in events} == {("buy", 10.0), ("sell", 10.0)}
+
+
+def test_dividend_restatement_keeps_single_event(db):
+    user, portfolio, first, second, third = _three_runs(db)
+    db.add_all([
+        _dated_record(first, "dividends", 0, source_id="div-v1", report_date=date(2026, 1, 15),
+                      sourceTag="ChangeInDividendAccrual", symbol="EXAMPLE", conid="10001",
+                      grossAmount="5", tax="-1.5", netAmount="3.5", payDate="20260115",
+                      activityDescription="Payment"),
+        _dated_record(second, "dividends", 0, source_id="div-v2", report_date=date(2026, 1, 15),
+                      sourceTag="ChangeInDividendAccrual", symbol="EXAMPLE", conid="10001",
+                      grossAmount="5", tax="-1.5", netAmount="3.5", payDate="20260115",
+                      activityDescription="PAYMENT"),
+    ])
+    db.flush()
+
+    rebuild_all_analytics(db, third)
+
+    events = db.query(IbkrDividendEvent).all()
+    assert len(events) == 1
+    assert events[0].gross_dividend == Decimal("5")
+
+
 def test_duplicate_manual_sync_returns_existing_active_run(db):
     user = User(username="sync-lock", password_hash="x", role="user", status="active")
     db.add(user); db.commit()

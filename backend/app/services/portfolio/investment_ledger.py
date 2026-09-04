@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session
 
-from app.integrations.ibkr.analytics import CALCULATION_VERSION, decimal_value
+from app.integrations.ibkr.analytics import CALCULATION_VERSION, decimal_value, record_history
 from app.integrations.ibkr.db_models import (
     IbkrAccountDailyPerformance,
     IbkrDividendEvent,
@@ -78,16 +78,8 @@ def govern_manual_transactions(db: Session, portfolio: Portfolio, run: IbkrFlexS
     symbols = {row.symbol for row in authority_positions}
     if not symbols:
         return {"matched_assets": 0, "superseded": 0, "historical_unverified": 0, "unchanged": 0}
-    evidence_symbols = set(db.scalars(select(IbkrFlexRecord.symbol).where(
-        IbkrFlexRecord.sync_run_id == run.id,
-        IbkrFlexRecord.section.in_(("tax_lots", "prior_positions", "fifo_performance")),
-        IbkrFlexRecord.symbol.in_(symbols),
-    )).all())
-    ibkr_trades = list(db.scalars(select(IbkrFlexRecord).where(
-        IbkrFlexRecord.sync_run_id == run.id,
-        IbkrFlexRecord.section == "trades",
-        IbkrFlexRecord.symbol.in_(symbols),
-    )).all())
+    evidence_symbols = set(row.symbol for row in record_history(db, run, ("tax_lots", "prior_positions", "fifo_performance")) if row.symbol in symbols)
+    ibkr_trades = [row for row in record_history(db, run, ("trades",)) if row.symbol in symbols]
     by_symbol: dict[str, list[IbkrFlexRecord]] = defaultdict(list)
     for row in ibkr_trades:
         if row.symbol:
@@ -265,9 +257,7 @@ def position_summaries(db: Session, portfolio: Portfolio, *, cached_fx_only: boo
     totals = _symbol_totals(db, portfolio.user_id, run)
     first_trades: dict[str, datetime | date] = {}
     if run:
-        for row in db.scalars(select(IbkrFlexRecord).where(
-            IbkrFlexRecord.sync_run_id == run.id, IbkrFlexRecord.section == "trades"
-        ).order_by(IbkrFlexRecord.occurred_at, IbkrFlexRecord.report_date)).all():
+        for row in record_history(db, run, ("trades",)):
             if row.symbol and row.symbol not in first_trades:
                 first_trades[row.symbol] = row.occurred_at or row.report_date
     today = datetime.now(UTC).date()
@@ -374,10 +364,9 @@ def transaction_events(
     run = latest_authoritative_run(db, portfolio.user_id)
     events: list[dict] = []
     if run:
-        filters = [IbkrFlexRecord.sync_run_id == run.id, IbkrFlexRecord.section == "trades"]
-        if symbol: filters.append(IbkrFlexRecord.symbol == symbol.upper())
-        if currency: filters.append(IbkrFlexRecord.currency == currency.upper())
-        rows = db.scalars(select(IbkrFlexRecord).where(*filters)).all()
+        rows = [row for row in record_history(db, run, ("trades",))
+                if (not symbol or row.symbol == symbol.upper())
+                and (not currency or row.currency == currency.upper())]
         for row in rows:
             occurred = row.occurred_at or (datetime.combine(row.report_date, datetime.min.time(), tzinfo=UTC) if row.report_date else None)
             if start and (not occurred or occurred.date() < start): continue
@@ -554,10 +543,7 @@ def return_attribution(db: Session, portfolio: Portfolio, *, start: date | None 
     open_symbols = {row.symbol for row in open_positions}
     current_positions = {row["symbol"]: row for row in position_summaries(db, portfolio)}
 
-    trade_rows = list(db.scalars(select(IbkrFlexRecord).where(
-        IbkrFlexRecord.sync_run_id == run.id,
-        IbkrFlexRecord.section == "trades",
-    )).all())
+    trade_rows = record_history(db, run, ("trades",))
     identity_currencies: dict[tuple[str | None, str | None], set[str]] = defaultdict(set)
     symbol_currencies: dict[str, set[str]] = defaultdict(set)
     for row in trade_rows:

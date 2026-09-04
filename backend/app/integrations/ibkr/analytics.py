@@ -129,16 +129,66 @@ def _source_sort_key(row: IbkrFlexRecord) -> tuple[datetime, date, int]:
     return (occurred or datetime.min.replace(tzinfo=UTC), row.report_date or date.min, row.source_index)
 
 
-def _source_rows(db: Session, run: IbkrFlexSyncRun, sections: tuple[str, ...]) -> list[IbkrFlexRecord]:
-    """Window-aware source rows for analytics rebuilds.
+def _history_identity(row: IbkrFlexRecord) -> tuple:
+    fields = row.raw_payload or {}
+    if row.section == "trades":
+        txn = fields.get("transactionID") or fields.get("tradeID")
+        if txn:
+            return ("trade-id", row.account_id, str(txn))
+        return ("trade-sig", row.account_id, row.symbol, row.conid, str(fields.get("buySell") or ""),
+                row.occurred_at.isoformat() if row.occurred_at else None, str(row.quantity), str(row.price))
+    return ("content", row.source_id)
+
+
+def _newest_run_max(rows: list[IbkrFlexRecord]) -> list[IbkrFlexRecord]:
+    """Keep the largest per-report multiplicity, preferring the newest report."""
+    by_run: dict[int, list[IbkrFlexRecord]] = defaultdict(list)
+    for row in rows:
+        by_run[row.sync_run_id or 0].append(row)
+    target = max((len(bucket) for bucket in by_run.values()), default=0)
+    output: list[IbkrFlexRecord] = []
+    kept = 0
+    for run_id in sorted(by_run, reverse=True):
+        take = min(len(by_run[run_id]), target - kept)
+        output.extend(by_run[run_id][:take])
+        kept += take
+        if kept >= target:
+            break
+    return output
+
+
+def _collapse_restatements(rows: list[IbkrFlexRecord]) -> list[IbkrFlexRecord]:
+    """Collapse broker restatements across merged reports.
+
+    The same business event can come back in a later report with slightly
+    different row content — and therefore a different ``source_id`` — so
+    content identity alone would double count it.  A real event appears once
+    in every report covering its date, so the merged multiplicity of an
+    identity is the maximum per-report count, preferring the newest report's
+    rows; summing across reports would count restated rows twice.
+    """
+    groups: dict[tuple, list[IbkrFlexRecord]] = defaultdict(list)
+    for row in rows:
+        groups[_history_identity(row)].append(row)
+    merged: list[IbkrFlexRecord] = []
+    for bucket in groups.values():
+        merged.extend(_newest_run_max(bucket))
+    return merged
+
+
+def record_history(db: Session, run: IbkrFlexSyncRun, sections: tuple[str, ...]) -> list[IbkrFlexRecord]:
+    """Merged, window-proof source rows for a section family.
 
     Flex queries are commonly configured with a rolling period (for example
     ``Last365CalendarDays``), so each new report starts a little later than
-    the previous one.  Rebuilding only from the newest report would silently
-    truncate account history as the window slides.  Rows dated strictly
-    before the current window start are therefore unioned back in from
-    earlier imported runs; ``source_id`` hashes the full row content, so
-    identical rows collapse and the newest report wins any conflict.
+    the previous one.  Reading only the newest report would silently truncate
+    account history as the window slides.  Rows dated strictly before the
+    current window start are therefore unioned back in from earlier imported
+    runs and collapsed by business identity (see ``_collapse_restatements``),
+    with the newest report winning any conflict.  Every IBKR consumer —
+    analytics rebuilds, trade listings, attribution, manual-fact governance —
+    must read through this boundary instead of filtering by ``sync_run_id``
+    directly, so a sliding window never erases or duplicates history.
     """
     current = list(db.scalars(select(IbkrFlexRecord).where(
         IbkrFlexRecord.sync_run_id == run.id, IbkrFlexRecord.section.in_(sections),
@@ -164,12 +214,7 @@ def _source_rows(db: Session, run: IbkrFlexSyncRun, sections: tuple[str, ...]) -
                     ),
                 ),
             ).order_by(IbkrFlexRecord.sync_run_id, IbkrFlexRecord.id)).all())
-    by_source: dict[str, IbkrFlexRecord] = {}
-    for row in prior:
-        by_source[row.source_id] = row
-    current_ids = {row.source_id for row in current}
-    merged = [row for source_id, row in by_source.items() if source_id not in current_ids]
-    merged.extend(current)
+    merged = _collapse_restatements([*prior, *current])
     merged.sort(key=_source_sort_key)
     return merged
 
@@ -180,7 +225,7 @@ def rebuild_cash_flows(db: Session, run: IbkrFlexSyncRun) -> int:
         IbkrNormalizedCashFlow.calculation_version == CALCULATION_VERSION,
     ))
     count = 0
-    source_rows = _source_rows(db, run, ("cash_ledger", "cash_transactions", "transfers", "interest"))
+    source_rows = record_history(db, run, ("cash_ledger", "cash_transactions", "transfers", "interest"))
     portfolio = db.scalar(select(Portfolio).where(Portfolio.user_id == run.user_id, Portfolio.slug == "default"))
     base_currency = portfolio.base_currency if portfolio else None
 
@@ -189,19 +234,23 @@ def rebuild_cash_flows(db: Session, run: IbkrFlexSyncRun) -> int:
     # and a StatementOfFunds BaseCurrency row.  Keep exactly one authoritative
     # representation per transfer, preferring the broker-provided base-currency
     # row.  The group retains multiplicity, so two equal deposits on one day are
-    # still two deposits rather than one.
+    # still two deposits rather than one; merged across reports that
+    # multiplicity is the maximum seen in any single report (restated rows in
+    # older reports must not add to it).
     external_groups: dict[
         tuple[date | None, str, Decimal | None],
         dict[int, list[tuple[Any, Decimal | None, list[str]]]],
     ] = defaultdict(lambda: defaultdict(list))
-    internal_rows: list[tuple[Any, str, bool, str, list[str], Decimal | None]] = []
+    internal_groups: dict[tuple, list[tuple[Any, str, bool, str, list[str], Decimal | None]]] = defaultdict(list)
     for row in source_rows:
         fields = row.raw_payload or {}
         description = row.description or fields.get("activityDescription") or fields.get("description")
         category, external, rule, warnings = classify_cash_flow(fields, description)
         amount = row.amount if row.amount is not None else decimal_value(fields, "amount", "netCash", "netAmount", "credit", "debit")
         if not external:
-            internal_rows.append((row, category, external, rule, warnings, amount))
+            flow_date = row.report_date or date_value(fields, "settleDate", "date", "tradeDate")
+            internal_groups[(flow_date, category, amount, row.currency, row.symbol, row.conid)].append(
+                (row, category, external, rule, warnings, amount))
             continue
         fx_rate = decimal_value(fields, "fxRateToBase")
         level = str(fields.get("levelOfDetail") or "")
@@ -216,10 +265,16 @@ def rebuild_cash_flows(db: Session, run: IbkrFlexSyncRun) -> int:
         priority = 0 if is_base_row else 1 if str(fields.get("sourceTag") or "") == "CashTransaction" else 2
         external_groups[signature][priority].append((row, converted, warnings))
 
-    normalized_rows = internal_rows
+    def keep_newest_run_max(items: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
+        kept_ids = {row.id for row in _newest_run_max([item[0] for item in items])}
+        return [item for item in items if item[0].id in kept_ids]
+
+    normalized_rows: list[tuple[Any, str, bool, str, list[str], Decimal | None]] = []
+    for bucket in internal_groups.values():
+        normalized_rows.extend(keep_newest_run_max(bucket))
     for (_, category, _), representations in external_groups.items():
         priority = min(representations)
-        for row, converted, warnings in representations[priority]:
+        for row, converted, warnings in keep_newest_run_max(representations[priority]):
             fields = row.raw_payload or {}
             description = row.description or fields.get("activityDescription") or fields.get("description")
             _, external, rule, _ = classify_cash_flow(fields, description)
@@ -251,13 +306,31 @@ def rebuild_dividends(db: Session, run: IbkrFlexSyncRun) -> int:
         IbkrDividendEvent.calculation_version == CALCULATION_VERSION,
     ))
     count = 0
-    for row in _source_rows(db, run, ("dividends",)):
+    # The event key is stable business identity, but the same payout can come
+    # back across reports as rows with drifted content (different source_id);
+    # keep the newest report's version of each key so the unique constraint
+    # on (user, event_key, calculation_version) can never be violated.
+    chosen: dict[str, tuple[IbkrFlexRecord, str]] = {}
+    for row in record_history(db, run, ("dividends",)):
         fields = row.raw_payload or {}
         source_tag = str(fields.get("sourceTag") or "")
         code = str(fields.get("code") or fields.get("action") or "").upper()
         status = "reversed" if any(token in code for token in ("REV", "CANCEL", "ADJUST")) else (
             "received" if source_tag == "DividendAccrual" or fields.get("date") else "accrued"
         )
+        gross = decimal_value(fields, "grossAmount", "amount", "dividendAccrualChange")
+        tax = decimal_value(fields, "tax", "withholdingTax")
+        net = decimal_value(fields, "netAmount", "netCash")
+        if net is None and gross is not None and tax is not None:
+            net = gross + tax if tax < 0 else gross - tax
+        event_key = hashlib.sha256("|".join(str(value or "") for value in (
+            row.account_id, row.conid, row.symbol, fields.get("exDate"), fields.get("payDate"), gross, status,
+        )).encode()).hexdigest()[:64]
+        existing = chosen.get(event_key)
+        if existing is None or (row.sync_run_id or 0) >= (existing[0].sync_run_id or 0):
+            chosen[event_key] = (row, status)
+    for row, status in sorted(chosen.values(), key=lambda item: _source_sort_key(item[0])):
+        fields = row.raw_payload or {}
         gross = decimal_value(fields, "grossAmount", "amount", "dividendAccrualChange")
         tax = decimal_value(fields, "tax", "withholdingTax")
         net = decimal_value(fields, "netAmount", "netCash")
@@ -297,14 +370,14 @@ def rebuild_round_trips(db: Session, run: IbkrFlexSyncRun) -> int:
     ))
     securities = {row.ibkr_conid: row.id for row in db.scalars(select(Security).where(Security.ibkr_conid.is_not(None))).all()}
     explicit: dict[str, Decimal] = {}
-    for row in _source_rows(db, run, ("fifo_performance", "tax_lots")):
+    for row in record_history(db, run, ("fifo_performance", "tax_lots")):
         pnl = decimal_value(row.raw_payload, "fifoPnlRealized", "realizedPnl", "mtmPnl", "pnl")
         link = next((str(row.raw_payload.get(key)) for key in ("transactionID", "tradeID", "closingTransactionID") if row.raw_payload.get(key)), None)
         if pnl is not None and link:
             explicit[link] = pnl
     lots: dict[tuple[str | None, str | None], deque[dict[str, Any]]] = defaultdict(deque)
     count = 0
-    for row in _source_rows(db, run, ("trades",)):
+    for row in record_history(db, run, ("trades",)):
         fields = row.raw_payload or {}
         side = _trade_side(fields)
         quantity = abs(row.quantity or decimal_value(fields, "quantity", "tradeQuantity") or ZERO)
@@ -371,7 +444,7 @@ def rebuild_daily_performance(db: Session, run: IbkrFlexSyncRun) -> int:
     portfolio = db.scalar(select(Portfolio).where(Portfolio.user_id == run.user_id, Portfolio.slug == "default"))
     base_currency = portfolio.base_currency if portfolio else None
     candidates_by_date: dict[date, dict[str, Any]] = {}
-    for row in _source_rows(db, run, ("performance",)):
+    for row in record_history(db, run, ("performance",)):
         fields = row.raw_payload or {}
         perf_date = row.report_date or date_value(fields, "reportDate", "date")
         if not perf_date or str(fields.get("sourceTag")) not in {"EquitySummaryByReportDateInBase", "SymbolSummary"}:
@@ -469,7 +542,7 @@ def rebuild_position_performance(db: Session, run: IbkrFlexSyncRun) -> int:
     securities = {row.ibkr_conid: row.id for row in db.scalars(select(Security).where(Security.ibkr_conid.is_not(None))).all()}
     count = 0
     winners: dict[tuple[date, str], tuple[IbkrFlexRecord, date, str]] = {}
-    for row in _source_rows(db, run, ("performance",)):
+    for row in record_history(db, run, ("performance",)):
         fields = row.raw_payload or {}
         perf_date = row.report_date or date_value(fields, "reportDate", "date")
         conid = row.conid or str(fields.get("conid") or "")
