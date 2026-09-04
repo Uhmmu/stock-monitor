@@ -5,6 +5,7 @@ import httpx
 import pytest
 from app.ai.enums import AIErrorCode
 from app.ai.exceptions import AIError, ProviderError
+from app.ai.providers import openai_compatible as openai_compatible_module
 from app.ai.providers.mock import MockProvider
 from app.ai.providers.openai_compatible import OpenAICompatibleProvider
 from app.ai.providers.registry import ProviderRegistry
@@ -135,4 +136,44 @@ def test_openai_stream_retries_recoverable_status_before_emitting():
         events=asyncio.run(collect())
         assert attempts==2 and [event.type for event in events].count("response_started")==1
         assert next(event for event in events if event.type=="text_delta").text_delta=="ok"
+    finally: asyncio.run(client.aclose())
+
+
+def test_openai_stream_fails_fast_on_slow_upstream_errors(monkeypatch):
+    # A gateway 5xx that only arrives after long processing must not be
+    # retried on the same model; the orchestrator's model fallback owns
+    # recovery. Simulate a slow failure by disabling the fast-retry window.
+    monkeypatch.setattr(openai_compatible_module, "STREAM_FAST_RETRY_SECONDS", -1.0)
+    attempts = 0
+    def handler(req):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(500)
+    item, client = provider(handler, retries=2)
+    async def collect():
+        with pytest.raises(ProviderError):
+            async for _ in item.stream_response(request(True)):
+                pass
+    try:
+        asyncio.run(collect())
+        assert attempts == 1
+    finally: asyncio.run(client.aclose())
+
+
+def test_openai_stream_caps_total_attempts_even_with_fast_failures():
+    # Streaming never runs more than one same-model retry regardless of the
+    # configured non-streaming retry budget.
+    attempts = 0
+    def handler(req):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(500)
+    item, client = provider(handler, retries=3)
+    async def collect():
+        with pytest.raises(ProviderError):
+            async for _ in item.stream_response(request(True)):
+                pass
+    try:
+        asyncio.run(collect())
+        assert attempts == 2
     finally: asyncio.run(client.aclose())

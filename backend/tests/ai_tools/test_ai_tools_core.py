@@ -92,7 +92,10 @@ def test_selector_combines_news_with_realtime_market_tools():
         denied_tools=set(),
     )
     assert {"get_latest_news", "search_news"}.issubset(selection.tool_names)
-    assert {"get_realtime_quote", "get_intraday_summary", "get_intraday_bars"}.issubset(selection.tool_names)
+    # News wins the primary slot here; the market domain contributes its
+    # representative realtime pair under the secondary-domain tool limit.
+    assert {"get_realtime_quote", "get_intraday_summary"}.issubset(selection.tool_names)
+    assert "get_intraday_bars" not in selection.tool_names
 
 
 def test_compression_preserves_json_and_enforces_limits():

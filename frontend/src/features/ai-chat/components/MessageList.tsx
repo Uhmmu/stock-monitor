@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { getDeepSearchRun, type AIMessage, type Citation, type ToolActivity as Activity, type WebAccessMode } from '../api'
+import { getDeepSearchRun, type AIMessage, type Citation, type ModelSwitchNotice, type ToolActivity as Activity, type WebAccessMode } from '../api'
 import { SafeMarkdown } from './SafeMarkdown'
 import { ThinkingTimer } from './ThinkingTimer'
 import { ToolActivity } from './ToolActivity'
@@ -9,6 +9,27 @@ import { RichBlockSkeleton, RichContentRenderer } from '../rich-content'
 
 const statusText: Record<string, string> = {
   pending: '准备中…', streaming: '正在生成', partial: '回答未完整生成', failed: '生成失败', cancelled: '已停止生成',
+}
+
+const modelFailureText: Record<string, string> = {
+  AI_PROVIDER_TIMEOUT: '响应超时',
+  AI_PROVIDER_UNAVAILABLE: '服务暂不可用',
+  AI_PROVIDER_RATE_LIMITED: '请求过多被限流',
+  AI_STREAM_INTERRUPTED: '流式连接中断',
+  AI_PROVIDER_AUTH: '鉴权失败',
+  AI_PROVIDER_BAD_RESPONSE: '返回数据异常',
+}
+
+const EMPTY_MODEL_NOTICES: ModelSwitchNotice[] = []
+
+function ModelSwitchNotices({ notices, pending }: { notices: ModelSwitchNotice[]; pending: boolean }) {
+  if (!notices.length) return null
+  return <div className="ai-model-switch" role="status" aria-live="polite">
+    {notices.map((notice, index) => <p key={`${notice.from}-${notice.to}-${index}`}>
+      <span className="ai-model-switch-badge">{pending ? '切换' : '已切换'}</span>
+      {notice.from} {modelFailureText[notice.reason || ''] || '暂时不可用'}，{pending ? '正在改用' : '已改用'} {notice.to} 重试
+    </p>)}
+  </div>
 }
 
 const webModeText: Record<WebAccessMode, string> = {
@@ -41,10 +62,11 @@ function MessageActions({ content, onRegenerate, canRegenerate, assistant, savin
   </div>
 }
 
-function Message({ message, isLatestAssistant, activities, savingDecisionId, onCitation, onRegenerate, onSaveDecision, onShowMemory, onRemember, interrupted }: {
+function Message({ message, isLatestAssistant, activities, modelNotices, savingDecisionId, onCitation, onRegenerate, onSaveDecision, onShowMemory, onRemember, interrupted }: {
   message: AIMessage
   isLatestAssistant: boolean
   activities: Activity[]
+  modelNotices: ModelSwitchNotice[]
   savingDecisionId?: number
   onCitation: (citations: Citation[], key: string) => void
   onRegenerate: (message: AIMessage) => void
@@ -67,6 +89,7 @@ function Message({ message, isLatestAssistant, activities, savingDecisionId, onC
   return <article className={`ai-message assistant-message status-${message.status}`}>
     {message.generation_index > 1 && <div className="ai-message-version">版本 {message.generation_index}</div>}
     <div className={`ai-message-web-mode ${message.web_access_mode}`}>{webModeText[message.web_access_mode]}{message.external_search_cost_usd != null ? ` · $${Number(message.external_search_cost_usd).toFixed(3)}` : ''}</div>
+    {isLatestAssistant && <ModelSwitchNotices notices={modelNotices} pending={pending}/>}
     <ToolActivity records={message.tool_calls} streaming={activities}/>
     {hasContent ? <div className="ai-message-content">
       {message.content_parts
@@ -81,13 +104,14 @@ function Message({ message, isLatestAssistant, activities, savingDecisionId, onC
   </article>
 }
 
-export function MessageList({ messages, loading, hasOlder, loadOlder, loadingOlder, activities, savingDecisionId, onCitation, onRegenerate, onSaveDecision, onShowMemory, onRemember, activeGeneration }: {
+export function MessageList({ messages, loading, hasOlder, loadOlder, loadingOlder, activities, modelNotices, savingDecisionId, onCitation, onRegenerate, onSaveDecision, onShowMemory, onRemember, activeGeneration }: {
   messages: AIMessage[]
   loading: boolean
   hasOlder: boolean
   loadOlder: () => void
   loadingOlder: boolean
   activities: Record<string, Activity[]>
+  modelNotices: ModelSwitchNotice[]
   savingDecisionId?: number
   onCitation: (citations: Citation[], key: string) => void
   onRegenerate: (message: AIMessage) => void
@@ -120,6 +144,7 @@ export function MessageList({ messages, loading, hasOlder, loadOlder, loadingOld
         message={message}
         isLatestAssistant={message.id === latestAssistantId}
         activities={activities[String(message.id)] || []}
+        modelNotices={message.id === latestAssistantId ? modelNotices : EMPTY_MODEL_NOTICES}
         savingDecisionId={savingDecisionId}
         onCitation={onCitation}
         onRegenerate={onRegenerate}

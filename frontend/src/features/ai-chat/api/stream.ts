@@ -3,6 +3,7 @@ import type { AIErrorPayload, AIStreamEvent, MessageCreateRequest } from './type
 
 const KNOWN_EVENTS = new Set([
   'conversation.started', 'message.created', 'response.started', 'context.ready',
+  'model.switched', 'tool.planning',
   'tool.started', 'tool.completed', 'tool.failed', 'response.delta', 'response.reset', 'citation.map',
   'response.block.created', 'response.block.completed', 'response.rich_content.completed',
   'message.persisted', 'response.completed', 'error',

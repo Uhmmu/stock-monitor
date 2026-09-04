@@ -45,6 +45,40 @@ def test_selector_domains(message,expected):
     assert expected <= set(selection.tool_names) and len(selection.tool_names)<=18
 
 
+def test_selector_primary_domain_keeps_full_list_and_secondary_domains_are_trimmed():
+    # A multi-topic question keeps full coverage for its strongest domain but
+    # contributes only the representative tools from every other domain, so
+    # the first-round tool surface (and the model's silent thinking time)
+    # stays bounded.
+    selection = ToolSelector(tool_registry).select(
+        message="看看我的仓位和各个股票的支撑压力",
+        page_context=None,
+        active_symbol=None,
+        allowed_tools=None,
+        denied_tools=set(),
+    )
+    names = set(selection.tool_names)
+    assert {"get_portfolio_summary", "get_portfolio_positions", "get_position_detail"} <= names
+    assert {"get_technical_analysis", "get_technical_levels"} <= names
+    assert "compare_technical_signals" not in names
+    assert "get_latest_price" in names
+
+
+def test_selector_tie_keeps_domain_rule_order_and_page_context_boosts_domain():
+    # "持仓"+"估值" tie at the keyword level, but the portfolio-intent bonus
+    # wins; being on a page adds the same boost for that page's domain.
+    selection = ToolSelector(tool_registry).select(
+        message="结合估值看看",
+        page_context="portfolio",
+        active_symbol="MSFT",
+        allowed_tools=None,
+        denied_tools=set(),
+    )
+    names = set(selection.tool_names)
+    assert {"get_portfolio_summary", "get_portfolio_positions", "get_position_detail"} <= names
+    assert "get_latest_valuation" in names and "compare_valuations" not in names
+
+
 def test_selector_allow_deny_unknown_and_context_builder_injection_boundary():
     selector=ToolSelector(tool_registry)
     selection=selector.select(message="新闻",page_context="news",active_symbol="MSFT",allowed_tools={"get_latest_news","get_latest_price"},denied_tools={"get_latest_price"})

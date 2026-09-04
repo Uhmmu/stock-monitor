@@ -2,12 +2,15 @@ import asyncio
 from datetime import UTC, datetime
 
 from app.ai.budgets import OrchestratorBudget
+from app.ai.providers.base import BaseModelProvider
 from app.ai.providers.mock import MockProvider
 from app.ai.providers.schemas import (
     ProviderMessage,
     ProviderRequest,
     ProviderResponse,
+    ProviderStreamEvent,
     ProviderToolCall,
+    ProviderToolDefinition,
 )
 from app.ai.tool_loop import ToolCallingLoop
 from app.ai_tools.enums import ResultMode, ToolStatus
@@ -73,3 +76,72 @@ def test_empty_response_retries_once():
     provider=MockProvider([ProviderResponse(),ProviderResponse(content="recovered",finish_reason="stop")])
     result=asyncio.run(ToolCallingLoop(Executor()).run(provider=provider,provider_request=provider_request(),tool_context=context(),limits=OrchestratorBudget()))
     assert result.answer=="recovered" and len(provider.requests)==2
+
+
+class ArgumentStreamingProvider(BaseModelProvider):
+    provider_name = "mock"
+
+    def __init__(self, rounds):
+        self.rounds = [list(events) for events in rounds]
+        self.requests = []
+
+    async def create_response(self, request):
+        raise AssertionError("streaming path must not fall back to create_response")
+
+    async def stream_response(self, request):
+        self.requests.append(request.model_copy(deep=True))
+        events = self.rounds.pop(0) if self.rounds else [
+            ProviderStreamEvent(type="response_started"),
+            ProviderStreamEvent(type="text_delta", text_delta="fallback answer"),
+            ProviderStreamEvent(type="response_completed"),
+        ]
+        for event in events:
+            yield event
+
+    def supports_tools(self, model):
+        return True
+
+    def supports_streaming(self, model):
+        return True
+
+
+def test_tool_planning_events_stream_when_tool_names_resolve():
+    definition = ProviderToolDefinition(
+        name="get_latest_price",
+        description="stored price",
+        parameters={"type": "object", "properties": {"symbol": {"type": "string"}}},
+    )
+    events = [
+        ProviderStreamEvent(type="response_started"),
+        ProviderStreamEvent(type="tool_call_arguments_delta", tool_call_id="c1", tool_name="get_lat"),
+        ProviderStreamEvent(type="tool_call_arguments_delta", tool_call_id="c1", tool_name="get_latest_price"),
+        ProviderStreamEvent(type="tool_call_arguments_delta", tool_call_id="c1", tool_name="get_latest_price"),
+        ProviderStreamEvent(type="tool_call_arguments_delta", tool_call_id="c2", tool_name="not_a_real_tool"),
+        ProviderStreamEvent(type="tool_call_completed", tool_call_id="c1", tool_name="get_latest_price", arguments={"symbol": "MSFT"}),
+        ProviderStreamEvent(type="response_completed"),
+    ]
+    final_round = [
+        ProviderStreamEvent(type="response_started"),
+        ProviderStreamEvent(type="text_delta", text_delta="Price fact"),
+        ProviderStreamEvent(type="response_completed"),
+    ]
+    provider = ArgumentStreamingProvider([events, final_round])
+    captured = []
+
+    async def sink(event, data):
+        captured.append((event, data))
+
+    request = ProviderRequest(
+        model="m",
+        messages=[ProviderMessage(role="user", content="u")],
+        tools=[definition],
+    )
+    result = asyncio.run(ToolCallingLoop(Executor()).run(
+        provider=provider, provider_request=request, tool_context=context(),
+        limits=OrchestratorBudget(), event_sink=sink, use_provider_stream=True,
+    ))
+    planning = [data for event, data in captured if event == "tool.planning"]
+    assert planning == [{"tool_call_id": "c1", "tool": "get_latest_price"}]
+    # The round still executes normally after the planning announcements.
+    assert result.answer and result.tool_calls[0].tool == "get_latest_price"
+    assert ("tool.started", {"tool_call_id": "c1", "tool": "get_latest_price"}) in captured

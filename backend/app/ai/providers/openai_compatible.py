@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from time import perf_counter
 from typing import Any
 
 import httpx
@@ -23,6 +24,15 @@ from .schemas import (
 
 def _finish_reason(value: Any) -> str:
     return value if value in {"stop", "tool_calls", "length", "content_filter", "error"} else "unknown"
+
+
+# Streaming attempts fail fast to the orchestrator's model-fallback chain
+# instead of stacking slow same-model retries. Upstream 5xx and read timeouts
+# often take 15s+ per attempt; retrying those up to three times per model
+# multiplied by the fallback chain produced minute-long silent waits. Only
+# failures that happen within this window (connection blips, instant
+# rejections) are worth one same-model retry.
+STREAM_FAST_RETRY_SECONDS = 5.0
 
 
 def _usage(value: dict[str, Any] | None) -> ProviderUsage | None:
@@ -178,7 +188,9 @@ class OpenAICompatibleProvider(BaseModelProvider):
         # cancellation close the upstream connection promptly.
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         payload = self._payload(request, stream=True)
-        for attempt in range(self.max_retries + 1):
+        max_attempts = min(self.max_retries, 1) + 1
+        for attempt in range(max_attempts):
+            attempt_started = perf_counter()
             # OpenAI identifies a streamed tool call by both its position and
             # its stable id. Some compatible gateways incorrectly reuse index
             # 0 for every parallel call, while still returning distinct ids.
@@ -257,7 +269,8 @@ class OpenAICompatibleProvider(BaseModelProvider):
             except asyncio.CancelledError:
                 raise
             except ProviderError as exc:
-                if exc.retryable and not emitted and attempt < self.max_retries:
+                fast_failure = perf_counter() - attempt_started <= STREAM_FAST_RETRY_SECONDS
+                if exc.retryable and not emitted and fast_failure and attempt < max_attempts - 1:
                     await asyncio.sleep(min(0.25 * (2**attempt), 1))
                     continue
                 if emitted:
@@ -265,7 +278,8 @@ class OpenAICompatibleProvider(BaseModelProvider):
                     return
                 raise
             except (httpx.TimeoutException, httpx.RequestError) as exc:
-                if not emitted and attempt < self.max_retries:
+                fast_failure = perf_counter() - attempt_started <= STREAM_FAST_RETRY_SECONDS
+                if not emitted and fast_failure and attempt < max_attempts - 1:
                     await asyncio.sleep(min(0.25 * (2**attempt), 1))
                     continue
                 code = AIErrorCode.provider_timeout if isinstance(exc, httpx.TimeoutException) else AIErrorCode.stream_interrupted

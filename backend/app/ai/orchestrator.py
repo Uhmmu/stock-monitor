@@ -41,7 +41,7 @@ from .tool_loop import ToolCallingLoop
 from .tool_selector import ToolSelector, has_current_portfolio_intent, resolve_tool_intent_message
 
 TOOL_DISPLAY_NAMES = {
-    "get_portfolio_summary": "正在读取组合摘要", "get_position_detail": "正在读取持仓详情",
+    "get_portfolio_summary": "正在读取组合摘要", "get_portfolio_positions": "正在读取持仓列表", "get_position_detail": "正在读取持仓详情",
     "get_latest_news": "正在读取最新新闻", "get_sec_filings": "正在检查 SEC 文件",
     "get_sec_events": "正在检查 SEC 事件", "get_financial_summary": "正在读取财务数据",
     "get_latest_valuation": "正在读取估值快照", "get_technical_analysis": "正在读取技术分析",
@@ -66,6 +66,12 @@ TOOL_DISPLAY_NAMES = {
     "get_mood_validation": "正在读取 Mood 历史验证与校准结果",
 }
 logger = logging.getLogger(__name__)
+
+def _model_failure_reason(exc: Exception) -> str:
+    code = getattr(exc, "code", None)
+    value = getattr(code, "value", None)
+    return value if isinstance(value, str) and value else type(exc).__name__
+
 
 def _needs_current_portfolio_context(request: AIRespondRequest, intent_message: str | None = None) -> bool:
     return (
@@ -314,8 +320,17 @@ class AIOrchestrator:
                 request_id, model, type(primary_error).__name__,
             )
             last_error = primary_error
+            failed_model = model
             for fallback in fallbacks:
                 if event_sink:
+                    # Surface the automatic switch while the user is still
+                    # waiting; without this a fallback is invisible until the
+                    # completed answer finally arrives.
+                    await event_sink("model.switched", {
+                        "from": failed_model,
+                        "to": fallback,
+                        "reason": _model_failure_reason(last_error),
+                    })
                     await event_sink("response.reset", {})
                 try:
                     result, invalid, repaired = await self._execute_once(
@@ -325,6 +340,7 @@ class AIOrchestrator:
                     )
                 except Exception as fallback_error:
                     last_error = fallback_error
+                    failed_model = fallback
                     logger.warning(
                         "ai_model_fallback_failed request_id=%s primary=%s fallback=%s error=%s",
                         request_id, model, fallback, type(fallback_error).__name__,

@@ -200,9 +200,15 @@ export type MessageCreateRequest = {
 export type ToolActivity = {
   tool_call_id: string
   display_name: string
-  status: 'running' | 'completed' | 'failed'
+  status: 'planning' | 'running' | 'completed' | 'failed'
   returned_item_count?: number | null
   summary?: string | null
+}
+
+export type ModelSwitchNotice = {
+  from: string
+  to: string
+  reason?: string
 }
 
 type StreamData = Record<string, unknown>
@@ -211,6 +217,8 @@ export type AIStreamEvent =
   | { type: 'message.created'; data: { user_message: AIMessage; assistant_message: AIMessage } }
   | { type: 'response.started'; data: StreamData }
   | { type: 'context.ready'; data: StreamData }
+  | { type: 'model.switched'; data: { from: string; to: string; reason?: string } }
+  | { type: 'tool.planning'; data: { tool_call_id: string; display_name?: string; tool?: string } }
   | { type: 'tool.started'; data: { tool_call_id: string; display_name?: string; tool?: string } }
   | { type: 'tool.completed'; data: { tool_call_id: string; display_name?: string; status?: string; returned_item_count?: number | null; summary?: string | null } }
   | { type: 'tool.failed'; data: { tool_call_id: string; display_name?: string; status?: string; summary?: string | null } }

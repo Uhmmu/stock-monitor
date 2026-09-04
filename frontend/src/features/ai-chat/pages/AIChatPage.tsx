@@ -342,6 +342,7 @@ export function AIChatPage({ enabled = true }: { enabled?: boolean }) {
         loadOlder={() => messages.fetchNextPage()}
         loadingOlder={messages.isFetchingNextPage}
         activities={stream.activities}
+        modelNotices={stream.modelNotices}
         savingDecisionId={saveDecision.isPending?saveDecision.variables:undefined}
         onCitation={openCitation}
         onRegenerate={regenerate}

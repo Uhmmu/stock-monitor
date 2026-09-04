@@ -69,4 +69,17 @@ describe('AI SSE parser', () => {
       'response.completed',
     ])
   })
+
+  it('forwards tool planning and model switch progress events', async () => {
+    const events = await collect([
+      'event: tool.planning\ndata: {"tool_call_id":"c1","tool":"get_portfolio_summary","display_name":"正在读取组合摘要"}\n\n',
+      'event: model.switched\ndata: {"from":"gpt-5.6-sol","to":"gpt-5.6-terra","reason":"AI_PROVIDER_UNAVAILABLE"}\n\n',
+      'event: response.delta\ndata: {"delta":"答"}\n\n',
+    ])
+    expect(events).toEqual([
+      { type: 'tool.planning', data: { tool_call_id: 'c1', tool: 'get_portfolio_summary', display_name: '正在读取组合摘要' } },
+      { type: 'model.switched', data: { from: 'gpt-5.6-sol', to: 'gpt-5.6-terra', reason: 'AI_PROVIDER_UNAVAILABLE' } },
+      { type: 'response.delta', data: { delta: '答' } },
+    ])
+  })
 })

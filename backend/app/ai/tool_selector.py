@@ -73,6 +73,13 @@ PREFERRED = {
     ],
 }
 
+# Prompt-side tool definitions are a major driver of the model's silent
+# thinking time before its first output token. Only the strongest matched
+# domain contributes its full tool list; every other domain contributes its
+# most representative tools so multi-topic questions stay covered without
+# ballooning the first-round tool surface.
+SECONDARY_DOMAIN_TOOL_LIMIT = 2
+
 
 PERSONAL_POSITION_TERMS = (
     "我的股票", "我的个股", "我的证券", "我的标的", "我持有", "我买的",
@@ -152,24 +159,33 @@ class ToolSelector:
                 selected.append(name); reasons[name] = reason
 
         text = message.casefold()
-        domains = [
-            domain
-            for domain, words in DOMAIN_RULES.items()
-            if (domain == "crypto" and has_crypto_symbol(text)) or any(word in text for word in words)
-        ]
-        if (active_symbol or "").upper() in CRYPTO_ASSET_SYMBOLS and "crypto" not in domains:
-            domains.insert(0, "crypto")
-        if has_current_portfolio_intent(message) and "portfolio" not in domains:
-            domains.insert(0, "portfolio")
-        if page_context in PREFERRED and page_context not in domains:
-            domains.append(page_context)
+        domain_order = list(DOMAIN_RULES)
+        strength: dict[str, int] = {}
+        for domain, words in DOMAIN_RULES.items():
+            score = sum(1 for word in words if word in text)
+            if domain == "crypto" and has_crypto_symbol(text):
+                score += 1
+            if score:
+                strength[domain] = score
+        if (active_symbol or "").upper() in CRYPTO_ASSET_SYMBOLS:
+            strength["crypto"] = strength.get("crypto", 0) + 2
+        if has_current_portfolio_intent(message):
+            strength["portfolio"] = strength.get("portfolio", 0) + 2
+        if page_context in PREFERRED:
+            strength[page_context] = strength.get(page_context, 0) + 2
+        if "mood" in strength:
+            strength["mood"] += 2
+        domains = sorted(strength, key=lambda name: (-strength[name], domain_order.index(name)))
         if "mood" in domains:
-            domains.insert(0, domains.pop(domains.index("mood")))
+            domains.remove("mood")
+            domains.insert(0, "mood")
         if not domains:
             domains = ["company", "market"]
-        for domain in domains:
-            for name in PREFERRED[domain]:
-                add(name, f"matched {domain} intent")
+        for position, domain in enumerate(domains):
+            names = PREFERRED[domain] if position == 0 else PREFERRED[domain][:SECONDARY_DOMAIN_TOOL_LIMIT]
+            reason = f"matched {domain} intent" if position == 0 else f"matched {domain} intent (secondary)"
+            for name in names:
+                add(name, reason)
         for name in ("get_company_snapshot", "get_company_profile", "get_latest_price"):
             add(name, "baseline company context")
         external = {

@@ -11,6 +11,7 @@ import {
   type AIStreamEvent,
   type ConversationCreateRequest,
   type MessageCreateRequest,
+  type ModelSwitchNotice,
   type ToolActivity,
   type WebAccessMode,
 } from '../api'
@@ -66,6 +67,7 @@ export function useAIStream({ conversationId, onConversationCreated }: {
   const [error, setError] = useState<string | null>(null)
   const [localMessages, setLocalMessages] = useState<AIMessage[]>([])
   const [activities, setActivities] = useState<Record<string, ToolActivity[]>>({})
+  const [modelNotices, setModelNotices] = useState<ModelSwitchNotice[]>([])
   const [deepRunId, setDeepRunId] = useState<string | null>(null)
   const controller = useRef<AbortController | null>(null)
   const activeConversation = useRef<number | null>(null)
@@ -93,11 +95,21 @@ export function useAIStream({ conversationId, onConversationCreated }: {
     if (!event.type.startsWith('tool.') || activeAssistant.current == null) return
     const data = event.data as { tool_call_id: string; display_name?: string; returned_item_count?: number | null; summary?: string | null }
     const key = String(activeAssistant.current)
-    const status = event.type === 'tool.started' ? 'running' : event.type === 'tool.failed' ? 'failed' : 'completed'
+    const status: ToolActivity['status'] = event.type === 'tool.planning' ? 'planning' : event.type === 'tool.started' ? 'running' : event.type === 'tool.failed' ? 'failed' : 'completed'
     setActivities(values => {
       const items = values[key] || []
       const next: ToolActivity = { tool_call_id: data.tool_call_id, display_name: data.display_name || '读取研究数据', status, returned_item_count: data.returned_item_count, summary: data.summary }
       return { ...values, [key]: items.some(item => item.tool_call_id === next.tool_call_id) ? items.map(item => item.tool_call_id === next.tool_call_id ? next : item) : [...items, next] }
+    })
+  }, [])
+
+  const clearPlanningActivities = useCallback(() => {
+    const key = activeAssistant.current
+    if (key == null) return
+    setActivities(values => {
+      const items = values[key]
+      if (!items || !items.some(item => item.status === 'planning')) return values
+      return { ...values, [key]: items.filter(item => item.status !== 'planning') }
     })
   }, [])
 
@@ -118,10 +130,15 @@ export function useAIStream({ conversationId, onConversationCreated }: {
         })
       } else if (event.type === 'response.started') {
         setState('streaming')
+      } else if (event.type === 'model.switched') {
+        const data = event.data as ModelSwitchNotice
+        setModelNotices(notices => notices.some(item => item.from === data.from && item.to === data.to) ? notices : [...notices, { from: data.from, to: data.to, reason: data.reason }])
       } else if (event.type === 'response.delta') {
+        clearPlanningActivities()
         scheduleDelta(event.data.delta)
       } else if (event.type === 'response.reset') {
         flushDelta()
+        clearPlanningActivities()
         const id = activeAssistant.current
         setLocalMessages(items => items.map(item => item.id === id ? { ...item, content: '' } : item))
       } else if (event.type === 'citation.map' && activeAssistant.current != null) {
@@ -157,6 +174,7 @@ export function useAIStream({ conversationId, onConversationCreated }: {
         setLocalMessages(items => persistAssistantMessage(items, id, activeConversation.current, event.data.assistant_message_id, event.data.status))
       } else if (event.type === 'response.completed') {
         flushDelta()
+        clearPlanningActivities()
         const id = activeAssistant.current
         setLocalMessages(items => items.map(item => item.id === id ? {
           ...item,
@@ -171,6 +189,7 @@ export function useAIStream({ conversationId, onConversationCreated }: {
         terminal = true
       } else if (event.type === 'error') {
         flushDelta()
+        clearPlanningActivities()
         const id = activeAssistant.current
         setLocalMessages(items => items.map(item => item.id === id ? { ...item, status: item.content ? 'partial' : 'failed', error_code: event.data.code, error_message_safe: event.data.message } : item))
         setError(friendlyError(new AIAPIError(event.data.message, event.data.code, 0, event.data.retryable)))
@@ -178,7 +197,7 @@ export function useAIStream({ conversationId, onConversationCreated }: {
         terminal = true
       }
     }
-  }, [flushDelta, scheduleDelta, updateActivity])
+  }, [clearPlanningActivities, flushDelta, scheduleDelta, updateActivity])
 
   const finalizeRequest = useCallback(async (id: number) => {
     await Promise.all([
@@ -193,6 +212,7 @@ export function useAIStream({ conversationId, onConversationCreated }: {
     activeConversation.current = id
     setState('connecting')
     setError(null)
+    setModelNotices([])
     try {
       await consume(source(controller.current.signal), controller.current.signal)
     } catch (caught) {
@@ -281,5 +301,5 @@ export function useAIStream({ conversationId, onConversationCreated }: {
     if (id != null) void stopGeneration(id).catch(() => undefined)
   }, [])
 
-  return { state, error, localMessages, activities, deepRunId, send, regenerate, stop, clearPersisted, setError }
+  return { state, error, localMessages, activities, modelNotices, deepRunId, send, regenerate, stop, clearPersisted, setError }
 }

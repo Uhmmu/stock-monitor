@@ -135,12 +135,29 @@ class ToolCallingLoop:
         if not stream or not provider.supports_streaming(request.model):
             return await provider.create_response(request)
         content: list[str] = []; calls: list[ProviderToolCall] = []; usage = None; response_id = None
+        # The model streams tool-call arguments before the round completes.
+        # Announcing the recognized tool name as soon as it is fully known
+        # keeps the client informed during an otherwise silent phase.
+        announced_tools: set[str] = set()
+        known_tool_names = {tool.name for tool in request.tools}
         async for event in provider.stream_response(request.model_copy(update={"stream": True})):
             response_id = event.response_id or response_id
             if event.type == "text_delta" and event.text_delta:
                 content.append(event.text_delta)
                 if event_sink:
                     await event_sink("response.delta", {"delta": event.text_delta})
+            elif event.type == "tool_call_arguments_delta":
+                if (
+                    event_sink
+                    and event.tool_name
+                    and event.tool_name in known_tool_names
+                    and event.tool_name not in announced_tools
+                ):
+                    announced_tools.add(event.tool_name)
+                    await event_sink(
+                        "tool.planning",
+                        {"tool_call_id": event.tool_call_id, "tool": event.tool_name},
+                    )
             elif event.type == "tool_call_completed" and event.tool_call_id and event.tool_name:
                 calls.append(ProviderToolCall(id=event.tool_call_id, name=event.tool_name, arguments=event.arguments or {}))
             elif event.type == "usage":

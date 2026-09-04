@@ -925,3 +925,6 @@
 [data-theme="dark"] .about-dashboard-link:hover,[data-theme="dark"] .about-dashboard-link:focus-visible{color:#6cb6ff}
 [data-theme="dark"] .decision-page-heading>div>span{color:#a1a1a6}
 [data-theme="dark"] .decision-page-heading p{color:#b39ddb}
+/* Chat model-switch notice: lift the amber badge and border for dark surfaces. */
+[data-theme="dark"] .ai-model-switch p{background:rgba(255,159,10,.14);border-color:rgba(255,159,10,.30);color:#c7c7cc}
+[data-theme="dark"] .ai-model-switch-badge{background:rgba(255,159,10,.22);color:#ffb340}

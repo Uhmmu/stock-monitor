@@ -152,6 +152,129 @@ def test_orchestrator_tries_terra_before_cross_provider_fallback_for_sol():
             setattr(settings, field, value)
 
 
+def test_orchestrator_stream_emits_model_switched_events_while_waiting():
+    class FlakySolProvider(MockProvider):
+        async def create_response(self, request):
+            self.requests.append(request.model_copy(deep=True))
+            if request.model == "gpt-5.6-sol":
+                raise ProviderError(
+                    AIErrorCode.provider_unavailable,
+                    "temporary failure",
+                    retryable=True,
+                    status_code=503,
+                )
+            return ProviderResponse(content="Terra 正常回答", finish_reason="stop")
+
+    provider = FlakySolProvider()
+    settings = get_settings()
+    fields = ("ai_provider", "ai_model", "ai_allowed_models", "ai_enabled", "ai_api_base", "ai_api_key")
+    old = tuple(getattr(settings, field) for field in fields)
+    settings.ai_provider = "mock"
+    settings.ai_model = "gpt-5.6-sol"
+    settings.ai_allowed_models = "gpt-5.6-sol,gpt-5.6-terra"
+    settings.ai_enabled = True
+    settings.ai_api_base = "https://gpt.test/v1"
+    settings.ai_api_key = "gpt-key"
+    providers = ProviderRegistry()
+    providers.register(provider)
+    try:
+        async def collect():
+            orchestrator = AIOrchestrator(registry=tool_registry, executor=Executor(), provider_registry=providers)
+            return [
+                event
+                async for event in orchestrator.stream(
+                    request=AIRespondRequest(message="hello", stream=True),
+                    user=SimpleNamespace(id=1), request_id="switched",
+                )
+            ]
+        events = asyncio.run(collect())
+        switched = [event for event in events if event.type == "model.switched"]
+        assert len(switched) == 1
+        assert switched[0].data == {
+            "from": "gpt-5.6-sol",
+            "to": "gpt-5.6-terra",
+            "reason": "AI_PROVIDER_UNAVAILABLE",
+        }
+        types = [event.type for event in events]
+        assert types.index("model.switched") < types.index("response.delta")
+        assert types.index("response.reset") < types.index("response.delta")
+        assert types[-1] == "response.completed"
+    finally:
+        for field, value in zip(fields, old, strict=True):
+            setattr(settings, field, value)
+
+
+def test_orchestrator_stream_chains_switch_events_across_fallbacks():
+    seen_models = []
+
+    class FailingGptMock(MockProvider):
+        async def create_response(self, request):
+            self.requests.append(request.model_copy(deep=True))
+            seen_models.append(request.model)
+            raise ProviderError(
+                AIErrorCode.provider_timeout,
+                "upstream timeout",
+                retryable=True,
+                status_code=504,
+            )
+
+    class ClaudeMock(MockProvider):
+        provider_name = "claude_compatible"
+
+        async def create_response(self, request):
+            self.requests.append(request.model_copy(deep=True))
+            seen_models.append(request.model)
+            if request.model != "claude-opus-5":
+                raise ProviderError(
+                    AIErrorCode.provider_timeout,
+                    "upstream timeout",
+                    retryable=True,
+                    status_code=504,
+                )
+            return ProviderResponse(content="Opus 正常回答", finish_reason="stop")
+
+    provider = FailingGptMock()
+    claude_provider = ClaudeMock()
+    settings = get_settings()
+    fields = (
+        "ai_provider", "ai_model", "ai_allowed_models", "ai_enabled", "ai_api_base", "ai_api_key",
+        "translation_base_url", "translation_api_key",
+    )
+    old = tuple(getattr(settings, field) for field in fields)
+    settings.ai_provider = "mock"
+    settings.ai_model = "gpt-5.6-sol"
+    settings.ai_allowed_models = "gpt-5.6-sol,gpt-5.6-terra,claude-opus-5"
+    settings.ai_enabled = True
+    settings.ai_api_base = "https://gpt.test/v1"
+    settings.ai_api_key = "gpt-key"
+    settings.translation_base_url = "https://claude.test/v1"
+    settings.translation_api_key = "claude-key"
+    providers = ProviderRegistry()
+    providers.register(provider)
+    providers.register(claude_provider)
+    try:
+        async def collect():
+            orchestrator = AIOrchestrator(registry=tool_registry, executor=Executor(), provider_registry=providers)
+            return [
+                event
+                async for event in orchestrator.stream(
+                    request=AIRespondRequest(message="hello", stream=True),
+                    user=SimpleNamespace(id=1), request_id="chain",
+                )
+            ]
+        events = asyncio.run(collect())
+        switched = [event.data for event in events if event.type == "model.switched"]
+        assert switched == [
+            {"from": "gpt-5.6-sol", "to": "gpt-5.6-terra", "reason": "AI_PROVIDER_TIMEOUT"},
+            {"from": "gpt-5.6-terra", "to": "claude-opus-5", "reason": "AI_PROVIDER_TIMEOUT"},
+        ]
+        assert seen_models == ["gpt-5.6-sol", "gpt-5.6-terra", "claude-opus-5"]
+        assert [event.type for event in events][-1] == "response.completed"
+    finally:
+        for field, value in zip(fields, old, strict=True):
+            setattr(settings, field, value)
+
+
 def test_orchestrator_stream_events():
     stream_provider=MockProvider([ProviderResponse(content="直接回答",finish_reason="stop")]); settings,old,providers=configure_mock(stream_provider)
     async def collect():
