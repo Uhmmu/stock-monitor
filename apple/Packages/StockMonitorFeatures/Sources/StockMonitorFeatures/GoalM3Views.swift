@@ -616,7 +616,7 @@ private struct NewsReader: View {
                         Button("生成一次 AI 摘要", action: summarize).buttonStyle(.borderedProminent); Text(item.summary ?? "正文与摘要数据不足").foregroundStyle(.secondary)
                     }
                     if let analysis = item.aiAnalysis {
-                        Text("分析").font(.headline); SafeMarkdownText(analysis)
+                        Text("分析").font(.headline); SafeMarkdownText(analysis.displayText)
                     }
                 }.padding(28).frame(maxWidth: 820, alignment: .leading)
             }

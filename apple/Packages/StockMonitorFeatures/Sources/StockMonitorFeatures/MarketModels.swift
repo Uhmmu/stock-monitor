@@ -352,6 +352,58 @@ public struct InvestigationItem: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public indirect enum JSONValue: Codable, Equatable, Sendable {
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case null
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+        } else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported JSON value")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case let .object(value): try container.encode(value)
+        case let .array(value): try container.encode(value)
+        case let .string(value): try container.encode(value)
+        case let .number(value): try container.encode(value)
+        case let .bool(value): try container.encode(value)
+        case .null: try container.encodeNil()
+        }
+    }
+
+    public var displayText: String {
+        switch self {
+        case let .string(value): value
+        case let .number(value): value.formatted()
+        case let .bool(value): value ? "是" : "否"
+        case .null: "数据不足"
+        case let .array(values): values.map { "- \($0.displayText)" }.joined(separator: "\n")
+        case let .object(values):
+            values.keys.sorted().map { "**\($0)**：\(values[$0]?.displayText ?? "数据不足")" }.joined(separator: "\n\n")
+        }
+    }
+}
+
 public struct NewsItem: Codable, Equatable, Identifiable, Sendable {
     public let id: Int
     public let ticker: String?
@@ -365,7 +417,7 @@ public struct NewsItem: Codable, Equatable, Identifiable, Sendable {
     public let publishedAt: String?
     public let foundAt: String
     public let aiSummary: String?
-    public let aiAnalysis: String?
+    public let aiAnalysis: JSONValue?
     public let aiSummaryStatus: String?
     public let aiSummaryGeneratedAt: String?
 
@@ -404,7 +456,7 @@ public struct MarketNewsPage: Codable, Equatable, Sendable {
 }
 
 public struct CalendarEvent: Codable, Equatable, Identifiable, Sendable {
-    public let id: Int
+    public let id: String
     public let eventType: String
     public let symbol: String?
     public let companyName: String?
@@ -415,7 +467,7 @@ public struct CalendarEvent: Codable, Equatable, Identifiable, Sendable {
     public let timeStatus: String
     public let isConfirmed: Bool
     public let isEstimated: Bool
-    public let confidence: Double?
+    public let confidence: String?
     public let impactLevel: String
     public let primarySource: String
     public let hasConflict: Bool

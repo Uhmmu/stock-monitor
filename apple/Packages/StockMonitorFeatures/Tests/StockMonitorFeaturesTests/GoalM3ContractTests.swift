@@ -45,7 +45,8 @@ import Testing
       "items":[{
         "id":1,"ticker":null,"provider":"finnhub","title":"Market","translated_title":null,
         "url":"https://example.com/a","source":"wire","summary":null,"topic":"macro","published_at":null,
-        "found_at":"2026-09-05T12:00:00+00:00","ai_summary":null,"ai_analysis":null,
+        "found_at":"2026-09-05T12:00:00+00:00","ai_summary":null,
+        "ai_analysis":{"event_type":"macro","confidence":0.82,"risks":["rates","fx"]},
         "ai_summary_status":"pending","ai_summary_generated_at":null
       }],
       "total":1,"generated_at":"2026-09-05T12:01:00+00:00","last_updated_at":"2026-09-05T12:00:00+00:00","sources":["finnhub"]
@@ -54,13 +55,14 @@ import Testing
     let page = try JSONDecoder().decode(MarketNewsPage.self, from: news)
     #expect(page.items.first?.displayTitle == "Market")
     #expect(page.sources == ["finnhub"])
+    #expect(page.items.first?.aiAnalysis?.displayText.contains("event_type") == true)
 
     let calendar = Data(#"""
     {
       "items":[{
-        "id":2,"event_type":"earnings","symbol":"AAPL","company_name":"Apple","title":"财报","description":null,
+        "id":"earnings:AAPL:2026-09-10","event_type":"earnings","symbol":"AAPL","company_name":"Apple","title":"财报","description":null,
         "event_date":"2026-09-10","event_time":null,"time_status":"unknown","is_confirmed":false,
-        "is_estimated":true,"confidence":0.7,"impact_level":"high","primary_source":"yahoo","has_conflict":false,
+        "is_estimated":true,"confidence":"high","impact_level":"high","primary_source":"yahoo","has_conflict":false,
         "portfolio_relevance":true,"watchlist_relevance":true,"fetched_at":"2026-09-05T12:00:00+00:00",
         "stale":true,"warning":"当前展示最近一次有效缓存。"
       }],
@@ -70,4 +72,6 @@ import Testing
     let events = try JSONDecoder().decode(CalendarPage.self, from: calendar)
     #expect(events.items.first?.stale == true)
     #expect(events.items.first?.primarySource == "yahoo")
+    #expect(events.items.first?.id == "earnings:AAPL:2026-09-10")
+    #expect(events.items.first?.confidence == "high")
 }
