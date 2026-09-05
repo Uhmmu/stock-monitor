@@ -90,12 +90,14 @@ public struct TechnicalAnalysisView: View {
     @State private var symbol = ""
     @State private var newAlertTarget = ""
     @State private var newAlertDirection = "above"
-    let initialSymbol: String
+    let initialSymbol: String?
+    let tickerContext: CompanyTickerContext
 
-    init(model: TechnicalAnalysisModel, symbol: String) {
+    init(model: TechnicalAnalysisModel, tickerContext: CompanyTickerContext, symbol: String?) {
         _model = State(initialValue: model)
-        _symbol = State(initialValue: symbol)
+        _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
+        self.tickerContext = tickerContext
     }
 
     public var body: some View {
@@ -105,8 +107,14 @@ public struct TechnicalAnalysisView: View {
                     HStack {
                         M4SectionHeader("技术分析", subtitle: "打开图表不触发任何上游行情或付费请求")
                         Spacer()
-                        TextField("代码", text: $symbol).textFieldStyle(.roundedBorder).frame(width: 110)
-                        Button("查询") { Task { await model.load(symbol: symbol) } }.buttonStyle(.borderedProminent)
+                        CompanySymbolBar(
+                            context: tickerContext,
+                            service: model.service,
+                            symbol: $symbol,
+                            initialSymbol: initialSymbol
+                        ) { value in
+                            await model.load(symbol: value)
+                        }
                     }
                     if let detail = model.detail {
                         headerStrip(detail)
@@ -124,10 +132,12 @@ public struct TechnicalAnalysisView: View {
         }
         .navigationTitle("技术分析")
         .task {
-            symbol = initialSymbol
-            await model.load(symbol: symbol)
+            guard let resolved = await tickerContext.resolveAfterLoad(service: model.service, preferred: initialSymbol) else { return }
+            symbol = resolved
+            await model.load(symbol: resolved)
         }
         .onChange(of: initialSymbol) { _, value in
+            guard let value, tickerContext.symbols.contains(value) else { return }
             symbol = value
             Task { await model.load(symbol: value) }
         }

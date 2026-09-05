@@ -71,12 +71,14 @@ public final class SecModel {
 public struct SecView: View {
     @State private var model: SecModel
     @State private var symbol = ""
-    let initialSymbol: String
+    let initialSymbol: String?
+    let tickerContext: CompanyTickerContext
 
-    init(model: SecModel, symbol: String) {
+    init(model: SecModel, tickerContext: CompanyTickerContext, symbol: String?) {
         _model = State(initialValue: model)
-        _symbol = State(initialValue: symbol)
+        _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
+        self.tickerContext = tickerContext
     }
 
     public var body: some View {
@@ -85,8 +87,14 @@ public struct SecView: View {
                 HStack {
                     M4SectionHeader("SEC 官方数据", subtitle: "结构化 filing item 映射；原文与 LLM 不参与事件判定")
                     Spacer()
-                    TextField("代码", text: $symbol).textFieldStyle(.roundedBorder).frame(width: 110)
-                    Button("查询") { Task { await model.load(symbol: symbol) } }.buttonStyle(.borderedProminent)
+                    CompanySymbolBar(
+                        context: tickerContext,
+                        service: model.service,
+                        symbol: $symbol,
+                        initialSymbol: initialSymbol
+                    ) { value in
+                        await model.load(symbol: value)
+                    }
                     Button("刷新") { Task { await model.refresh(symbol: symbol) } }
                 }
                 .padding(.horizontal, 20).padding(.top, 16)
@@ -109,10 +117,12 @@ public struct SecView: View {
         }
         .navigationTitle("SEC")
         .task {
-            symbol = initialSymbol
-            await model.load(symbol: symbol)
+            guard let resolved = await tickerContext.resolveAfterLoad(service: model.service, preferred: initialSymbol) else { return }
+            symbol = resolved
+            await model.load(symbol: resolved)
         }
         .onChange(of: initialSymbol) { _, value in
+            guard let value, tickerContext.symbols.contains(value) else { return }
             symbol = value
             Task { await model.load(symbol: value) }
         }

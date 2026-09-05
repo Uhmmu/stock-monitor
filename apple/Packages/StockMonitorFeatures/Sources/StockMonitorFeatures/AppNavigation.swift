@@ -76,7 +76,7 @@ public enum AppRoute: String, CaseIterable, Codable, Hashable, Identifiable, Sen
     /// Goal M4（公司研究、技术分析图表、市场情报）已接入原生页面。
     public var isGoalM4Route: Bool {
         [
-            .fundamentals, .financials, .valuation, .compare, .sec, .congress,
+            .fundamentals, .financials, .valuation, .compare, .sec, .ownership, .congress,
             .technical, .macro, .industry, .options, .mood, .moodLab,
         ].contains(self)
     }

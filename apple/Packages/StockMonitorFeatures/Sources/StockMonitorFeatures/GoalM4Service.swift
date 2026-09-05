@@ -103,6 +103,13 @@ public actor ResearchWorkspaceService {
         )
     }
 
+    /// 公司研究页的证券集合：服务端对研究端点做全局自选门控
+    /// （`_require_watched_ticker`），未入库代码一律 404，因此默认代码必须来自自选列表。
+    public func watchlistSymbols() async throws -> [String] {
+        let items = try await authSession.authorizedGet([WatchlistItem].self, path: "/api/watchlist")
+        return items.compactMap(\.ticker).filter { !$0.isEmpty }
+    }
+
     public func companyProfile(symbol: String) async throws -> CompanyProfileOut {
         try await authSession.authorizedGet(CompanyProfileOut.self, path: "/api/company-profile/\(symbol)")
     }

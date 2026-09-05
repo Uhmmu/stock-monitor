@@ -8,6 +8,7 @@ public struct GoalM4RouteView: View {
     @Bindable public var navigation: AppNavigationModel
     public let service: ResearchWorkspaceService
     public let openStock: (String) -> Void
+    @State private var tickerContext = CompanyTickerContext()
 
     public init(route: AppRoute, navigation: AppNavigationModel, service: ResearchWorkspaceService, openStock: @escaping (String) -> Void) {
         self.route = route
@@ -19,19 +20,25 @@ public struct GoalM4RouteView: View {
     public var body: some View {
         switch route {
         case .fundamentals:
-            FundamentalsView(model: FundamentalsModel(service: service), symbol: activeSymbol)
+            FundamentalsView(model: FundamentalsModel(service: service), tickerContext: tickerContext, symbol: activeSymbol)
         case .financials:
-            FinancialsView(model: FinancialsModel(service: service), symbol: activeSymbol)
+            FinancialsView(model: FinancialsModel(service: service), tickerContext: tickerContext, symbol: activeSymbol)
         case .valuation:
-            ValuationView(model: ValuationModel(service: service), symbol: activeSymbol)
+            ValuationView(model: ValuationModel(service: service), tickerContext: tickerContext, symbol: activeSymbol)
         case .compare:
             CompareView(model: CompareModel(service: service), openStock: openStock)
         case .sec:
-            SecView(model: SecModel(service: service), symbol: activeSymbol)
+            SecView(model: SecModel(service: service), tickerContext: tickerContext, symbol: activeSymbol)
+        case .ownership:
+            OwnershipView(
+                model: OwnershipModel(service: service),
+                tickerContext: tickerContext,
+                symbol: navigation.selectedSymbol
+            )
         case .congress:
             CongressView(model: CongressModel(service: service), openStock: openStock)
         case .technical:
-            TechnicalAnalysisView(model: TechnicalAnalysisModel(service: service), symbol: activeSymbol)
+            TechnicalAnalysisView(model: TechnicalAnalysisModel(service: service), tickerContext: tickerContext, symbol: activeSymbol)
         case .macro:
             MacroView(model: MacroModel(service: service))
         case .industry:
@@ -135,7 +142,7 @@ public final class FundamentalsModel {
     public private(set) var state: ResourcePresentationState = .loading
     public private(set) var response: FundamentalsResponse?
     public private(set) var error: M3FeatureError?
-    private let service: ResearchWorkspaceService
+    public let service: ResearchWorkspaceService
 
     public init(service: ResearchWorkspaceService) {
         self.service = service
@@ -157,12 +164,14 @@ public final class FundamentalsModel {
 public struct FundamentalsView: View {
     @State private var model: FundamentalsModel
     @State private var symbol = ""
-    let initialSymbol: String
+    let initialSymbol: String?
+    let tickerContext: CompanyTickerContext
 
-    init(model: FundamentalsModel, symbol: String) {
+    init(model: FundamentalsModel, tickerContext: CompanyTickerContext, symbol: String?) {
         _model = State(initialValue: model)
-        _symbol = State(initialValue: symbol)
+        _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
+        self.tickerContext = tickerContext
     }
 
     public var body: some View {
@@ -172,8 +181,14 @@ public struct FundamentalsView: View {
                     HStack {
                         M4SectionHeader("基本面指标", subtitle: "Yahoo 为主数据源，Finnhub 仅作可选补充")
                         Spacer()
-                        TextField("代码", text: $symbol).textFieldStyle(.roundedBorder).frame(width: 110)
-                        Button("查询") { Task { await model.load(symbol: symbol) } }.buttonStyle(.borderedProminent)
+                        CompanySymbolBar(
+                            context: tickerContext,
+                            service: model.service,
+                            symbol: $symbol,
+                            initialSymbol: initialSymbol
+                        ) { value in
+                            await model.load(symbol: value)
+                        }
                     }
                     if let response = model.response {
                         headerStrip(response)
@@ -191,8 +206,13 @@ public struct FundamentalsView: View {
             .refreshable { await model.load(symbol: symbol) }
         }
         .navigationTitle("基本面")
-        .task { symbol = initialSymbol; await model.load(symbol: symbol) }
+        .task {
+            guard let resolved = await tickerContext.resolveAfterLoad(service: model.service, preferred: initialSymbol) else { return }
+            symbol = resolved
+            await model.load(symbol: resolved)
+        }
         .onChange(of: initialSymbol) { _, value in
+            guard let value, tickerContext.symbols.contains(value) else { return }
             symbol = value
             Task { await model.load(symbol: value) }
         }
@@ -263,7 +283,7 @@ public final class FinancialsModel {
     public private(set) var statements: FinancialStatementPage?
     public private(set) var frequency = "annual"
     public private(set) var error: M3FeatureError?
-    private let service: ResearchWorkspaceService
+    public let service: ResearchWorkspaceService
 
     public init(service: ResearchWorkspaceService) {
         self.service = service
@@ -292,7 +312,7 @@ public struct FinancialsView: View {
     @State private var symbol = ""
     @State private var frequency = "annual"
     @State private var statementKind = StatementKind.income
-    let initialSymbol: String
+    let initialSymbol: String?
 
     enum StatementKind: String, CaseIterable, Identifiable {
         case income = "利润表"
@@ -303,10 +323,13 @@ public struct FinancialsView: View {
         }
     }
 
-    init(model: FinancialsModel, symbol: String) {
+    let tickerContext: CompanyTickerContext
+
+    init(model: FinancialsModel, tickerContext: CompanyTickerContext, symbol: String?) {
         _model = State(initialValue: model)
-        _symbol = State(initialValue: symbol)
+        _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
+        self.tickerContext = tickerContext
     }
 
     public var body: some View {
@@ -316,8 +339,14 @@ public struct FinancialsView: View {
                     HStack {
                         M4SectionHeader("财务数据", subtitle: "季度指标来自最新四期；三表为服务端已存 Yahoo 快照")
                         Spacer()
-                        TextField("代码", text: $symbol).textFieldStyle(.roundedBorder).frame(width: 110)
-                        Button("查询") { Task { await model.load(symbol: symbol, frequency: frequency) } }.buttonStyle(.borderedProminent)
+                        CompanySymbolBar(
+                            context: tickerContext,
+                            service: model.service,
+                            symbol: $symbol,
+                            initialSymbol: initialSymbol
+                        ) { value in
+                            await model.load(symbol: value, frequency: frequency)
+                        }
                     }
                     quarterlyTable
                     Divider()
@@ -349,10 +378,12 @@ public struct FinancialsView: View {
         }
         .navigationTitle("财务报表")
         .task {
-            symbol = initialSymbol
-            await model.load(symbol: symbol, frequency: frequency)
+            guard let resolved = await tickerContext.resolveAfterLoad(service: model.service, preferred: initialSymbol) else { return }
+            symbol = resolved
+            await model.load(symbol: resolved, frequency: frequency)
         }
         .onChange(of: initialSymbol) { _, value in
+            guard let value, tickerContext.symbols.contains(value) else { return }
             symbol = value
             Task { await model.load(symbol: value, frequency: frequency) }
         }
@@ -469,12 +500,14 @@ public struct ValuationView: View {
     @State private var symbol = ""
     @State private var showingHistory = false
     @State private var showingGraham = false
-    let initialSymbol: String
+    let initialSymbol: String?
+    let tickerContext: CompanyTickerContext
 
-    init(model: ValuationModel, symbol: String) {
+    init(model: ValuationModel, tickerContext: CompanyTickerContext, symbol: String?) {
         _model = State(initialValue: model)
-        _symbol = State(initialValue: symbol)
+        _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
+        self.tickerContext = tickerContext
     }
 
     public var body: some View {
@@ -484,8 +517,14 @@ public struct ValuationView: View {
                     HStack {
                         M4SectionHeader("多模型估值", subtitle: "读取每日估值快照；页面不在请求期间实时拉取外部数据")
                         Spacer()
-                        TextField("代码", text: $symbol).textFieldStyle(.roundedBorder).frame(width: 110)
-                        Button("查询") { Task { await model.load(symbol: symbol) } }.buttonStyle(.borderedProminent)
+                        CompanySymbolBar(
+                            context: tickerContext,
+                            service: model.service,
+                            symbol: $symbol,
+                            initialSymbol: initialSymbol
+                        ) { value in
+                            await model.load(symbol: value)
+                        }
                         Button("历史 P/E") { showingHistory = true }
                         Button("Graham 调整") { showingGraham = true }
                     }
@@ -510,10 +549,12 @@ public struct ValuationView: View {
         }
         .navigationTitle("估值")
         .task {
-            symbol = initialSymbol
-            await model.load(symbol: symbol)
+            guard let resolved = await tickerContext.resolveAfterLoad(service: model.service, preferred: initialSymbol) else { return }
+            symbol = resolved
+            await model.load(symbol: resolved)
         }
         .onChange(of: initialSymbol) { _, value in
+            guard let value, tickerContext.symbols.contains(value) else { return }
             symbol = value
             Task { await model.load(symbol: value) }
         }

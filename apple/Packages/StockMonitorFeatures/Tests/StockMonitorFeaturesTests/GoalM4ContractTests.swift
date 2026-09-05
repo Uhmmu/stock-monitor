@@ -5,7 +5,7 @@ import Testing
 // MARK: - 路由绑定
 
 @Test func goalM4RoutesAreBoundToNativeScreens() {
-    for route in [AppRoute.fundamentals, .financials, .valuation, .compare, .sec, .congress, .technical, .macro, .industry, .options, .mood, .moodLab] {
+    for route in [AppRoute.fundamentals, .financials, .valuation, .compare, .sec, .ownership, .congress, .technical, .macro, .industry, .options, .mood, .moodLab] {
         #expect(route.isGoalM4Route, "M4 路由 \(route.rawValue) 应绑定原生页面")
         #expect(!route.isGoalM3Route)
     }
@@ -363,4 +363,18 @@ import Testing
     let recoveryObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(recovery)) as? [String: Any])
     #expect(recoveryObject["trading_date"] as? String == "2026-09-01")
     #expect(recoveryObject["reason"] as? String == "补齐缺口")
+}
+
+// MARK: - 公司分析页证券门控
+
+@Test @MainActor func companyTickerContextFallsBackToWatchlistInsteadOfHardcodedAAPL() {
+    let context = CompanyTickerContext(symbols: ["NVDA", "MSFT", "1578.T"])
+    // 深链代码不在自选列表（如 AAPL）时回退自选第一只，避免整页 404。
+    #expect(context.resolve(preferred: "AAPL") == "NVDA")
+    #expect(context.resolve(preferred: "MSFT") == "MSFT")
+    #expect(context.resolve(preferred: nil) == "NVDA")
+
+    let empty = CompanyTickerContext(symbols: [])
+    #expect(empty.resolve(preferred: "AAPL") == nil)
+    #expect(empty.resolve(preferred: nil) == nil)
 }
