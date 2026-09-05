@@ -60,7 +60,7 @@ private struct SectionHeader: View {
     }
 }
 
-private struct FeatureErrorBanner: View {
+struct FeatureErrorBanner: View {
     let error: M3FeatureError?
     var body: some View {
         if let error {

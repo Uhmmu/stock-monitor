@@ -2,7 +2,7 @@ import Foundation
 import StockMonitorCore
 
 public actor MarketWorkflowService {
-    private let authSession: AuthSession
+    let authSession: AuthSession
     private let streamCoordinator: MarketStreamCoordinator
     private let decoder = JSONDecoder()
 

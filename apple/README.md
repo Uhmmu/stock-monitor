@@ -1,6 +1,6 @@
 # Stock Monitor for macOS
 
-This directory contains the native SwiftUI app described by Goals M1 through M3 in
+This directory contains the native SwiftUI app described by Goals M1 through M4 in
 `docs/plans/macos-native-app-plan.md`. The Qt client remains unchanged as a
 historical experiment and is not linked by this app.
 
@@ -94,3 +94,26 @@ and confirm the destination domain before opening an external article.
 cache, one-process market SSE coordinator, chunk-safe SSE parser, AI stream state machine,
 active-only job polling policy and redacted metrics. `StockMonitorDesign` includes compact and
 comfortable density, semantic state components, motion tokens and an interactive Design Lab.
+
+## Goal M4 research workbench
+
+Goal M4 replaces the company-research, technical-chart and market-intelligence placeholders
+with native workflows over the existing authenticated REST contracts. `ResearchWorkspaceService`
+is the single data boundary for M4; flexible server payloads (valuation snapshots, mood evidence,
+industry metadata) stay as retained JSON instead of being recomputed client-side.
+
+- Company research: fundamentals with per-metric source support, quarterly key figures, Yahoo
+  three-statement snapshots, the daily cross-model valuation snapshot, Historical P/E with
+  statistics and reference lines, Graham override recalculation, all five SEC datasets
+  (filings/events/financials/insider/13F), public-figure portfolios and trade timelines, and the
+  2–6 symbol deterministic comparison with ranking, winners, history series and limitations.
+- Technical analysis: native Swift Charts candlestick rendering with volume sub-chart, MA
+  overlays, swing support/resistance, Fibonacci retracement, two-point trend lines, event
+  markers, portfolio cost line and price-alert lines. Drag pans, pinch zooms, hover shows the
+  crosshair tooltip, and a non-visual data summary keeps the chart accessible. Price alerts are
+  created and deleted through the authenticated server endpoints.
+- Market intelligence: US macro overview/series/yield-curve/sync-status, industry pulse overview,
+  AI chain taxonomy, focus signals and system status, options rankings with chain and IV history,
+  AI mood console with history health, and the admin Mood Lab (run start with active-only
+  backoff polling, results, and guarded EOD history recovery).
+

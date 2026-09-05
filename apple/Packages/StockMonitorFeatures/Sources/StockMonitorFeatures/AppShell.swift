@@ -7,15 +7,17 @@ import SwiftUI
 public struct AppShellView: View {
     @Bindable private var navigation: AppNavigationModel
     private let service: MarketWorkflowService
+    private let researchService: ResearchWorkspaceService
     @AppStorage("interface-density") private var densityRawValue = InterfaceDensity.comfortable.rawValue
     @SceneStorage("selected-route") private var restoredRoute = AppRoute.overview.rawValue
     @Environment(\.openWindow) private var openWindow
     @Environment(\.undoManager) private var undoManager
     @State private var refreshToken = UUID()
 
-    public init(navigation: AppNavigationModel, service: MarketWorkflowService) {
+    public init(navigation: AppNavigationModel, service: MarketWorkflowService, researchService: ResearchWorkspaceService? = nil) {
         self.navigation = navigation
         self.service = service
+        self.researchService = researchService ?? ResearchWorkspaceService(authSession: service.authSession)
     }
 
     public var body: some View {
@@ -77,6 +79,11 @@ public struct AppShellView: View {
     @ViewBuilder private var routeContent: some View {
         if navigation.selection.isGoalM3Route {
             GoalM3RouteView(route: navigation.selection, navigation: navigation, service: service) { symbol in
+                openWindow(value: StockDetailRoute(symbol: symbol))
+            }
+            .id(refreshToken)
+        } else if navigation.selection.isGoalM4Route {
+            GoalM4RouteView(route: navigation.selection, navigation: navigation, service: researchService) { symbol in
                 openWindow(value: StockDetailRoute(symbol: symbol))
             }
             .id(refreshToken)
