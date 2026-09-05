@@ -126,7 +126,41 @@ class AdminUpdateUserReq(BaseModel):
 
 
 class RefreshReq(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     refresh_token: str
+
+
+class AuthTokenOut(BaseModel):
+    """Stable additive authentication contract shared by Web and native apps."""
+
+    token: str
+    refresh_token: str
+    expires_at: datetime
+    role: str
+    username: str
+
+
+class CurrentUserOut(BaseModel):
+    id: int
+    username: str
+    role: str
+
+
+class MessageOut(BaseModel):
+    message: str
+
+
+class ErrorOut(BaseModel):
+    """FastAPI's existing error envelope, documented for typed clients."""
+
+    detail: str
+
+
+AUTH_ERROR_RESPONSES = {
+    401: {'model': ErrorOut},
+    403: {'model': ErrorOut},
+}
 
 
 def _revoke_family(db: Session, family_id: str) -> None:
@@ -166,7 +200,7 @@ def reddit_oauth_callback():
     )
 
 
-@router.post('/login')
+@router.post('/login', response_model=AuthTokenOut, responses=AUTH_ERROR_RESPONSES)
 def login(req: LoginReq, db: Session = Depends(get_db)):
     user = db.scalar(select(User).where(User.username == req.username))
     if not user or not verify_password(req.password, user.password_hash):
@@ -187,7 +221,7 @@ def login(req: LoginReq, db: Session = Depends(get_db)):
     }
 
 
-@router.post('/refresh')
+@router.post('/refresh', response_model=AuthTokenOut, responses=AUTH_ERROR_RESPONSES)
 def refresh(req: RefreshReq, db: Session = Depends(get_db)):
     token_hash = hash_refresh_token(req.refresh_token)
     session = db.scalar(select(AuthSession).where(AuthSession.token_hash == token_hash))
@@ -219,7 +253,7 @@ def refresh(req: RefreshReq, db: Session = Depends(get_db)):
     }
 
 
-@router.post('/logout')
+@router.post('/logout', response_model=MessageOut)
 def logout(req: RefreshReq, db: Session = Depends(get_db)):
     token_hash = hash_refresh_token(req.refresh_token)
     session = db.scalar(select(AuthSession).where(AuthSession.token_hash == token_hash))
@@ -229,7 +263,7 @@ def logout(req: RefreshReq, db: Session = Depends(get_db)):
     return {'message': '已退出登录'}
 
 
-@router.post('/sessions/revoke-all')
+@router.post('/sessions/revoke-all', response_model=MessageOut, responses=AUTH_ERROR_RESPONSES)
 def revoke_all_sessions(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db.execute(
         update(AuthSession)
@@ -251,7 +285,7 @@ def register(req: RegisterReq, db: Session = Depends(get_db)):
     return {'message': '注册申请已提交，等待管理员审核'}
 
 
-@router.get('/me')
+@router.get('/me', response_model=CurrentUserOut, responses=AUTH_ERROR_RESPONSES)
 def me(user: User = Depends(get_current_user)):
     return {'id': user.id, 'username': user.username, 'role': user.role}
 

@@ -1,0 +1,25 @@
+{
+  "endpoints": {
+    "POST /api/auth/login": {
+      "response": "AuthTokenOut",
+      "required": ["token", "refresh_token", "expires_at", "role", "username"]
+    },
+    "POST /api/auth/refresh": {
+      "response": "AuthTokenOut",
+      "required": ["token", "refresh_token", "expires_at", "role", "username"]
+    },
+    "POST /api/auth/logout": {
+      "response": "MessageOut",
+      "required": ["message"]
+    },
+    "POST /api/auth/sessions/revoke-all": {
+      "response": "MessageOut",
+      "required": ["message"]
+    },
+    "GET /api/auth/me": {
+      "response": "CurrentUserOut",
+      "required": ["id", "username", "role"]
+    }
+  },
+  "error_response": "ErrorOut"
+}

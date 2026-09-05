@@ -1,0 +1,17 @@
+included:
+  - Apps
+  - Packages
+  - Tests
+excluded:
+  - Packages/*/.build
+line_length:
+  warning: 140
+  error: 180
+identifier_name:
+  min_length: 2
+reporter: xcode
+disabled_rules:
+  - trailing_comma
+cyclomatic_complexity:
+  warning: 15
+  error: 20

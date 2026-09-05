@@ -1,0 +1,2 @@
+STOCK_MONITOR_API_BASE_URL = https:/$()/jialenb.com
+STOCK_MONITOR_API_ENVIRONMENT = staging

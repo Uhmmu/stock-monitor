@@ -2,6 +2,12 @@ node_modules/
 __pycache__/
 dist/
 desktop/build/
+apple/Packages/*/.build/
+apple/.build/
+apple/DerivedData/
+apple/Local.xcconfig
+**/xcuserdata/
+*.xcuserstate
 .venv/
 venv/
 *.pyc

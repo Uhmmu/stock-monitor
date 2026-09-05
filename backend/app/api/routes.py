@@ -721,14 +721,30 @@ def indices():
 
 
 @router.get("/alerts")
-def alerts(db: Session = Depends(get_db)):
-    rows = db.scalars(select(PriceAlert).order_by(PriceAlert.triggered_at.desc()).limit(100)).all()
+def alerts(
+    db: Session = Depends(get_db),
+    limit: int = Query(100, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    limit = limit if isinstance(limit, int) else 100
+    offset = offset if isinstance(offset, int) else 0
+    rows = db.scalars(
+        select(PriceAlert).order_by(PriceAlert.triggered_at.desc(), PriceAlert.id.desc()).offset(offset).limit(limit)
+    ).all()
     return [{"id": r.id, "ticker": r.ticker, "period": r.period, "change_percent": r.change_percent, "triggered_at": r.triggered_at} for r in rows]
 
 
 @router.get("/investigations")
-def investigations(db: Session = Depends(get_db)):
-    rows = db.scalars(select(Investigation).order_by(Investigation.started_at.desc()).limit(100)).all()
+def investigations(
+    db: Session = Depends(get_db),
+    limit: int = Query(100, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    limit = limit if isinstance(limit, int) else 100
+    offset = offset if isinstance(offset, int) else 0
+    rows = db.scalars(
+        select(Investigation).order_by(Investigation.started_at.desc(), Investigation.id.desc()).offset(offset).limit(limit)
+    ).all()
     return [
         {
             "id": row.id,
@@ -756,12 +772,19 @@ def _extract_confidence(content: str | None) -> str | None:
 
 
 @router.get("/reports")
-def reports(db: Session = Depends(get_db)):
+def reports(
+    db: Session = Depends(get_db),
+    limit: int = Query(100, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    limit = limit if isinstance(limit, int) else 100
+    offset = offset if isinstance(offset, int) else 0
     rows = db.scalars(
         select(Report)
         .where(Report.report_type == ReportType.movement)
         .order_by(Report.created_at.desc())
-        .limit(100)
+        .offset(offset)
+        .limit(limit)
     ).all()
     return [{"id": r.id, "ticker": r.ticker, "report_type": r.report_type, "title": r.title, "model": r.model, "created_at": r.created_at, "confidence": _extract_confidence(r.content)} for r in rows]
 
@@ -844,7 +867,11 @@ def list_news(
     date: date_type | None = None,
     sort: Literal["ranked", "latest"] = Query("ranked"),
     db: Session = Depends(get_db),
+    limit: int = Query(200, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ):
+    limit = limit if isinstance(limit, int) else 200
+    offset = offset if isinstance(offset, int) else 0
     value = _require_watched_ticker(db, ticker, "news")
     query = select(NewsItem).where(NewsItem.ticker == value, NewsItem.scope == "company")
     zone = ZoneInfo(get_settings().market_timezone)
@@ -856,7 +883,7 @@ def list_news(
     else:
         # Rolling window avoids an empty list when the calendar week resets on Monday.
         query = query.where(timestamp >= datetime.now(UTC) - timedelta(days=7))
-    query = query.order_by(*_news_order(sort)).limit(200)
+    query = query.order_by(*_news_order(sort)).offset(offset).limit(limit)
     return [_news_out(item) for item in db.scalars(query).all()]
 
 

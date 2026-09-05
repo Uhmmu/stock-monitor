@@ -1,0 +1,635 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00C32871E8E76470257CB549 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3AF5AC47D32AE22198C67A42 /* Assets.xcassets */; };
+		31E4962061C700C2EBC03F08 /* StockMonitorDesign in Frameworks */ = {isa = PBXBuildFile; productRef = FA0FC36A99552981E7235775 /* StockMonitorDesign */; };
+		ADEDF13179A9D07DADE1061B /* StockMonitorFeatures in Frameworks */ = {isa = PBXBuildFile; productRef = AE9D7A688926A9BCD5722793 /* StockMonitorFeatures */; };
+		BA724028054B161A7A52F66A /* StockMonitorMacUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C8C811A339BB9E4B711C27F /* StockMonitorMacUITests.swift */; };
+		DB7753087251333F41F62945 /* StockMonitorCore in Frameworks */ = {isa = PBXBuildFile; productRef = DC232A7BA4E86D9C61478D80 /* StockMonitorCore */; };
+		E1E7179DC2FEB6DF1790087D /* StockMonitorMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4633DEED2F119DAD40DCCB0D /* StockMonitorMacApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		5451BD72454437DBD08EB372 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DCA36DB6137148F4916FE1B0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9FE35A793BC9C584AF4B5816;
+			remoteInfo = StockMonitorMac;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		046707181F6787843BABBE2C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		1C8C811A339BB9E4B711C27F /* StockMonitorMacUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockMonitorMacUITests.swift; sourceTree = "<group>"; };
+		28780CF2494EAADECF35CA38 /* StockMonitorDesign */ = {isa = PBXFileReference; lastKnownFileType = folder; name = StockMonitorDesign; path = Packages/StockMonitorDesign; sourceTree = SOURCE_ROOT; };
+		3AF5AC47D32AE22198C67A42 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		400317BC7AC78C97B56D8C7F /* StockMonitorMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StockMonitorMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		427C950631A085BDC930AB18 /* StockMonitorMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StockMonitorMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		45D0507EC9D425735476D5B3 /* Production.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Production.xcconfig; sourceTree = "<group>"; };
+		4633DEED2F119DAD40DCCB0D /* StockMonitorMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockMonitorMacApp.swift; sourceTree = "<group>"; };
+		594BDED898F9438B76A1CDCF /* Staging.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Staging.xcconfig; sourceTree = "<group>"; };
+		5F3057270B9EF9766A161915 /* StockMonitorFeatures */ = {isa = PBXFileReference; lastKnownFileType = folder; name = StockMonitorFeatures; path = Packages/StockMonitorFeatures; sourceTree = SOURCE_ROOT; };
+		975EE03A8A591C015C346159 /* StockMonitorCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = StockMonitorCore; path = Packages/StockMonitorCore; sourceTree = SOURCE_ROOT; };
+		9D20656D64EE9A103B2482C9 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		BC2969187EC2F0BE814DD3B2 /* StockMonitorMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StockMonitorMac.entitlements; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D55AC363347518301281B496 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DB7753087251333F41F62945 /* StockMonitorCore in Frameworks */,
+				31E4962061C700C2EBC03F08 /* StockMonitorDesign in Frameworks */,
+				ADEDF13179A9D07DADE1061B /* StockMonitorFeatures in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		06D4963ECAA9644E5788F25E /* Apps */ = {
+			isa = PBXGroup;
+			children = (
+				D55899CE82466AB1867A2B11 /* StockMonitorMac */,
+			);
+			path = Apps;
+			sourceTree = "<group>";
+		};
+		2A7C60F931A007DC0F08A2B7 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				427C950631A085BDC930AB18 /* StockMonitorMac.app */,
+				400317BC7AC78C97B56D8C7F /* StockMonitorMacUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		76169ED61C9170EAE1DAB7EB /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				1C8C811A339BB9E4B711C27F /* StockMonitorMacUITests.swift */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
+		AABBE35D96650B12BDB8B967 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				76169ED61C9170EAE1DAB7EB /* UITests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		AC912E798A12DFC4E2914E39 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				975EE03A8A591C015C346159 /* StockMonitorCore */,
+				28780CF2494EAADECF35CA38 /* StockMonitorDesign */,
+				5F3057270B9EF9766A161915 /* StockMonitorFeatures */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		C9AB1330F01DEB801819EC49 = {
+			isa = PBXGroup;
+			children = (
+				06D4963ECAA9644E5788F25E /* Apps */,
+				D09F2F60A4422A650B891300 /* Config */,
+				AC912E798A12DFC4E2914E39 /* Packages */,
+				AABBE35D96650B12BDB8B967 /* Tests */,
+				2A7C60F931A007DC0F08A2B7 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D09F2F60A4422A650B891300 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				9D20656D64EE9A103B2482C9 /* Debug.xcconfig */,
+				45D0507EC9D425735476D5B3 /* Production.xcconfig */,
+				594BDED898F9438B76A1CDCF /* Staging.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		D55899CE82466AB1867A2B11 /* StockMonitorMac */ = {
+			isa = PBXGroup;
+			children = (
+				3AF5AC47D32AE22198C67A42 /* Assets.xcassets */,
+				046707181F6787843BABBE2C /* Info.plist */,
+				BC2969187EC2F0BE814DD3B2 /* StockMonitorMac.entitlements */,
+				4633DEED2F119DAD40DCCB0D /* StockMonitorMacApp.swift */,
+			);
+			path = StockMonitorMac;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		001D3DD811B6567DB5317FDF /* StockMonitorMacUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 06B6EF2B096999C84844B083 /* Build configuration list for PBXNativeTarget "StockMonitorMacUITests" */;
+			buildPhases = (
+				D8AF273C89FB612C7CF987C3 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0C5E9670F6A3403929F821F6 /* PBXTargetDependency */,
+			);
+			name = StockMonitorMacUITests;
+			packageProductDependencies = (
+			);
+			productName = StockMonitorMacUITests;
+			productReference = 400317BC7AC78C97B56D8C7F /* StockMonitorMacUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		9FE35A793BC9C584AF4B5816 /* StockMonitorMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E9DD08E4BCA7C617C87E992C /* Build configuration list for PBXNativeTarget "StockMonitorMac" */;
+			buildPhases = (
+				A3530EDF6954C2F26EFA0F13 /* Sources */,
+				E69315808AAF382809E55A06 /* Resources */,
+				D55AC363347518301281B496 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = StockMonitorMac;
+			packageProductDependencies = (
+				DC232A7BA4E86D9C61478D80 /* StockMonitorCore */,
+				FA0FC36A99552981E7235775 /* StockMonitorDesign */,
+				AE9D7A688926A9BCD5722793 /* StockMonitorFeatures */,
+			);
+			productName = StockMonitorMac;
+			productReference = 427C950631A085BDC930AB18 /* StockMonitorMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		DCA36DB6137148F4916FE1B0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					001D3DD811B6567DB5317FDF = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+						TestTargetID = 9FE35A793BC9C584AF4B5816;
+					};
+					9FE35A793BC9C584AF4B5816 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 6C7A96E45117FD052D040D22 /* Build configuration list for PBXProject "StockMonitor" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = C9AB1330F01DEB801819EC49;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				0013274B5172773622AE65E6 /* XCLocalSwiftPackageReference "Packages/StockMonitorCore" */,
+				CCE45346CCD8608B1F9911B4 /* XCLocalSwiftPackageReference "Packages/StockMonitorDesign" */,
+				EE78A397931AA7DE9BDAAB9C /* XCLocalSwiftPackageReference "Packages/StockMonitorFeatures" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 2A7C60F931A007DC0F08A2B7 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				9FE35A793BC9C584AF4B5816 /* StockMonitorMac */,
+				001D3DD811B6567DB5317FDF /* StockMonitorMacUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E69315808AAF382809E55A06 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				00C32871E8E76470257CB549 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A3530EDF6954C2F26EFA0F13 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E1E7179DC2FEB6DF1790087D /* StockMonitorMacApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D8AF273C89FB612C7CF987C3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BA724028054B161A7A52F66A /* StockMonitorMacUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		0C5E9670F6A3403929F821F6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9FE35A793BC9C584AF4B5816 /* StockMonitorMac */;
+			targetProxy = 5451BD72454437DBD08EB372 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		18C762747A364A4791CE810C /* Staging */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.jiale.StockMonitor.UITests;
+				PRODUCT_MODULE_NAME = StockMonitorMacUITests;
+				PRODUCT_NAME = StockMonitorMacUITests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = StockMonitorMac;
+			};
+			name = Staging;
+		};
+		272A4387AA4740CE01BAF682 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Apps/StockMonitorMac/StockMonitorMac.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = Apps/StockMonitorMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.jiale.StockMonitor;
+				PRODUCT_NAME = "Stock Monitor";
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		41CE04E03FA4BC64CD12CBF2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 9D20656D64EE9A103B2482C9 /* Debug.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		653A671110A174708698DD71 /* Staging */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Apps/StockMonitorMac/StockMonitorMac.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = Apps/StockMonitorMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.jiale.StockMonitor;
+				PRODUCT_NAME = "Stock Monitor";
+				SDKROOT = macosx;
+			};
+			name = Staging;
+		};
+		6E6B2BA08087CD39AFE750D9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.jiale.StockMonitor.UITests;
+				PRODUCT_MODULE_NAME = StockMonitorMacUITests;
+				PRODUCT_NAME = StockMonitorMacUITests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = StockMonitorMac;
+			};
+			name = Release;
+		};
+		7DBECBC304E2506286D6623E /* Staging */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 594BDED898F9438B76A1CDCF /* Staging.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Staging;
+		};
+		9249C68E5AE91BBE629933AC /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 45D0507EC9D425735476D5B3 /* Production.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		E96372DFD878832C10D0DD5E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Apps/StockMonitorMac/StockMonitorMac.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = Apps/StockMonitorMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.jiale.StockMonitor;
+				PRODUCT_NAME = "Stock Monitor";
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		EE55CFAB955ADD220CEFAE7B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.jiale.StockMonitor.UITests;
+				PRODUCT_MODULE_NAME = StockMonitorMacUITests;
+				PRODUCT_NAME = StockMonitorMacUITests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = StockMonitorMac;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		06B6EF2B096999C84844B083 /* Build configuration list for PBXNativeTarget "StockMonitorMacUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EE55CFAB955ADD220CEFAE7B /* Debug */,
+				6E6B2BA08087CD39AFE750D9 /* Release */,
+				18C762747A364A4791CE810C /* Staging */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6C7A96E45117FD052D040D22 /* Build configuration list for PBXProject "StockMonitor" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				41CE04E03FA4BC64CD12CBF2 /* Debug */,
+				9249C68E5AE91BBE629933AC /* Release */,
+				7DBECBC304E2506286D6623E /* Staging */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E9DD08E4BCA7C617C87E992C /* Build configuration list for PBXNativeTarget "StockMonitorMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				272A4387AA4740CE01BAF682 /* Debug */,
+				E96372DFD878832C10D0DD5E /* Release */,
+				653A671110A174708698DD71 /* Staging */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		0013274B5172773622AE65E6 /* XCLocalSwiftPackageReference "Packages/StockMonitorCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/StockMonitorCore;
+		};
+		CCE45346CCD8608B1F9911B4 /* XCLocalSwiftPackageReference "Packages/StockMonitorDesign" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/StockMonitorDesign;
+		};
+		EE78A397931AA7DE9BDAAB9C /* XCLocalSwiftPackageReference "Packages/StockMonitorFeatures" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/StockMonitorFeatures;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AE9D7A688926A9BCD5722793 /* StockMonitorFeatures */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = StockMonitorFeatures;
+		};
+		DC232A7BA4E86D9C61478D80 /* StockMonitorCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = StockMonitorCore;
+		};
+		FA0FC36A99552981E7235775 /* StockMonitorDesign */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = StockMonitorDesign;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = DCA36DB6137148F4916FE1B0 /* Project object */;
+}

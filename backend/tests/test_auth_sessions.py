@@ -120,6 +120,22 @@ class TestAdminBootstrap:
 
 
 class TestLoginContract:
+    def test_openapi_documents_native_auth_contracts(self, client):
+        schema = client.get("/openapi.json").json()
+        paths = schema["paths"]
+        for path, method, response_name in [
+            ("/api/auth/login", "post", "AuthTokenOut"),
+            ("/api/auth/refresh", "post", "AuthTokenOut"),
+            ("/api/auth/logout", "post", "MessageOut"),
+            ("/api/auth/sessions/revoke-all", "post", "MessageOut"),
+            ("/api/auth/me", "get", "CurrentUserOut"),
+        ]:
+            success = paths[path][method]["responses"]["200"]["content"]["application/json"]["schema"]
+            assert success["$ref"].rsplit("/", 1)[-1].endswith(response_name)
+        assert paths["/api/auth/login"]["post"]["responses"]["401"]["content"]["application/json"]["schema"][
+            "$ref"
+        ].rsplit("/", 1)[-1].endswith("ErrorOut")
+
     def test_web_compatible_fields_remain(self, client, active_user):
         response = login(client)
         assert response.status_code == 200

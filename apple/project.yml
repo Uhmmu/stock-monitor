@@ -1,0 +1,93 @@
+name: StockMonitor
+options:
+  bundleIdPrefix: com.jiale
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Staging: release
+  Release: release
+configFiles:
+  Debug: Config/Debug.xcconfig
+  Staging: Config/Staging.xcconfig
+  Release: Config/Production.xcconfig
+packages:
+  StockMonitorCore:
+    path: Packages/StockMonitorCore
+  StockMonitorDesign:
+    path: Packages/StockMonitorDesign
+  StockMonitorFeatures:
+    path: Packages/StockMonitorFeatures
+settings:
+  base:
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: false
+    SWIFT_VERSION: 6.0
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_HARDENED_RUNTIME: true
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+targets:
+  StockMonitorMac:
+    type: application
+    platform: macOS
+    info:
+      path: Apps/StockMonitorMac/Info.plist
+      properties:
+        CFBundleDisplayName: Stock Monitor
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSPrincipalClass: NSApplication
+        LSApplicationCategoryType: public.app-category.finance
+        NSHumanReadableCopyright: Copyright © 2026 Jiale
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.jiale.StockMonitor.deep-link
+            CFBundleURLSchemes:
+              - stockmonitor
+        StockMonitorAPIBaseURL: $(STOCK_MONITOR_API_BASE_URL)
+        StockMonitorAPIEnvironment: $(STOCK_MONITOR_API_ENVIRONMENT)
+    sources:
+      - path: Apps/StockMonitorMac
+    resources:
+      - path: Apps/StockMonitorMac/Assets.xcassets
+    dependencies:
+      - package: StockMonitorCore
+      - package: StockMonitorDesign
+      - package: StockMonitorFeatures
+    settings:
+      base:
+        PRODUCT_NAME: Stock Monitor
+        PRODUCT_BUNDLE_IDENTIFIER: com.jiale.StockMonitor
+        CODE_SIGN_ENTITLEMENTS: Apps/StockMonitorMac/StockMonitorMac.entitlements
+  StockMonitorMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/UITests
+    dependencies:
+      - target: StockMonitorMac
+    settings:
+      base:
+        PRODUCT_NAME: StockMonitorMacUITests
+        PRODUCT_MODULE_NAME: StockMonitorMacUITests
+        PRODUCT_BUNDLE_IDENTIFIER: com.jiale.StockMonitor.UITests
+        GENERATE_INFOPLIST_FILE: true
+        ENABLE_HARDENED_RUNTIME: false
+schemes:
+  StockMonitorMac:
+    build:
+      targets:
+        StockMonitorMac: all
+        StockMonitorMacUITests: [test]
+    run:
+      config: Debug
+    archive:
+      config: Release
+    test:
+      config: Debug
+      targets:
+        - StockMonitorMacUITests
