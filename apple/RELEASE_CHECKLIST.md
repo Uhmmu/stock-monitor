@@ -13,6 +13,7 @@
 - Verify light/dark appearance, VoiceOver, Full Keyboard Access, Increase Contrast, Reduce Motion,
   Reduce Transparency, display zoom and long Chinese/English content at minimum and maximum windows.
 - Profile SwiftUI updates, animation hitches, memory, network, energy, hangs and leaks with Instruments.
+- Evaluate traces against `PERFORMANCE_BUDGETS.md`; document rather than waive an unmeasured gate.
 - Soak test market SSE, long AI streams, sleep/wake, network changes, server restart and multiple windows.
 - Verify login, logout, role changes, stale/offline states, destructive confirmations and private-state clearing.
 - Run Web and Mac golden flows against the same non-production test account and attach results to the
