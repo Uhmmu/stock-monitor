@@ -5,7 +5,10 @@ on:
     paths:
       - "apple/**"
       - "backend/app/api/auth_routes.py"
+      - "backend/app/api/client_capabilities.py"
+      - "backend/app/main.py"
       - "backend/tests/test_macos_auth_contract.py"
+      - "backend/tests/test_macos_client_capabilities.py"
       - "backend/tests/test_auth_sessions.py"
       - ".github/workflows/macos-native.yml"
   push:
@@ -13,7 +16,10 @@ on:
     paths:
       - "apple/**"
       - "backend/app/api/auth_routes.py"
+      - "backend/app/api/client_capabilities.py"
+      - "backend/app/main.py"
       - "backend/tests/test_macos_auth_contract.py"
+      - "backend/tests/test_macos_client_capabilities.py"
       - "backend/tests/test_auth_sessions.py"
 
 jobs:
@@ -32,7 +38,7 @@ jobs:
         env:
           APP_ENV: test
           PYTHONPATH: backend
-        run: pytest -q backend/tests/test_macos_auth_contract.py backend/tests/test_auth_sessions.py
+        run: pytest -q backend/tests/test_macos_auth_contract.py backend/tests/test_macos_client_capabilities.py backend/tests/test_auth_sessions.py
 
   native-foundation:
     runs-on: macos-26
@@ -46,6 +52,10 @@ jobs:
         run: brew install xcodegen swiftformat swiftlint
       - name: Generate Xcode project
         run: xcodegen generate --spec apple/project.yml --project apple
+      - name: Verify parity and privacy manifests
+        run: |
+          python3 apple/scripts/verify-parity-matrix.py
+          plutil -lint apple/Apps/StockMonitorMac/PrivacyInfo.xcprivacy
       - name: Lint Swift
         run: |
           swiftformat --lint --config apple/.swiftformat apple/Apps apple/Packages apple/Tests

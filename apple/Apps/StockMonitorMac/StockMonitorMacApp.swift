@@ -5,15 +5,20 @@ import SwiftUI
 
 @main
 struct StockMonitorMacApp: App {
+    private let apiClient: APIClient
     private let authSession: AuthSession
     private let marketService: MarketWorkflowService
     private let sessionModel: AppSessionModel
+    private let metrics: NetworkMetrics
     @State private var navigation = AppNavigationModel()
 
     init() {
         do {
             let configuration = try APIConfiguration.load()
-            let client = APIClient(configuration: configuration)
+            let metrics = NetworkMetrics()
+            let client = APIClient(configuration: configuration, metrics: metrics)
+            apiClient = client
+            self.metrics = metrics
             authSession = AuthSession(client: client, tokenStore: Self.refreshTokenStore())
             marketService = MarketWorkflowService(authSession: authSession)
             sessionModel = AppSessionModel(session: authSession)
@@ -35,9 +40,11 @@ struct StockMonitorMacApp: App {
 
     var body: some Scene {
         WindowGroup("Stock Monitor") {
-            SessionGateView(model: sessionModel) { identity in
-                AppShellView(navigation: navigation, service: marketService)
-                    .onAppear { navigation.isAdministrator = identity.role == "admin" }
+            ClientCompatibilityGateView(client: apiClient, currentVersion: Self.appVersion) {
+                SessionGateView(model: sessionModel) { identity in
+                    AppShellView(navigation: navigation, service: marketService)
+                        .onAppear { navigation.isAdministrator = identity.role == "admin" }
+                }
             }
         }
         .defaultSize(width: 1180, height: 760)
@@ -68,6 +75,10 @@ struct StockMonitorMacApp: App {
         Window("Design Lab", id: "design-lab") { DesignLabView() }
             .defaultSize(width: 980, height: 720)
 
-        Settings { StockMonitorSettingsView() }
+        Settings { StockMonitorSettingsView(metrics: metrics) }
+    }
+
+    private static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
     }
 }

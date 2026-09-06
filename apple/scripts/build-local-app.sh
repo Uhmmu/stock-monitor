@@ -22,6 +22,7 @@ mkdir -p "$icon_work"
 cp "$icon_source"/icon_*.png "$icon_work/"
 iconutil -c icns "$icon_work" -o "$contents/Resources/AppIcon.icns"
 rm -rf "$icon_work"
+cp "$apple_root/Apps/StockMonitorMac/PrivacyInfo.xcprivacy" "$contents/Resources/PrivacyInfo.xcprivacy"
 
 plutil -create xml1 "$contents/Info.plist"
 plutil -insert CFBundleDevelopmentRegion -string zh_CN "$contents/Info.plist"
@@ -44,4 +45,6 @@ codesign --force --sign - --options runtime \
     --entitlements "$apple_root/Apps/StockMonitorMac/StockMonitorMac.entitlements" \
     "$app_bundle"
 codesign --verify --deep --strict --verbose=2 "$app_bundle"
+test "$(lipo -archs "$contents/MacOS/StockMonitorMac")" = arm64
+plutil -lint "$contents/Resources/PrivacyInfo.xcprivacy"
 printf '%s\n' "$app_bundle"

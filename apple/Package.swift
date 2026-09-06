@@ -19,7 +19,7 @@ let package = Package(
                 .product(name: "StockMonitorFeatures", package: "StockMonitorFeatures"),
             ],
             path: "Apps/StockMonitorMac",
-            exclude: ["Assets.xcassets", "Info.plist", "StockMonitorMac.entitlements"]
+            exclude: ["Assets.xcassets", "Info.plist", "PrivacyInfo.xcprivacy", "StockMonitorMac.entitlements"]
         ),
     ],
     swiftLanguageModes: [.v6]

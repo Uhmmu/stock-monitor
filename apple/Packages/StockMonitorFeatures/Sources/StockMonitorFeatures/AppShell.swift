@@ -1,3 +1,4 @@
+import StockMonitorCore
 import StockMonitorDesign
 import SwiftUI
 #if os(macOS)
@@ -194,11 +195,16 @@ public struct ResearchDetailWindow: View {
 
 public struct StockMonitorSettingsView: View {
     @AppStorage("interface-density") private var densityRawValue = InterfaceDensity.comfortable.rawValue
-    public init() {}
+    private let metrics: NetworkMetrics
+    public init(metrics: NetworkMetrics) {
+        self.metrics = metrics
+    }
+
     public var body: some View {
         Form {
             Picker("数据密度", selection: $densityRawValue) { ForEach(InterfaceDensity.allCases) { Text($0.title).tag($0.rawValue) } }
             Text("服务端仍是唯一业务与数据真相。AI 与 IBKR 敏感正文默认不落盘。").foregroundStyle(.secondary)
+            SupportDiagnosticsSection(metrics: metrics)
         }.formStyle(.grouped).padding().frame(width: 520)
     }
 }

@@ -13,6 +13,7 @@
 		BA724028054B161A7A52F66A /* StockMonitorMacUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C8C811A339BB9E4B711C27F /* StockMonitorMacUITests.swift */; };
 		DB7753087251333F41F62945 /* StockMonitorCore in Frameworks */ = {isa = PBXBuildFile; productRef = DC232A7BA4E86D9C61478D80 /* StockMonitorCore */; };
 		E1E7179DC2FEB6DF1790087D /* StockMonitorMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4633DEED2F119DAD40DCCB0D /* StockMonitorMacApp.swift */; };
+		E74197A4218E1291FF51F69C /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 0C3DCFF819CE97624C3B97BF /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -27,6 +28,7 @@
 
 /* Begin PBXFileReference section */
 		046707181F6787843BABBE2C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		0C3DCFF819CE97624C3B97BF /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		1C8C811A339BB9E4B711C27F /* StockMonitorMacUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockMonitorMacUITests.swift; sourceTree = "<group>"; };
 		28780CF2494EAADECF35CA38 /* StockMonitorDesign */ = {isa = PBXFileReference; lastKnownFileType = folder; name = StockMonitorDesign; path = Packages/StockMonitorDesign; sourceTree = SOURCE_ROOT; };
 		3AF5AC47D32AE22198C67A42 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -124,6 +126,7 @@
 			children = (
 				3AF5AC47D32AE22198C67A42 /* Assets.xcassets */,
 				046707181F6787843BABBE2C /* Info.plist */,
+				0C3DCFF819CE97624C3B97BF /* PrivacyInfo.xcprivacy */,
 				BC2969187EC2F0BE814DD3B2 /* StockMonitorMac.entitlements */,
 				4633DEED2F119DAD40DCCB0D /* StockMonitorMacApp.swift */,
 			);
@@ -224,6 +227,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				00C32871E8E76470257CB549 /* Assets.xcassets in Resources */,
+				E74197A4218E1291FF51F69C /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

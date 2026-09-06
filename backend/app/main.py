@@ -11,6 +11,7 @@ from app.ai.router import router as ai_router
 from app.ai_tools.router import router as ai_tools_router
 from app.ai_memory.router import router as ai_memory_router
 from app.api.auth_routes import router as auth_router
+from app.api.client_capabilities import router as client_capabilities_router
 from app.api.compare_routes import router as compare_router
 from app.api.crypto_routes import router as crypto_router
 from app.api.agent_gateway_routes import router as agent_gateway_router
@@ -113,6 +114,7 @@ app = FastAPI(title='股票监控 API', version='0.1.0', lifespan=lifespan)
 app.middleware("http")(research_audit_middleware)
 app.add_exception_handler(ResearchError, research_error_handler)
 app.include_router(public_router)
+app.include_router(client_capabilities_router)
 app.include_router(auth_router)
 app.include_router(compare_router)
 app.include_router(crypto_router)

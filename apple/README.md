@@ -1,6 +1,6 @@
 # Stock Monitor for macOS
 
-This directory contains the native SwiftUI app described by Goals M1 through M5 in
+This directory contains the native SwiftUI app described by Goals M1 through M6 in
 `docs/plans/macos-native-app-plan.md`. The Qt client remains unchanged as a
 historical experiment and is not linked by this app.
 
@@ -62,6 +62,13 @@ ignored `DerivedData/` directory. It verifies bundle layout, AppIcon, hardened
 runtime and sandbox entitlements without claiming Developer ID distribution.
 The Xcode UI test target captures the ready-state baseline and verifies stable
 accessibility identifiers; it runs once the full Xcode toolchain is selected.
+
+`./scripts/verify-goal-m6.sh` is the reproducible arm64 quality gate. It validates the
+Web-to-Mac parity inventory, privacy manifest, formatting/lint, Swift and selected backend
+contracts, local app bundle, unsigned Release build and accessibility UI smoke test.
+`./scripts/build-release-candidate.sh` creates a checksummed, ad-hoc signed local DMG that is
+explicitly not a public distribution artifact. `./scripts/distribution-status.sh` reports the
+remaining Developer ID/notarization gate without reading or printing credentials.
 
 ## Configuration
 
@@ -137,3 +144,17 @@ presented as native list/detail content without executing HTML or JavaScript.
   There is no Binance Demo/Testnet/Live or real-order control surface.
 - Destructive or paid operations use a scoped confirmation, role-gated endpoints remain
   hidden from ordinary users, and valid content stays visible while a refresh fails.
+
+## Goal M6 closure and release readiness
+
+The checked-in parity catalog accounts for every native route and ties it to the corresponding
+Web surface. The public `/api/client-capabilities` handshake enforces the minimum supported Mac
+version and required server capabilities; a missing endpoint remains visibly usable only for the
+legacy rollout window. Support diagnostics are user-initiated and privacy-scoped.
+
+The app includes an explicit Privacy Manifest, release notes, release checklist, deterministic
+arm64 local candidate packaging and a single automated verification entry point. Same-account
+Web/Mac golden flows, Instruments/assistive-technology evidence and clean-device soak results stay
+marked runtime-pending until actually executed. Developer ID signing, Apple notarization,
+stapling and public Gatekeeper validation remain blocked until a paid Apple Developer Program
+membership is available; an ad-hoc local candidate must never be described as notarized.

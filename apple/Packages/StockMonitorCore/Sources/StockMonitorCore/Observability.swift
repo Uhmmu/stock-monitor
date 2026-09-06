@@ -6,6 +6,17 @@ public struct NetworkMetricsSnapshot: Equatable, Sendable {
     public let streamReconnects: Int
     public let parseMilliseconds: [Double]
     public let frameHitches: Int
+
+    public init(
+        requestCount: Int, cacheHits: Int, streamReconnects: Int,
+        parseMilliseconds: [Double], frameHitches: Int
+    ) {
+        self.requestCount = requestCount
+        self.cacheHits = cacheHits
+        self.streamReconnects = streamReconnects
+        self.parseMilliseconds = parseMilliseconds
+        self.frameHitches = frameHitches
+    }
 }
 
 public actor NetworkMetrics {

@@ -54,6 +54,7 @@ targets:
       - path: Apps/StockMonitorMac
     resources:
       - path: Apps/StockMonitorMac/Assets.xcassets
+      - path: Apps/StockMonitorMac/PrivacyInfo.xcprivacy
     dependencies:
       - package: StockMonitorCore
       - package: StockMonitorDesign
