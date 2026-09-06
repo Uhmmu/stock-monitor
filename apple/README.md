@@ -69,6 +69,10 @@ contracts, local app bundle, unsigned Release build and accessibility UI smoke t
 `./scripts/build-release-candidate.sh` creates a checksummed, ad-hoc signed local DMG that is
 explicitly not a public distribution artifact. `./scripts/distribution-status.sh` reports the
 remaining Developer ID/notarization gate without reading or printing credentials.
+`./scripts/verify-app-security.sh` checks architecture, Hardened Runtime, entitlements, ATS,
+Privacy Manifest, runtime libraries and the no-WebView/no-feature-URLSession boundaries.
+`./scripts/rehearse-local-rollback.sh` exercises a contained candidate replacement and rollback
+without touching `/Applications` or user data.
 
 ## Configuration
 

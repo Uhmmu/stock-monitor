@@ -18,6 +18,7 @@ PYTHONPATH="$repo_root/backend" "$repo_root/.venv/bin/python" -m pytest -q \
     "$repo_root/backend/tests/test_macos_client_capabilities.py"
 swift build --package-path "$apple_root" -c release --arch arm64
 "$apple_root/scripts/build-local-app.sh"
+"$apple_root/scripts/verify-app-security.sh"
 xcodegen generate --spec "$apple_root/project.yml" --project "$apple_root"
 xcodebuild \
     -workspace "$apple_root/StockMonitor.xcworkspace" \
@@ -33,4 +34,6 @@ xcodebuild \
     -destination 'platform=macOS,arch=arm64' \
     CODE_SIGN_IDENTITY=- \
     test
+"$apple_root/scripts/build-release-candidate.sh"
+"$apple_root/scripts/rehearse-local-rollback.sh"
 "$apple_root/scripts/distribution-status.sh"

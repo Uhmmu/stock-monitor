@@ -4,6 +4,7 @@
 
 - Run `./scripts/verify-goal-m6.sh` on Apple Silicon with stable Xcode 26.6.
 - Run `./scripts/build-release-candidate.sh` and retain its SHA-256 checksum.
+- Run `./scripts/verify-app-security.sh` against the candidate and `./scripts/rehearse-local-rollback.sh`.
 - Confirm the parity matrix has no unexplained route or state gaps.
 - Confirm the compatibility endpoint and macOS contract tests pass together.
 
@@ -24,5 +25,7 @@
 - Run `./scripts/notarize.sh`; verify codesign, notarization, stapling and Gatekeeper assessment.
 - Install, first-login, upgrade and uninstall on a clean Apple Silicon Mac.
 - Preserve the previous notarized artifact and rehearse rollback before staged rollout.
+
+Channel rules and the data-safe rollback boundary are documented in `RELEASE_CHANNELS.md`.
 
 Never check in a Team ID, certificate, notary credential, account identifier, token or secret.
