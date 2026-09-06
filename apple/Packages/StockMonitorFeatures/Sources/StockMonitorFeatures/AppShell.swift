@@ -8,16 +8,22 @@ public struct AppShellView: View {
     @Bindable private var navigation: AppNavigationModel
     private let service: MarketWorkflowService
     private let researchService: ResearchWorkspaceService
+    private let goalM5Service: GoalM5Service
     @AppStorage("interface-density") private var densityRawValue = InterfaceDensity.comfortable.rawValue
+    @AppStorage("appearance") private var appearance = "system"
     @SceneStorage("selected-route") private var restoredRoute = AppRoute.overview.rawValue
     @Environment(\.openWindow) private var openWindow
     @Environment(\.undoManager) private var undoManager
     @State private var refreshToken = UUID()
 
-    public init(navigation: AppNavigationModel, service: MarketWorkflowService, researchService: ResearchWorkspaceService? = nil) {
+    public init(
+        navigation: AppNavigationModel, service: MarketWorkflowService,
+        researchService: ResearchWorkspaceService? = nil, goalM5Service: GoalM5Service? = nil
+    ) {
         self.navigation = navigation
         self.service = service
         self.researchService = researchService ?? ResearchWorkspaceService(authSession: service.authSession)
+        self.goalM5Service = goalM5Service ?? GoalM5Service(authSession: service.authSession)
     }
 
     public var body: some View {
@@ -56,6 +62,7 @@ public struct AppShellView: View {
                 }
         }
         .environment(\.interfaceDensity, InterfaceDensity(rawValue: densityRawValue) ?? .comfortable)
+        .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
         .onAppear {
             if let route = AppRoute(rawValue: restoredRoute) {
                 navigation.navigate(to: route)
@@ -87,6 +94,9 @@ public struct AppShellView: View {
                 openWindow(value: StockDetailRoute(symbol: symbol))
             }
             .id(refreshToken)
+        } else if navigation.selection.isGoalM5Route {
+            GoalM5RouteView(route: navigation.selection, navigation: navigation, service: goalM5Service)
+                .id(refreshToken)
         } else {
             RoutePlaceholder(route: navigation.selection, symbol: navigation.selectedSymbol) { symbol in
                 openWindow(value: StockDetailRoute(symbol: symbol))

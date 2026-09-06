@@ -10,6 +10,7 @@ final class StockMonitorMacUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["STOCK_MONITOR_API_BASE_URL"] = "http://127.0.0.1:8000"
         app.launchEnvironment["STOCK_MONITOR_API_ENVIRONMENT"] = "debug"
+        app.launchEnvironment["STOCK_MONITOR_TEST_KEYCHAIN_SERVICE"] = "com.jiale.StockMonitor.ui-tests.login-gate"
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launch()
 

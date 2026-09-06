@@ -148,6 +148,19 @@ public actor AuthSession {
         )
     }
 
+    public func authorizedStreamingRequest(
+        path: String,
+        method: HTTPMethod,
+        body: (some Encodable & Sendable)?,
+        queryItems: [URLQueryItem] = []
+    ) async throws -> URLRequest {
+        guard let accessToken else { throw APIError.http(status: 401, message: nil, requestID: nil) }
+        return try await client.makeStreamingRequest(
+            path: path, method: method, body: body,
+            queryItems: queryItems, accessToken: accessToken
+        )
+    }
+
     private func refresh() async throws -> SessionIdentity {
         let task: Task<AuthTokens, Error>
         if let refreshTask {

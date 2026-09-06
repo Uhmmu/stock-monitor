@@ -14,12 +14,23 @@ struct StockMonitorMacApp: App {
         do {
             let configuration = try APIConfiguration.load()
             let client = APIClient(configuration: configuration)
-            authSession = AuthSession(client: client, tokenStore: KeychainRefreshTokenStore())
+            authSession = AuthSession(client: client, tokenStore: Self.refreshTokenStore())
             marketService = MarketWorkflowService(authSession: authSession)
             sessionModel = AppSessionModel(session: authSession)
         } catch {
             fatalError("Invalid API configuration")
         }
+    }
+
+    private static func refreshTokenStore() -> KeychainRefreshTokenStore {
+        #if DEBUG
+            if let service = ProcessInfo.processInfo.environment["STOCK_MONITOR_TEST_KEYCHAIN_SERVICE"],
+               service.hasPrefix("com.jiale.StockMonitor.ui-tests.")
+            {
+                return KeychainRefreshTokenStore(service: service)
+            }
+        #endif
+        return KeychainRefreshTokenStore()
     }
 
     var body: some Scene {

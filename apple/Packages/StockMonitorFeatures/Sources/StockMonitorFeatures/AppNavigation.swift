@@ -81,6 +81,14 @@ public enum AppRoute: String, CaseIterable, Codable, Hashable, Identifiable, Sen
         ].contains(self)
     }
 
+    /// Goal M5（AI、组合、IBKR、Crypto 与系统管理）原生工作台。
+    public var isGoalM5Route: Bool {
+        [
+            .ai, .decisions, .discovery, .holdings, .journal, .settings, .administration,
+            .ibkr, .ibkrAdmin, .cryptoResearch, .quantBacktests, .paper,
+        ].contains(self)
+    }
+
     public static func visible(isAdministrator: Bool) -> [AppRoute] {
         allCases.filter { isAdministrator || !$0.requiresAdministrator }
     }

@@ -1,6 +1,6 @@
 # Stock Monitor for macOS
 
-This directory contains the native SwiftUI app described by Goals M1 through M4 in
+This directory contains the native SwiftUI app described by Goals M1 through M5 in
 `docs/plans/macos-native-app-plan.md`. The Qt client remains unchanged as a
 historical experiment and is not linked by this app.
 
@@ -78,7 +78,7 @@ server is unreachable. The app does not persist AI or IBKR private content.
 The shared native shell provides grouped `NavigationSplitView` routing for every planned
 feature, role-filtered administrator routes, Command-K search, customizable toolbars,
 restorable main/detail windows, inspectors, deep links and system context menus. Business
-screens outside Goal M3 remain placeholders until their corresponding M4-M5 goals.
+screens outside Goal M3 are implemented by their corresponding M4-M5 workspaces.
 
 ## Goal M3 daily monitoring
 
@@ -117,3 +117,23 @@ industry metadata) stay as retained JSON instead of being recomputed client-side
   AI mood console with history health, and the admin Mood Lab (run start with active-only
   backoff polling, results, and guarded EOD history recovery).
 
+## Goal M5 high-risk workflows
+
+Goal M5 replaces the AI, portfolio, IBKR, Crypto, journal, settings and administration
+placeholders with authenticated native workspaces. `GoalM5Service` is their only transport
+boundary. Flexible server results remain lossless JSON for forward compatibility and are
+presented as native list/detail content without executing HTML or JavaScript.
+
+- AI Chat supports conversation history, rich-message snapshots, model and search modes,
+  chunk-safe streaming, tool activity, citations, stop, Deep Search confirmation and
+  server-truth recovery after interruption.
+- Portfolio and journal views expose the server-calculated multi-currency summary,
+  positions, transactions, lots, completed trades, performance, attribution, benchmark,
+  health, strategy profile, interpretation and asynchronous analysis history.
+- IBKR screens are read-only account/research surfaces plus explicit server-side syncs.
+  The app contains no IBKR credential or proxy setting and cannot bypass server policy.
+- Crypto research, quant/backtest and internal PAPER screens expose persisted identity,
+  market, derivatives, research, signal, run, order, fill, ledger and reconciliation state.
+  There is no Binance Demo/Testnet/Live or real-order control surface.
+- Destructive or paid operations use a scoped confirmation, role-gated endpoints remain
+  hidden from ordinary users, and valid content stays visible while a refresh fails.

@@ -7,6 +7,9 @@ public struct AIStreamSnapshot: Equatable, Sendable {
     public var answer = ""
     public var activeTools: Set<String> = []
     public var eventCount = 0
+    public var citations: [String] = []
+    public var completedBlocks: [String] = []
+    public var progressMessage: String?
     public init() {}
 }
 
@@ -49,6 +52,16 @@ public struct AIStreamStateMachine: Sendable {
                 snapshot.answer = answer
             }
             snapshot.activeTools.removeAll(); snapshot.phase = .completed
+        case "citation.map":
+            if let citations = object["citations"] as? [[String: Any]] {
+                snapshot.citations = citations.compactMap { ($0["url"] ?? $0["title"]) as? String }
+            }
+        case "response.block.completed", "response.rich_content.completed":
+            if let type = object["type"] as? String, !snapshot.completedBlocks.contains(type) {
+                snapshot.completedBlocks.append(type)
+            }
+        case "deep_search.progress":
+            snapshot.progressMessage = object["message"] as? String ?? object["status"] as? String
         case "error":
             snapshot.activeTools.removeAll()
             snapshot.phase = .failed(code: object["code"] as? String ?? "AI_STREAM_ERROR", message: object["message"] as? String ?? "服务暂时不可用")

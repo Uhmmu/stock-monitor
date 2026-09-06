@@ -3,7 +3,7 @@ import Foundation
     import FoundationNetworking
 #endif
 
-public enum HTTPMethod: String, Sendable { case get = "GET", post = "POST", put = "PUT", patch = "PATCH", delete = "DELETE" }
+public enum HTTPMethod: String, Equatable, Sendable { case get = "GET", post = "POST", put = "PUT", patch = "PATCH", delete = "DELETE" }
 
 public struct EmptyResponse: Codable, Equatable, Sendable {
     public init() {}
@@ -241,6 +241,28 @@ public actor APIClient {
         request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
         if let accessToken {
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
+    /// Builds an authenticated streaming request without sending it. This keeps
+    /// stream bodies and credentials inside the same API boundary as REST calls.
+    public func makeStreamingRequest(
+        path: String,
+        method: HTTPMethod = .get,
+        body: (some Encodable & Sendable)?,
+        queryItems: [URLQueryItem] = [],
+        accessToken: String? = nil
+    ) throws -> URLRequest {
+        var request = makeRequest(
+            path: path, queryItems: queryItems, accessToken: accessToken,
+            accept: "text/event-stream"
+        )
+        request.httpMethod = method.rawValue
+        request.timeoutInterval = 300
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            do { request.httpBody = try encoder.encode(body) } catch { throw APIError.encoding }
         }
         return request
     }
