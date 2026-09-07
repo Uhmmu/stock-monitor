@@ -307,7 +307,7 @@ public struct TechnicalAnalysisView: View {
     private func analysisSection(_ detail: TechnicalAnalysisDetail) -> some View {
         if let analysis = detail.analysis {
             DisclosureGroup("服务端技术分析结论") {
-                JSONEvidenceView(value: analysis).padding(.top, 8)
+                SemanticEvidenceView(value: analysis, domain: .technical).padding(.top, 8)
             }
             .font(.headline)
         }

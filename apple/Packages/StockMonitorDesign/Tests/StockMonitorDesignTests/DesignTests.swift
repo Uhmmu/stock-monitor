@@ -3,8 +3,27 @@ import Testing
 
 @Test func everyFoundationStateHasStableRawValue() {
     #expect(ResourcePresentationState.allCases.map(\.rawValue) == [
-        "idle", "loading", "ready", "refreshing", "stale", "empty", "error", "permissionDenied", "offline",
+        "idle", "loading", "ready", "refreshing", "partial", "stale", "empty", "error", "permissionDenied", "offline",
     ])
+}
+
+@Test func jobPhasesAndMutationFeedbackCarryStableTitles() {
+    #expect(WorkspaceJobPhase.allCases.map(\.rawValue) == ["queued", "running", "completed", "failed", "canceled", "unknown"])
+    #expect(WorkspaceJobPhase(serverStatus: "pending") == .queued)
+    #expect(WorkspaceJobPhase(serverStatus: "running") == .running)
+    #expect(WorkspaceJobPhase(serverStatus: "partial_failed") == .completed)
+    #expect(WorkspaceJobPhase(serverStatus: "failed") == .failed)
+    #expect(WorkspaceJobPhase.queued.status == .info)
+    #expect(WorkspaceJobPhase.failed.status == .danger)
+    #expect(WorkspaceJobPhase.completed.title == "已完成")
+
+    let idle: MutationFeedbackPhase = .idle
+    #expect(idle == .idle)
+    #expect(MutationFeedbackPhase.pending(actionTitle: "重建持仓") != idle)
+    #expect(
+        MutationFeedbackPhase.confirmed(actionTitle: "对账", message: "ok")
+            == MutationFeedbackPhase.confirmed(actionTitle: "对账", message: "ok")
+    )
 }
 
 @Test func designLanguageHasCompleteStableRoles() {

@@ -263,12 +263,12 @@ public struct IndustryPulseView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     M4SectionHeader("系统状态")
-                    JSONEvidenceView(value: status.marketData)
+                    SemanticEvidenceView(value: status.marketData, domain: .industry)
                     HStack(spacing: 16) {
                         LabeledContent("待复核种子替换", value: "\(status.replacementPending ?? 0)")
                     }.font(.callout)
                     DisclosureGroup("最近同步运行") {
-                        JSONEvidenceView(value: status.latestRun).padding(.top, 6)
+                        SemanticEvidenceView(value: status.latestRun, domain: .industry).padding(.top, 6)
                     }
                     .font(.headline)
                 }.padding(4)

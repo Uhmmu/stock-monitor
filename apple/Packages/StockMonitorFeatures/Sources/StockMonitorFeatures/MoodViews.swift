@@ -111,16 +111,16 @@ public struct MoodView: View {
                     sectorList("板块情绪", overview.sectors)
                     sectorList("AI 产业链情绪", overview.aiChain)
                     DisclosureGroup("涨跌与拥挤信号") {
-                        JSONEvidenceView(value: overview.movers).padding(.top, 6)
+                        SemanticEvidenceView(value: overview.movers, domain: .mood).padding(.top, 6)
                     }
                     .font(.headline)
                     DisclosureGroup("背离与状态迁移") {
-                        JSONEvidenceView(value: overview.divergences).padding(.top, 6)
-                        JSONEvidenceView(value: overview.transitions).padding(.top, 6)
+                        SemanticEvidenceView(value: overview.divergences, domain: .mood).padding(.top, 6)
+                        SemanticEvidenceView(value: overview.transitions, domain: .mood).padding(.top, 6)
                     }
                     .font(.headline)
                     DisclosureGroup("报告摘要") {
-                        JSONEvidenceView(value: overview.report).padding(.top, 6)
+                        SemanticEvidenceView(value: overview.report, domain: .mood).padding(.top, 6)
                     }
                     .font(.headline)
                 }.padding(4)
@@ -173,11 +173,11 @@ public struct MoodView: View {
                         }
                     }.font(.callout)
                     DisclosureGroup("最近运行") {
-                        JSONEvidenceView(value: health.run).padding(.top, 6)
+                        SemanticEvidenceView(value: health.run, domain: .mood).padding(.top, 6)
                     }
                     .font(.headline)
                     DisclosureGroup("交易日历健康") {
-                        JSONEvidenceView(value: health.calendar).padding(.top, 6)
+                        SemanticEvidenceView(value: health.calendar, domain: .mood).padding(.top, 6)
                     }
                     .font(.headline)
                 } else {
@@ -185,7 +185,7 @@ public struct MoodView: View {
                 }
                 if let gaps = model.gaps {
                     DisclosureGroup("缺口状态（\(gaps.status ?? "—")）") {
-                        JSONEvidenceView(value: gaps.gaps).padding(.top, 6)
+                        SemanticEvidenceView(value: gaps.gaps, domain: .mood).padding(.top, 6)
                     }
                     .font(.headline)
                 }
@@ -345,7 +345,7 @@ public struct MoodLabView: View {
                             }
                         }.font(.callout)
                         DisclosureGroup("研究汇总") {
-                            JSONEvidenceView(value: overview.studies).padding(.top, 6)
+                            SemanticEvidenceView(value: overview.studies, domain: .mood).padding(.top, 6)
                         }
                         .font(.headline)
                         if let warnings = overview.warnings, !warnings.isEmpty {
@@ -403,7 +403,7 @@ public struct MoodLabView: View {
                         TableColumn("状态") { item in Text(item.state ?? "—") }
                         TableColumn("周期") { item in Text(item.horizon.map(String.init) ?? "—") }
                         TableColumn("样本数") { item in Text(item.sampleCount.map(String.init) ?? "数据不足") }
-                        TableColumn("指标") { item in JSONEvidenceView(value: item.metrics) }
+                        TableColumn("指标") { item in SemanticEvidenceView(value: item.metrics, domain: .mood) }
                     }
                     .frame(minHeight: 180)
                     if model.results.count > 150 {
@@ -433,7 +433,7 @@ public struct MoodLabView: View {
             }
             if let gaps = model.gaps {
                 DisclosureGroup("缺口详情（\(gaps.status ?? "—")）") {
-                    JSONEvidenceView(value: gaps.gaps).padding(.top, 6)
+                    SemanticEvidenceView(value: gaps.gaps, domain: .mood).padding(.top, 6)
                 }
                 .font(.headline)
             }

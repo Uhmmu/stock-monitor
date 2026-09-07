@@ -160,7 +160,7 @@ public struct MacroView: View {
                     cardSection("序列摘要", overview.summaries)
                     cardSection("数据源与用量", overview.source)
                     DisclosureGroup("完整性与免责声明") {
-                        JSONEvidenceView(value: overview.integrity).padding(.top, 6)
+                        SemanticEvidenceView(value: overview.integrity, domain: .macro).padding(.top, 6)
                         if let disclaimer = overview.disclaimer {
                             Text(disclaimer).font(.caption).foregroundStyle(.secondary).padding(.top, 4)
                         }
@@ -175,7 +175,7 @@ public struct MacroView: View {
 
     private func cardSection(_ title: String, _ value: JSONValue?) -> some View {
         DisclosureGroup(title) {
-            JSONEvidenceView(value: value).padding(.top, 8)
+            SemanticEvidenceView(value: value, domain: .macro).padding(.top, 8)
         }
         .font(.headline)
     }
@@ -217,12 +217,12 @@ public struct MacroView: View {
                         }
                         latestStrip(detail)
                         DisclosureGroup("如何解读") {
-                            JSONEvidenceView(value: detail.interpretation).padding(.top, 6)
+                            SemanticEvidenceView(value: detail.interpretation, domain: .macro).padding(.top, 6)
                         }
                         .font(.headline)
                         DisclosureGroup("新鲜度与派生序列") {
-                            JSONEvidenceView(value: detail.freshness).padding(.top, 6)
-                            JSONEvidenceView(value: detail.derivedSeries).padding(.top, 6)
+                            SemanticEvidenceView(value: detail.freshness, domain: .macro).padding(.top, 6)
+                            SemanticEvidenceView(value: detail.derivedSeries, domain: .macro).padding(.top, 6)
                         }
                         .font(.headline)
                     } else {
@@ -280,7 +280,7 @@ public struct MacroView: View {
                         }
                     }
                     .frame(height: 300)
-                    JSONEvidenceView(value: curve.spreads)
+                    SemanticEvidenceView(value: curve.spreads, domain: .macro)
                     Text(curve.disclaimer ?? "").font(.caption).foregroundStyle(.secondary)
                 }.padding(20)
             }
@@ -312,9 +312,9 @@ public struct MacroView: View {
                             LabeledContent("最近尝试", value: last)
                         }
                     }.font(.callout)
-                    JSONEvidenceView(value: status.usage)
+                    SemanticEvidenceView(value: status.usage, domain: .macro)
                     DisclosureGroup("同步运行历史") {
-                        JSONEvidenceView(value: status.runs).padding(.top, 6)
+                        SemanticEvidenceView(value: status.runs, domain: .macro).padding(.top, 6)
                     }
                     .font(.headline)
                 }.padding(20)

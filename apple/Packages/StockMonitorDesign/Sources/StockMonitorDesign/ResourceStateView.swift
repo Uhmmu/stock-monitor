@@ -1,7 +1,7 @@
 import SwiftUI
 
 public enum ResourcePresentationState: String, CaseIterable, Sendable {
-    case idle, loading, ready, refreshing, stale, empty, error, permissionDenied, offline
+    case idle, loading, ready, refreshing, partial, stale, empty, error, permissionDenied, offline
 }
 
 public struct ResourceStateView<Content: View>: View {
@@ -22,6 +22,10 @@ public struct ResourceStateView<Content: View>: View {
                 content
             case .refreshing:
                 content.overlay(alignment: .topTrailing) { ProgressView().controlSize(.small) }
+            case .partial:
+                SemanticStatusLabel("部分数据不可用，以下为可用内容", status: .warning)
+                    .accessibilityIdentifier("state.partial")
+                content
             case .stale:
                 FreshnessBadge("显示上次有效数据", stale: true)
                 content

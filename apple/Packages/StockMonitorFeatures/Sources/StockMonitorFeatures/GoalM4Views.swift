@@ -80,7 +80,8 @@ struct M4SectionHeader: View {
     }
 }
 
-/// 把服务端 JSON 证据渲染为键值列表；缺失值显示“数据不足”，不做任何估算。
+/// Debug fallback（R2.1 后主路径禁止使用）：按字母序平铺 JSON 证据。
+/// 正常页面一律使用 `SemanticEvidenceView`；新代码只在明确的诊断入口引用本组件。
 struct JSONEvidenceView: View {
     let value: JSONValue?
 
@@ -420,7 +421,7 @@ public struct FinancialsView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(page.rows) { row in
                         DisclosureGroup("\(row.fiscalYear ?? 0) \(row.fiscalPeriod ?? "")（\(row.periodEnd ?? "—")）") {
-                            JSONEvidenceView(value: statementValue(row))
+                            SemanticEvidenceView(value: statementValue(row), domain: .financials)
                                 .padding(.top, 8)
                         }
                         .font(.headline)
@@ -671,7 +672,7 @@ public struct ValuationView: View {
     private func grahamSection(_ snapshot: ValuationCrossModel) -> some View {
         if let graham = snapshot.fields["graham"] {
             DisclosureGroup("Graham 分析") {
-                JSONEvidenceView(value: graham).padding(.top, 8)
+                SemanticEvidenceView(value: graham, domain: .valuation).padding(.top, 8)
             }
             .font(.headline)
         }
@@ -686,7 +687,7 @@ public struct ValuationView: View {
                 M4SectionHeader("快照其它字段", subtitle: "原样呈现服务端证据")
                 ForEach(extras, id: \.self) { key in
                     DisclosureGroup(displayKey(key)) {
-                        JSONEvidenceView(value: snapshot.fields[key]).padding(.top, 6)
+                        SemanticEvidenceView(value: snapshot.fields[key], domain: .valuation).padding(.top, 6)
                     }
                     .font(.callout)
                 }
@@ -879,7 +880,7 @@ struct GrahamLabSheet: View {
         NavigationStack {
             Form {
                 Section("原始 Graham 输入") {
-                    JSONEvidenceView(value: snapshot?.fields["graham"]?.objectValue["inputs"])
+                    SemanticEvidenceView(value: snapshot?.fields["graham"]?.objectValue["inputs"], domain: .valuation)
                 }
                 Section("覆盖输入（留空则沿用快照值）") {
                     TextField("增长率 %（如 8.5）", text: $growthRate)
@@ -890,7 +891,7 @@ struct GrahamLabSheet: View {
                 }
                 Section("重算结果") {
                     FeatureErrorBanner(error: model?.error)
-                    JSONEvidenceView(value: model?.result)
+                    SemanticEvidenceView(value: model?.result, domain: .valuation)
                 }
             }
             .formStyle(.grouped)

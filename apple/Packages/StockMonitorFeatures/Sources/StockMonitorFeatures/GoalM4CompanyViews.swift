@@ -717,7 +717,7 @@ public struct CongressView: View {
     private func movesSection(_ detail: CongressFigureDetail) -> some View {
         if let moves = detail.moves {
             DisclosureGroup("调仓看板") {
-                JSONEvidenceView(value: moves).padding(.top, 8)
+                SemanticEvidenceView(value: moves, domain: .congress).padding(.top, 8)
             }
             .font(.headline)
         }
