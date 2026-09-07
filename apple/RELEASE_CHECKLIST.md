@@ -19,7 +19,7 @@
 - Run Web and Mac golden flows against the same non-production test account and attach results to the
   parity matrix evidence log.
 
-## Distribution gate requiring paid membership
+## Extra Goal MX1 seed: distribution gate requiring paid membership
 
 - Install a Developer ID Application certificate without exporting it into the repository.
 - Store notarization credentials in a local Keychain profile and set only its profile name in the shell.
@@ -30,3 +30,5 @@
 Channel rules and the data-safe rollback boundary are documented in `RELEASE_CHANNELS.md`.
 
 Never check in a Team ID, certificate, notary credential, account identifier, token or secret.
+Re-baseline this section against the current app, server, Apple requirements and release channel
+before executing MX1; it is a living seed list rather than a frozen future specification.

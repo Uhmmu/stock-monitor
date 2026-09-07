@@ -3,7 +3,8 @@ set -eu
 
 apple_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 app_path=${1:-"$apple_root/DerivedData/local-app/Stock Monitor.app"}
-executable="$app_path/Contents/MacOS/StockMonitorMac"
+executable_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")
+executable="$app_path/Contents/MacOS/$executable_name"
 temporary_root=$(mktemp -d "$apple_root/DerivedData/security-audit.XXXXXX")
 entitlements_path="$temporary_root/entitlements.plist"
 libraries_path="$temporary_root/libraries.txt"
@@ -17,6 +18,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 test -d "$app_path"
+test -f "$executable"
 test "$(lipo -archs "$executable")" = arm64
 codesign --verify --deep --strict --verbose=2 "$app_path"
 codesign -dvv "$app_path" 2>&1 | grep -q 'flags=.*runtime'

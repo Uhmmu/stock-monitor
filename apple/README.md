@@ -158,7 +158,7 @@ legacy rollout window. Support diagnostics are user-initiated and privacy-scoped
 
 The app includes an explicit Privacy Manifest, release notes, release checklist, deterministic
 arm64 local candidate packaging and a single automated verification entry point. Same-account
-Web/Mac golden flows, Instruments/assistive-technology evidence and clean-device soak results stay
-marked runtime-pending until actually executed. Developer ID signing, Apple notarization,
-stapling and public Gatekeeper validation remain blocked until a paid Apple Developer Program
-membership is available; an ad-hoc local candidate must never be described as notarized.
+Web/Mac golden flows, remaining Instruments/assistive-technology evidence, clean-device soak,
+Developer ID signing, Apple notarization, stapling and public Gatekeeper validation are tracked by
+the living Extra Goal MX1 in the macOS plan. MX1 is re-baselined when execution begins so continued
+product work can change its scope. An ad-hoc local candidate must never be described as notarized.
