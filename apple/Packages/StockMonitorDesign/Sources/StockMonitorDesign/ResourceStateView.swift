@@ -23,17 +23,16 @@ public struct ResourceStateView<Content: View>: View {
             case .refreshing:
                 content.overlay(alignment: .topTrailing) { ProgressView().controlSize(.small) }
             case .stale:
-                Label("显示上次有效数据", systemImage: "clock.badge.exclamationmark")
-                    .foregroundStyle(.secondary)
+                FreshnessBadge("显示上次有效数据", stale: true)
                 content
             case .error:
-                ContentUnavailableView("暂时无法加载", systemImage: "exclamationmark.triangle", description: Text("请检查网络后重试"))
+                InlineError(message: "请检查网络后重试")
             case .empty:
-                ContentUnavailableView("暂无数据", systemImage: "tray")
+                EmptyState("暂无数据", description: "当前范围没有可展示的记录。")
             case .permissionDenied:
-                ContentUnavailableView("没有权限", systemImage: "lock", description: Text("权限由服务端账户角色决定"))
+                EmptyState("没有权限", systemImage: "lock", description: "权限由服务端账户角色决定。")
             case .offline:
-                ContentUnavailableView("当前离线", systemImage: "wifi.slash", description: Text("连接恢复后会自动刷新"))
+                EmptyState("当前离线", systemImage: "wifi.slash", description: "连接恢复后会自动刷新。")
             }
         }
         .accessibilityElement(children: .contain)

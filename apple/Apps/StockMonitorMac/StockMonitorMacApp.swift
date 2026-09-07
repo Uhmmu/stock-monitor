@@ -28,6 +28,7 @@ struct StockMonitorMacApp: App {
     }
 
     private static func refreshTokenStore() -> KeychainRefreshTokenStore {
+        // swiftlint:disable opening_brace
         #if DEBUG
             if let service = ProcessInfo.processInfo.environment["STOCK_MONITOR_TEST_KEYCHAIN_SERVICE"],
                service.hasPrefix("com.jiale.StockMonitor.ui-tests.")
@@ -35,15 +36,23 @@ struct StockMonitorMacApp: App {
                 return KeychainRefreshTokenStore(service: service)
             }
         #endif
+        // swiftlint:enable opening_brace
         return KeychainRefreshTokenStore()
     }
 
     var body: some Scene {
         WindowGroup("Stock Monitor") {
-            ClientCompatibilityGateView(client: apiClient, currentVersion: Self.appVersion) {
-                SessionGateView(model: sessionModel) { identity in
-                    AppShellView(navigation: navigation, service: marketService)
-                        .onAppear { navigation.isAdministrator = identity.role == "admin" }
+            if let auditRoute = Self.visualAuditRoute {
+                RouteVisualAuditView(route: auditRoute, state: Self.visualAuditState)
+                    .environment(\.interfaceDensity, Self.visualAuditDensity)
+                    .preferredColorScheme(Self.visualAuditColorScheme)
+                    .frame(minWidth: Self.visualAuditWidth.size.width, minHeight: Self.visualAuditWidth.size.height)
+            } else {
+                ClientCompatibilityGateView(client: apiClient, currentVersion: Self.appVersion) {
+                    SessionGateView(model: sessionModel) { identity in
+                        AppShellView(navigation: navigation, service: marketService)
+                            .onAppear { navigation.isAdministrator = identity.role == "admin" }
+                    }
                 }
             }
         }
@@ -80,5 +89,33 @@ struct StockMonitorMacApp: App {
 
     private static var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+    }
+
+    private static var visualAuditRoute: AppRoute? {
+        guard ProcessInfo.processInfo.arguments.contains("--visual-audit"),
+              let value = ProcessInfo.processInfo.environment["STOCK_MONITOR_VISUAL_AUDIT_ROUTE"]
+        else { return nil }
+        return AppRoute(rawValue: value)
+    }
+
+    private static var visualAuditState: VisualAuditState {
+        VisualAuditState(rawValue: ProcessInfo.processInfo.environment["STOCK_MONITOR_VISUAL_AUDIT_STATE"] ?? "normal") ?? .normal
+    }
+
+    private static var visualAuditDensity: InterfaceDensity {
+        let value = ProcessInfo.processInfo.environment["STOCK_MONITOR_VISUAL_AUDIT_DENSITY"] ?? "comfortable"
+        return InterfaceDensity(rawValue: value) ?? .comfortable
+    }
+
+    private static var visualAuditWidth: VisualAuditWidth {
+        VisualAuditWidth(rawValue: ProcessInfo.processInfo.environment["STOCK_MONITOR_VISUAL_AUDIT_WIDTH"] ?? "standard") ?? .standard
+    }
+
+    private static var visualAuditColorScheme: ColorScheme? {
+        switch ProcessInfo.processInfo.environment["STOCK_MONITOR_VISUAL_AUDIT_APPEARANCE"] {
+        case "light": .light
+        case "dark": .dark
+        default: nil
+        }
     }
 }

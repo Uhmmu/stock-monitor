@@ -17,11 +17,33 @@ public struct DesignLabView: View {
     public var body: some View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 16)], alignment: .leading, spacing: 16) {
+                labCard("文字角色", systemImage: "textformat") {
+                    ForEach(StockMonitorTypographyRole.allCases, id: \.rawValue) { role in
+                        LabeledContent(role.rawValue) { Text("苹果原生金融界面").stockMonitorTypography(role) }
+                    }
+                }
+                labCard("间距、圆角与 Surface", systemImage: "square.3.layers.3d") {
+                    HStack(spacing: StockMonitorSpacing.small) {
+                        ForEach(StockMonitorSurface.allCases, id: \.rawValue) { surface in
+                            Text(surface.rawValue).padding(StockMonitorSpacing.small).stockMonitorSurface(surface)
+                        }
+                    }
+                    Text("页面 \(Int(density.pagePadding)) pt · 行高 \(Int(density.rowHeight)) pt · 控件 \(Int(density.controlHeight)) pt")
+                        .stockMonitorTypography(.metadata)
+                }
                 labCard("语义状态", systemImage: "circle.dotted") {
-                    SemanticStatusLabel("行情已连接", status: .live)
-                    SemanticStatusLabel("缓存于 18 分钟前", status: .stale)
-                    SemanticStatusLabel("参考报价", status: .warning)
-                    SemanticStatusLabel("财务数据不足", status: .unavailable)
+                    ForEach(SemanticStatusLabel.Status.allCases, id: \.rawValue) { status in
+                        SemanticStatusLabel(status.rawValue, status: status)
+                    }
+                }
+                labCard("徽标与金融数字", systemImage: "number") {
+                    HStack { SourceBadge("Yahoo"); FreshnessBadge("18 分钟前", stale: true); CoverageBadge(covered: 7, total: 10) }
+                    MetricGrid([
+                        .init(label: "价格", value: FinancialValueFormatter.price(234.12, currency: "USD")),
+                        .init(label: "变化", value: FinancialValueFormatter.percent(-0.023), status: .negative),
+                        .init(label: "市值", value: FinancialValueFormatter.amount(3_490_000_000_000, currency: "USD")),
+                        .init(label: "预估倍数", value: FinancialValueFormatter.multiple(31.4, state: .estimated), status: .info),
+                    ])
                 }
                 labCard("表格与密度", systemImage: "tablecells") {
                     Picker("证券", selection: $selection) { Text("AAPL").tag("AAPL"); Text("MSFT").tag("MSFT") }
@@ -47,8 +69,15 @@ public struct DesignLabView: View {
                         .foregroundStyle(.secondary)
                 }
                 labCard("图表 chrome", systemImage: "chart.xyaxis.line") {
-                    HStack { Picker("区间", selection: .constant("1M")) { Text("1月").tag("1M") }; Spacer(); Button("导出", systemImage: "square.and.arrow.up") {} }
-                    RoundedRectangle(cornerRadius: 8).fill(.quaternary).frame(height: 92).overlay(Text("图表内容层不叠加玻璃材质").foregroundStyle(.secondary))
+                    HStack {
+                        Picker("区间", selection: .constant("1M")) { Text("1月").tag("1M") }
+                        Spacer()
+                        Button("导出", systemImage: "square.and.arrow.up") {}
+                    }
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.quaternary)
+                        .frame(height: 92)
+                        .overlay(Text("图表内容层不叠加玻璃材质").foregroundStyle(.secondary))
                 }
                 labCard("可访问性环境", systemImage: "accessibility") {
                     LabeledContent("Reduce Motion", value: reduceMotion ? "开启" : "关闭")
@@ -57,7 +86,8 @@ public struct DesignLabView: View {
                 }
                 labCard("Loading / Empty / Error", systemImage: "rectangle.3.group") {
                     ProgressView("正在加载")
-                    ContentUnavailableView("暂无数据", systemImage: "tray")
+                    EmptyState("暂无数据", description: "当前范围没有可展示的记录。")
+                    InlineError(message: "保留上次有效内容，并提供可复制的错误详情。", requestID: "lab-request-id")
                 }
             }
             .padding(20)
