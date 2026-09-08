@@ -63,6 +63,11 @@ private func decode(_ json: String) throws -> JSONValue {
     #expect(list.columns.first?.label == "代码")
     assertNoSnakeCase(list.columns.map(\.label), source: "portfolio.summary columns")
     #expect(list.rows.first?.identity == "NVDA")
+    let currentPriceIndex = try #require(list.columns.firstIndex { $0.key == "current_price" })
+    let baseMarketValueIndex = try #require(list.columns.firstIndex { $0.key == "base_currency_market_value" })
+    // Row values omit the identity column, so their indices are offset by one.
+    #expect(list.rows[1].values[currentPriceIndex - 1].text.contains("JPY"))
+    #expect(list.rows[1].values[baseMarketValueIndex - 1].text.contains("USD"))
     #expect(presentation.diagnostics.contains("mystery_field"))
     #expect(presentation.provenance.contains { $0.label == "账户数据来源" })
 }
@@ -306,14 +311,6 @@ private func decode(_ json: String) throws -> JSONValue {
         """#
     ).objectValue
     let domain = SemanticFieldDomain.valuation
-
-    func qualifier(_ key: String) -> String? {
-        let spec = SemanticKeyDictionary.resolve(key: key, domain: domain)
-        let raw = object[key] ?? .null
-        return SemanticFieldFormatter.display(
-            .null, spec: .init(key, spec?.label ?? key, .decimal(precision: 2)), baseCurrency: nil
-        ).qualifier
-    }
 
     // 哨兵值映射为互不相同的缺失语义。
     #expect(SemanticMissingSemantics.state(fromString: "not_applicable") == .notApplicable)

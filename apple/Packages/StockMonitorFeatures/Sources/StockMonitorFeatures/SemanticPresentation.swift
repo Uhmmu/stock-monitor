@@ -301,7 +301,8 @@ public enum SemanticPresentationBuilder {
                 guard let spec = SemanticKeyDictionary.resolve(key: key, domain: domain) else { continue }
                 let raw = fields[key] ?? .null
                 let state = raw == .null ? SemanticMissingSemantics.state(for: raw, in: fields) : nil
-                let display = displayValue(raw, spec: spec, baseCurrency: baseCurrency, state: state)
+                let currency = displayCurrency(for: key, in: fields, baseCurrency: baseCurrency)
+                let display = displayValue(raw, spec: spec, baseCurrency: currency, state: state)
                 let field = PresentationField(key: key, label: spec.label, display: display, explanation: spec.explanation)
                 if primary.count < evidencePrimaryLimit {
                     primary.append(field)
@@ -328,7 +329,8 @@ public enum SemanticPresentationBuilder {
                         guard let spec = SemanticKeyDictionary.resolve(key: key, domain: domain) else { return nil }
                         let raw = fields[key] ?? .null
                         guard raw != .null else { return nil }
-                        return "\(spec.label) \(displayValue(raw, spec: spec, baseCurrency: baseCurrency, state: nil).text)"
+                        let currency = displayCurrency(for: key, in: fields, baseCurrency: baseCurrency)
+                        return "\(spec.label) \(displayValue(raw, spec: spec, baseCurrency: currency, state: nil).text)"
                     }
                     return parts.isEmpty ? item.displayText : parts.joined(separator: " · ")
                 default:
@@ -385,7 +387,12 @@ public enum SemanticPresentationBuilder {
             results.append(
                 PresentationField(
                     key: key, label: spec.label,
-                    display: displayValue(raw, spec: spec, baseCurrency: baseCurrency, state: nil),
+                    display: displayValue(
+                        raw,
+                        spec: spec,
+                        baseCurrency: displayCurrency(for: key, in: object, baseCurrency: baseCurrency),
+                        state: nil
+                    ),
                     explanation: spec.explanation
                 )
             )
@@ -407,7 +414,13 @@ public enum SemanticPresentationBuilder {
             let values = columns.dropFirst().map { column in
                 let raw = item[column.key] ?? .null
                 let state: FinancialValueState? = raw == .null ? SemanticMissingSemantics.state(for: raw, in: item) : nil
-                return displayValue(raw, spec: .init(column.key, column.label, column.kind), baseCurrency: baseCurrency, state: state)
+                let currency = displayCurrency(for: column.key, in: item, baseCurrency: baseCurrency)
+                return displayValue(
+                    raw,
+                    spec: .init(column.key, column.label, column.kind),
+                    baseCurrency: currency,
+                    state: state
+                )
             }
             return PresentationList.Row(identity: identity, values: values)
         }
@@ -495,6 +508,20 @@ public enum SemanticPresentationBuilder {
         guard raw == .null else { return display }
         let missingState = state ?? SemanticMissingSemantics.state(for: raw, in: [:])
         return FinancialValueFormatter.missing(missingState)
+    }
+
+    /// Row-level market prices and values are denominated in the instrument's own currency.
+    /// Explicitly converted fields keep the response-level base currency.
+    private static func displayCurrency(
+        for key: String, in object: [String: JSONValue], baseCurrency: String?
+    ) -> String? {
+        if key.hasPrefix("base_currency_") {
+            return baseCurrency
+        }
+        return object["currency"]?.stringValue
+            ?? object["quote_currency"]?.stringValue
+            ?? object["base_currency"]?.stringValue
+            ?? baseCurrency
     }
 
     private static func strings(values: [JSONValue]) -> [String] {

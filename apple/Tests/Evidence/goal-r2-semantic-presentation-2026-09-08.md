@@ -33,11 +33,18 @@ Plan: `docs/plans/macos-native-readability-improvement-plan.md` Goal R2（R2.0/R
 ## Verification
 
 - `StockMonitorCore` 36 passed；`StockMonitorDesign` 5 passed；`StockMonitorFeatures` 59 passed（新增 17 项：contract fixtures 10、目录/证据 4、状态 2、确认语义 1）。
-- swiftformat --lint 0 违例；swiftlint 0 error；`verify-readability-baseline.sh`（R1 guard）与新增 `verify-readability-r2.sh` 均通过。
+- swiftformat --lint 0 违例；`verify-readability-baseline.sh`（R1 guard）与新增 `verify-readability-r2.sh` 均通过；SwiftLint 当前基线见下方最终验收说明。
 - 根包 `swift build -c release --arch arm64` 与 Xcode workspace Release 构建通过。
 - 视觉证据：`Tests/VisualBaselines/R2/` 8 张 Before/After 截图（同一 fixture、1180×820、light/dark × comfortable/compact），由确定性离屏渲染生成并字节级比对；Before（snake_case JSON 树）与 After（中文语义页）经视觉检查确认渲染正常、主内容区无 snake_case、无重叠/截断。
 - 性能：展示层为纯客户端映射，无新增网络请求/定时器；R1 的 31 路由快照回归全部通过（无视觉漂移引入）。
 - Web/服务端核对：字段名与后端路由逐一比对（portfolio/performance.py、ibkr/formal_routes.py、discovery/service.py、crypto/latest.py、quant paper/signals、ai conversations schemas 等），未改变任何请求路径与请求体；`allReadEndpointsRemainAuthenticatedAPIPaths` 等既有契约测试保持通过。
+
+### 2026-09-09 最终验收修正
+
+- 人工检查多币种组合 Before/After 图时发现，本币现价曾错误沿用响应级基础币种；展示构建器现按行读取 `currency`/`quote_currency`，仅 `base_currency_*` 字段继续使用组合基础币种。
+- contract fixture 新增双重断言：`1578.T.current_price` 显示 `JPY`，`base_currency_market_value` 显示 `USD`；light/comfortable 与 dark/compact 两张组合基线已重新生成并人工复核。
+- 修正后重新通过 Core 36、Design 5、Features 59、R1/R2 source gate、arm64 Release build 与 unsigned Xcode `build-for-testing`。
+- SwiftFormat 全量 lint 通过。SwiftLint 全量仍报告此前就存在的文件长度/旧格式债务；本次币种修正未扩大规则范围，R2 退出条件不以清理全仓旧 lint 债务为前提。
 
 ## 更新后的严重度清单
 
