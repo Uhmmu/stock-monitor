@@ -56,6 +56,40 @@ public enum StockMonitorContentWidth {
     public static let minimum: CGFloat = 420
 }
 
+public enum StockMonitorLayoutWidth: String, CaseIterable, Identifiable, Sendable {
+    case narrow, standard, wide
+
+    public var id: Self {
+        self
+    }
+
+    public static func classify(_ width: CGFloat) -> Self {
+        if width < 760 {
+            return .narrow
+        }
+        if width < 1280 {
+            return .standard
+        }
+        return .wide
+    }
+
+    public var title: String {
+        switch self {
+        case .narrow: "窄"
+        case .standard: "标准"
+        case .wide: "宽"
+        }
+    }
+
+    public var maximumMetricColumns: Int {
+        switch self {
+        case .narrow: 2
+        case .standard: 4
+        case .wide: 6
+        }
+    }
+}
+
 public enum StockMonitorCornerRadius {
     public static let badge: CGFloat = 5
     public static let control: CGFloat = 7
@@ -166,6 +200,23 @@ public enum ContentSemanticRole: String, CaseIterable, Sendable {
 
 public extension EnvironmentValues {
     @Entry var interfaceDensity: InterfaceDensity = .comfortable
+    @Entry var stockMonitorLayoutWidth: StockMonitorLayoutWidth = .standard
+}
+
+public struct AdaptiveLayoutReader<Content: View>: View {
+    private let content: Content
+
+    public init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    public var body: some View {
+        GeometryReader { proxy in
+            content
+                .environment(\.stockMonitorLayoutWidth, StockMonitorLayoutWidth.classify(proxy.size.width))
+                .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
 }
 
 public struct SemanticStatusLabel: View {

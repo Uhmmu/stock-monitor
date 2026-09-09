@@ -23,3 +23,14 @@ swift test --package-path apple/Packages/StockMonitorFeatures \
 ```
 
 The macOS UI-test target also captures the same route and stress matrices as XCTest attachments. On machines where XCTest cannot enable Accessibility automation, the off-screen SwiftUI renderer remains the deterministic CI gate; record the UI-run limitation rather than treating it as a product failure.
+
+Goal R3 adds `R3/r3-*.png`: a flat-navigation Before fixture plus narrow, standard, wide/compact and grouped Command-K After fixtures. Record or compare them with:
+
+```sh
+STOCK_MONITOR_SNAPSHOT_OUTPUT_DIR="$PWD/apple/Tests/VisualBaselines/R3" \
+  swift test --package-path apple/Packages/StockMonitorFeatures \
+  --filter r3NavigationAndAdaptiveAnatomyVisualMatrix
+
+swift test --package-path apple/Packages/StockMonitorFeatures \
+  --filter r3NavigationAndAdaptiveAnatomyVisualMatrix
+```

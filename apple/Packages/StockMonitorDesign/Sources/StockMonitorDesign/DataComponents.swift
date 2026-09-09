@@ -12,6 +12,7 @@ public struct FinancialTableRow: Identifiable, Equatable, Sendable {
 
 public struct FinancialTable: View {
     @Environment(\.interfaceDensity) private var density
+    @Environment(\.stockMonitorLayoutWidth) private var layoutWidth
     private let rows: [FinancialTableRow]
     private let currentTitle: String
     private let comparisonTitle: String?
@@ -20,16 +21,32 @@ public struct FinancialTable: View {
     }
 
     public var body: some View {
-        Table(rows) {
-            TableColumn("指标", value: \.label).width(min: 150, ideal: 220)
-            TableColumn(currentTitle) { valueCell($0.current) }.width(min: 100, ideal: 130)
-            TableColumn(comparisonTitle ?? "对比") { row in
-                if let comparison = row.comparison {
-                    valueCell(comparison)
-                } else {
-                    Text(FinancialValueFormatter.unavailable).foregroundStyle(.secondary)
+        Group {
+            if layoutWidth == .narrow {
+                List(rows) { row in
+                    VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+                        Text(row.label).font(.headline)
+                        LabeledContent(currentTitle) { valueCell(row.current) }
+                        if let comparisonTitle, let comparison = row.comparison {
+                            LabeledContent(comparisonTitle) { valueCell(comparison) }
+                        }
+                    }
+                    .padding(.vertical, density.rowPadding)
+                    .accessibilityElement(children: .contain)
                 }
-            }.width(min: 100, ideal: 130)
+            } else {
+                Table(rows) {
+                    TableColumn("指标", value: \.label).width(min: 150, ideal: 220)
+                    TableColumn(currentTitle) { valueCell($0.current) }.width(min: 100, ideal: 130)
+                    TableColumn(comparisonTitle ?? "对比") { row in
+                        if let comparison = row.comparison {
+                            valueCell(comparison)
+                        } else {
+                            Text(FinancialValueFormatter.unavailable).foregroundStyle(.secondary)
+                        }
+                    }.width(min: 100, ideal: 130)
+                }
+            }
         }
         .environment(\.defaultMinListRowHeight, density.rowHeight)
         .accessibilityIdentifier("table.financial")
@@ -89,10 +106,16 @@ public struct TimelineList: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(entry.title).font(.headline)
-                            Spacer()
-                            Text(entry.timestamp).stockMonitorTypography(.metadata)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(entry.title).font(.headline)
+                                Spacer()
+                                Text(entry.timestamp).stockMonitorTypography(.metadata)
+                            }
+                            VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
+                                Text(entry.title).font(.headline)
+                                Text(entry.timestamp).stockMonitorTypography(.metadata)
+                            }
                         }
                         Text(entry.detail).stockMonitorTypography(.body).textSelection(.enabled)
                     }

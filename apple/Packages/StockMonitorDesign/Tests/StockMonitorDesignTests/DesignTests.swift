@@ -58,3 +58,13 @@ import Testing
     #expect(MetricItem(label: "价格", value: value).id == "价格")
     #expect(MetadataItem(label: "来源", value: "Yahoo").id == "来源")
 }
+
+@Test func adaptiveLayoutUsesStableMacBreakpoints() {
+    #expect(StockMonitorLayoutWidth.classify(620) == .narrow)
+    #expect(StockMonitorLayoutWidth.classify(759) == .narrow)
+    #expect(StockMonitorLayoutWidth.classify(760) == .standard)
+    #expect(StockMonitorLayoutWidth.classify(1279) == .standard)
+    #expect(StockMonitorLayoutWidth.classify(1280) == .wide)
+    #expect(StockMonitorLayoutWidth.narrow.maximumMetricColumns == 2)
+    #expect(StockMonitorLayoutWidth.wide.maximumMetricColumns == 6)
+}

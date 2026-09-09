@@ -2,6 +2,7 @@ import SwiftUI
 
 public struct PageScaffold<Header: View, Content: View>: View {
     @Environment(\.interfaceDensity) private var density
+    @Environment(\.stockMonitorLayoutWidth) private var layoutWidth
     private let width: CGFloat
     private let header: Header
     private let content: Content
@@ -22,12 +23,23 @@ public struct PageScaffold<Header: View, Content: View>: View {
                 header
                 content
             }
-            .frame(maxWidth: width, alignment: .leading)
-            .padding(density.pagePadding)
+            .frame(maxWidth: effectiveWidth, alignment: .leading)
+            .padding(effectivePadding)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(StockMonitorCanvas.background)
         .accessibilityElement(children: .contain)
+    }
+
+    private var effectiveWidth: CGFloat {
+        layoutWidth == .narrow ? .infinity : width
+    }
+
+    private var effectivePadding: CGFloat {
+        switch layoutWidth {
+        case .narrow: max(StockMonitorSpacing.regular, density.pagePadding - 8)
+        case .standard, .wide: density.pagePadding
+        }
     }
 }
 
@@ -45,21 +57,31 @@ public struct PageHeader<Trailing: View>: View {
     }
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: StockMonitorSpacing.large) {
-            VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
-                if let eyebrow {
-                    Text(eyebrow).stockMonitorTypography(.metadata)
-                }
-                Text(title).stockMonitorTypography(.pageTitle).textSelection(.enabled)
-                if let summary {
-                    Text(summary).stockMonitorTypography(.body).foregroundStyle(.secondary).lineSpacing(2).textSelection(.enabled)
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: StockMonitorSpacing.large) {
+                identity
+                Spacer(minLength: StockMonitorSpacing.medium)
+                trailing
             }
-            Spacer(minLength: StockMonitorSpacing.medium)
-            trailing
+            VStack(alignment: .leading, spacing: StockMonitorSpacing.regular) {
+                identity
+                trailing
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("page.header")
+    }
+
+    private var identity: some View {
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+            if let eyebrow {
+                Text(eyebrow).stockMonitorTypography(.metadata)
+            }
+            Text(title).stockMonitorTypography(.pageTitle).textSelection(.enabled)
+            if let summary {
+                Text(summary).stockMonitorTypography(.body).foregroundStyle(.secondary).lineSpacing(2).textSelection(.enabled)
+            }
+        }
     }
 }
 
@@ -81,17 +103,27 @@ public struct SectionHeader<Trailing: View>: View {
     }
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
-                Text(title).stockMonitorTypography(.sectionTitle)
-                if let explanation {
-                    Text(explanation).stockMonitorTypography(.metadata).textSelection(.enabled)
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline) {
+                sectionIdentity
+                Spacer()
+                trailing
             }
-            Spacer()
-            trailing
+            VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+                sectionIdentity
+                trailing
+            }
         }
         .accessibilityIdentifier("section.\(title)")
+    }
+
+    private var sectionIdentity: some View {
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
+            Text(title).stockMonitorTypography(.sectionTitle)
+            if let explanation {
+                Text(explanation).stockMonitorTypography(.metadata).textSelection(.enabled)
+            }
+        }
     }
 }
 
@@ -133,6 +165,7 @@ public struct MetricHero: View {
 }
 
 public struct MetricGrid: View {
+    @Environment(\.stockMonitorLayoutWidth) private var layoutWidth
     private let items: [MetricItem]
     private let minimumWidth: CGFloat
     public init(_ items: [MetricItem], minimumWidth: CGFloat = 150) {
@@ -141,12 +174,17 @@ public struct MetricGrid: View {
 
     public var body: some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: minimumWidth), alignment: .leading)],
+            columns: columns,
             alignment: .leading,
             spacing: StockMonitorSpacing.medium
         ) {
             ForEach(items) { MetricHero($0).frame(maxWidth: .infinity, alignment: .leading) }
         }
+    }
+
+    private var columns: [GridItem] {
+        let count = min(layoutWidth.maximumMetricColumns, max(items.count, 1))
+        return Array(repeating: GridItem(.flexible(minimum: minimumWidth), alignment: .leading), count: count)
     }
 }
 

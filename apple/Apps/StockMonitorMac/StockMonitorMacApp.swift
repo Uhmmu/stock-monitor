@@ -42,7 +42,16 @@ struct StockMonitorMacApp: App {
 
     var body: some Scene {
         WindowGroup("Stock Monitor") {
-            if let auditRoute = Self.visualAuditRoute {
+            if Self.navigationAuditEnabled {
+                NavigationVisualAuditView(
+                    route: Self.visualAuditRoute ?? .fundamentals,
+                    layoutWidth: Self.navigationAuditWidth,
+                    showSearch: ProcessInfo.processInfo.environment["STOCK_MONITOR_NAVIGATION_AUDIT_SEARCH"] == "1"
+                )
+                .environment(\.interfaceDensity, Self.visualAuditDensity)
+                .preferredColorScheme(Self.visualAuditColorScheme)
+                .frame(minWidth: Self.visualAuditWidth.size.width, minHeight: Self.visualAuditWidth.size.height)
+            } else if let auditRoute = Self.visualAuditRoute {
                 RouteVisualAuditView(route: auditRoute, state: Self.visualAuditState)
                     .environment(\.interfaceDensity, Self.visualAuditDensity)
                     .preferredColorScheme(Self.visualAuditColorScheme)
@@ -59,6 +68,8 @@ struct StockMonitorMacApp: App {
         .defaultSize(width: 1180, height: 760)
         .commands {
             CommandMenu("导航") {
+                Button("全局搜索") { navigation.searchPresented = true }.keyboardShortcut("k", modifiers: .command)
+                Divider()
                 Button("总览") { navigation.navigate(to: .overview) }.keyboardShortcut("1", modifiers: .command)
                 Button("自选股") { navigation.navigate(to: .watchlist) }.keyboardShortcut("2", modifiers: .command)
                 Button("持仓") { navigation.navigate(to: .holdings) }.keyboardShortcut("3", modifiers: .command)
@@ -92,10 +103,19 @@ struct StockMonitorMacApp: App {
     }
 
     private static var visualAuditRoute: AppRoute? {
-        guard ProcessInfo.processInfo.arguments.contains("--visual-audit"),
+        guard ProcessInfo.processInfo.arguments.contains("--visual-audit") || navigationAuditEnabled,
               let value = ProcessInfo.processInfo.environment["STOCK_MONITOR_VISUAL_AUDIT_ROUTE"]
         else { return nil }
         return AppRoute(rawValue: value)
+    }
+
+    private static var navigationAuditEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--navigation-audit")
+    }
+
+    private static var navigationAuditWidth: StockMonitorLayoutWidth {
+        let value = ProcessInfo.processInfo.environment["STOCK_MONITOR_VISUAL_AUDIT_WIDTH"] ?? "standard"
+        return StockMonitorLayoutWidth(rawValue: value) ?? .standard
     }
 
     private static var visualAuditState: VisualAuditState {

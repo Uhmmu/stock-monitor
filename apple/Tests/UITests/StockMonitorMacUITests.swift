@@ -84,15 +84,44 @@ final class StockMonitorMacUITests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testGoalR3NavigationWidthAndSearchMatrix() {
+        for scenario in [
+            AuditScenario(route: "fundamentals", width: "narrow"),
+            AuditScenario(route: "fundamentals"),
+            AuditScenario(route: "holdings", width: "wide", appearance: "dark", density: "compact"),
+        ] {
+            let app = visualAuditApp(
+                route: scenario.route,
+                width: scenario.width,
+                appearance: scenario.appearance,
+                density: scenario.density,
+                launchArgument: "--navigation-audit"
+            )
+            app.launch()
+            XCTAssertTrue(app.descendants(matching: .any)["page.header"].waitForExistence(timeout: 5))
+            attachScreenshot(of: app, name: "r3-navigation-\(scenario.width)-\(scenario.appearance)-\(scenario.density)")
+            app.terminate()
+        }
+
+        let search = visualAuditApp(route: "fundamentals", launchArgument: "--navigation-audit")
+        search.launchEnvironment["STOCK_MONITOR_NAVIGATION_AUDIT_SEARCH"] = "1"
+        search.launch()
+        XCTAssertTrue(search.descendants(matching: .any)["r3.command-search"].waitForExistence(timeout: 5))
+        attachScreenshot(of: search, name: "r3-command-k-grouped-search")
+    }
+
+    @MainActor
     private func visualAuditApp(
         route: String,
         state: String = "normal",
         width: String = "standard",
         appearance: String = "light",
-        density: String = "comfortable"
+        density: String = "comfortable",
+        launchArgument: String = "--visual-audit"
     ) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments += ["--visual-audit", "-ApplePersistenceIgnoreState", "YES"]
+        app.launchArguments += [launchArgument, "-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["STOCK_MONITOR_API_BASE_URL"] = "http://127.0.0.1:8000"
         app.launchEnvironment["STOCK_MONITOR_API_ENVIRONMENT"] = "debug"
         app.launchEnvironment["STOCK_MONITOR_VISUAL_AUDIT_ROUTE"] = route
@@ -103,6 +132,7 @@ final class StockMonitorMacUITests: XCTestCase {
         return app
     }
 
+    @MainActor
     private func attachScreenshot(of app: XCUIApplication, name: String) {
         let snapshot = XCTAttachment(screenshot: app.screenshot())
         snapshot.name = name
