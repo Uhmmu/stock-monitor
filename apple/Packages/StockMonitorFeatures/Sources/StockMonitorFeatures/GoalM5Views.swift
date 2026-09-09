@@ -39,7 +39,11 @@ private struct JournalWorkspaceView: View {
     @State private var summaryConfirmation = false
 
     var body: some View {
-        NavigationSplitView {
+        SecondaryNavigationSplit(
+            minimumSidebarWidth: 190,
+            idealSidebarWidth: 240,
+            maximumSidebarWidth: 310
+        ) {
             List(entries, selection: $selection) { entry in
                 VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
                     Text(entry.ticker.isEmpty ? "组合复盘" : entry.ticker).font(.headline)
@@ -53,8 +57,7 @@ private struct JournalWorkspaceView: View {
                     EmptyState("暂无交易日志", systemImage: "book.closed", description: "手动记录与 IBKR 对账草稿会显示在这里。")
                 }
             }
-            .navigationTitle("交易日志")
-            .navigationSplitViewColumnWidth(min: 190, ideal: 240, max: 310)
+            .accessibilityLabel("交易日志列表")
         } detail: {
             if let draft {
                 journalEditor(draft)
@@ -243,7 +246,11 @@ private struct ServerWorkspaceView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        SecondaryNavigationSplit(
+            minimumSidebarWidth: 170,
+            idealSidebarWidth: 220,
+            maximumSidebarWidth: 270
+        ) {
             List(selection: $selection) {
                 ForEach(navigationSections) { section in
                     Section(section.title) {
@@ -254,7 +261,7 @@ private struct ServerWorkspaceView: View {
                     }
                 }
             }
-            .navigationSplitViewColumnWidth(min: 170, ideal: 220, max: 270)
+            .accessibilityLabel("工作区功能")
         } detail: {
             detailColumn
                 .navigationTitle(descriptor.title)
@@ -481,13 +488,16 @@ private struct AIChatWorkspaceView: View {
     @State private var advancedPresented = false
 
     var body: some View {
-        NavigationSplitView {
+        SecondaryNavigationSplit(
+            minimumSidebarWidth: 190,
+            idealSidebarWidth: 240,
+            maximumSidebarWidth: 310
+        ) {
             List(conversations, selection: $conversationID) { row in
                 Text(row.title).lineLimit(2).tag(row.id)
             }
-            .navigationTitle("会话")
             .toolbar { Button("新建", systemImage: "square.and.pencil") { Task { await createConversation() } } }
-            .navigationSplitViewColumnWidth(min: 190, ideal: 240, max: 310)
+            .accessibilityLabel("会话列表")
         } detail: {
             VStack(spacing: 0) {
                 chatToolbar

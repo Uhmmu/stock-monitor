@@ -46,7 +46,9 @@ public struct AppShellView: View {
                     }
                     routeContent
                         .id(navigation.selection)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .inspector(isPresented: $navigation.inspectorVisible) {
                     InspectorView(route: navigation.selection, symbol: navigation.selectedSymbol)
                         .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
@@ -264,6 +266,7 @@ private struct WorkspaceRouteBar: View {
             .padding(.vertical, StockMonitorSpacing.small)
         }
         .scrollIndicators(.hidden)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
         .accessibilityIdentifier("workspace.\(workspace.rawValue).navigation")
