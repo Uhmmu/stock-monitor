@@ -23,6 +23,24 @@ public actor GoalM5Service {
         )
     }
 
+    public func tradeLogs() async throws -> JSONValue {
+        try await authSession.authorizedGet(JSONValue.self, path: "/api/trade-logs")
+    }
+
+    public func updateTradeLog(_ draft: TradeLogDraft) async throws -> JSONValue {
+        try await authSession.authorizedRequest(
+            JSONValue.self, path: "/api/trade-logs/\(draft.id)", method: .patch,
+            body: draft.requestBody, idempotent: true
+        )
+    }
+
+    public func summarizeTradeLog(id: Int) async throws -> JSONValue {
+        try await authSession.authorizedRequest(
+            JSONValue.self, path: "/api/trade-logs/\(id)/summarize", method: .post,
+            body: EmptyRequestBody(), idempotent: true
+        )
+    }
+
     public func conversations(page: Int = 1) async throws -> JSONValue {
         try await authSession.authorizedGet(
             JSONValue.self, path: "/api/ai/v1/conversations",

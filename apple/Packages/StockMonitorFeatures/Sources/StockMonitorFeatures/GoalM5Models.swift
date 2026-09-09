@@ -141,6 +141,54 @@ public struct DeepSearchCreateRequest: Codable, Equatable, Sendable {
     }
 }
 
+public struct TradeLogDraft: Identifiable, Equatable, Sendable {
+    public let id: Int
+    public var tradeDate: String
+    public var ticker: String
+    public var direction: String
+    public var quantity: Double?
+    public var price: Double?
+    public var note: String
+    public var content: String
+    public let sourceType: String
+    public let status: String
+    public let aiSummary: String?
+    private let tableRows: JSONValue
+    private let photoURLs: JSONValue
+
+    public init?(payload: JSONValue) {
+        let object = payload.objectValue
+        guard let id = object["id"]?.intValue, let tradeDate = object["trade_date"]?.stringValue else { return nil }
+        self.id = id
+        self.tradeDate = tradeDate
+        ticker = object["ticker"]?.stringValue ?? ""
+        direction = object["direction"]?.stringValue ?? ""
+        quantity = object["quantity"]?.numberValue
+        price = object["price"]?.numberValue
+        note = object["note"]?.stringValue ?? ""
+        content = object["content"]?.stringValue ?? ""
+        sourceType = object["source_type"]?.stringValue ?? "manual"
+        status = object["status"]?.stringValue ?? "draft"
+        aiSummary = object["ai_summary"]?.stringValue
+        tableRows = object["table_rows"] ?? .array([])
+        photoURLs = object["photo_urls"] ?? .array([])
+    }
+
+    public var requestBody: JSONValue {
+        .object([
+            "trade_date": .string(tradeDate),
+            "ticker": ticker.isEmpty ? .null : .string(ticker),
+            "direction": direction.isEmpty ? .null : .string(direction),
+            "quantity": quantity.map(JSONValue.number) ?? .null,
+            "price": price.map(JSONValue.number) ?? .null,
+            "note": note.isEmpty ? .null : .string(note),
+            "content": content.isEmpty ? .null : .string(content),
+            "table_rows": tableRows,
+            "photo_urls": photoURLs,
+        ])
+    }
+}
+
 public struct GoalM5Catalog: Sendable {
     public init() {}
 

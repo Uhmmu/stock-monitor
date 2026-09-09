@@ -218,27 +218,39 @@ struct SemanticWorkspaceContentView: View {
                 }
             }
         } content: {
-            if presentation.isEmpty {
-                EmptyState("暂无数据", systemImage: "tray", description: presentation.emptyHint ?? "服务端没有返回内容。")
-            } else {
-                contentSections
-            }
+            SemanticWorkspaceSectionsView(presentation: presentation, diagnosticsExpanded: diagnosticsExpanded)
         }
         .accessibilityIdentifier("workspace.semantic")
+    }
+}
+
+/// Reusable semantic body for R5 domain workspaces that provide their own single page header and first-screen summary.
+struct SemanticWorkspaceSectionsView: View {
+    let presentation: WorkspacePresentation
+    var diagnosticsExpanded = false
+    var suppressSummary = false
+    var suppressList = false
+
+    var body: some View {
+        if presentation.isEmpty {
+            EmptyState("暂无数据", systemImage: "tray", description: presentation.emptyHint ?? "服务端没有返回内容。")
+        } else {
+            contentSections
+        }
     }
 
     @ViewBuilder private var contentSections: some View {
         ForEach(Array(presentation.warnings.enumerated()), id: \.offset) { _, warning in
             InlineError("服务端警告", message: warning)
         }
-        if !presentation.summary.isEmpty {
+        if !suppressSummary, !presentation.summary.isEmpty {
             SectionHeader("关键指标")
             MetricGrid(presentation.summary.map { field in
                 MetricItem(label: field.label, value: field.display)
             })
             .accessibilityIdentifier("workspace.summary")
         }
-        if let list = presentation.list {
+        if !suppressList, let list = presentation.list {
             SectionHeader("记录（\(list.total)）", explanation: list.truncationNote)
             SemanticListView(list: list)
         }
@@ -314,25 +326,43 @@ struct AIChatMessageRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
-            HStack(spacing: StockMonitorSpacing.small) {
-                roleBadge
-                if let model = object["model"]?.stringValue {
-                    Text(model).stockMonitorTypography(.microAnnotation)
-                }
-                Spacer()
-                if let created = object["created_at"]?.stringValue {
-                    Text(SemanticFieldFormatter.readableTimestamp(created))
-                        .stockMonitorTypography(.microAnnotation)
-                }
+        HStack(alignment: .top, spacing: StockMonitorSpacing.medium) {
+            if userRole {
+                Spacer(minLength: 72)
             }
-            contentText
-            metadataStrip
-            richContentDisclosure
+            VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+                HStack(spacing: StockMonitorSpacing.small) {
+                    roleBadge
+                    if let model = object["model"]?.stringValue {
+                        Text(model).stockMonitorTypography(.microAnnotation)
+                    }
+                    Spacer(minLength: StockMonitorSpacing.regular)
+                    if let created = object["created_at"]?.stringValue {
+                        Text(SemanticFieldFormatter.readableTimestamp(created))
+                            .stockMonitorTypography(.microAnnotation)
+                    }
+                }
+                contentText
+                metadataStrip
+                activityDisclosure
+                citationDisclosure
+                richContentDisclosure
+            }
+            .padding(StockMonitorSpacing.regular)
+            .frame(maxWidth: userRole ? 560 : 760, alignment: .leading)
+            .background(
+                userRole ? AnyShapeStyle(.tint.opacity(0.12)) : AnyShapeStyle(.background),
+                in: RoundedRectangle(cornerRadius: StockMonitorCornerRadius.prominent)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: StockMonitorCornerRadius.prominent)
+                    .stroke(StockMonitorSeparator.standard.opacity(userRole ? 0.35 : 0.7))
+            }
+            if !userRole {
+                Spacer(minLength: 36)
+            }
         }
-        .padding(StockMonitorSpacing.regular)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .stockMonitorSurface(userRole ? .content : .grouped)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("ai.message")
     }
@@ -356,14 +386,70 @@ struct AIChatMessageRow: View {
     @ViewBuilder private var contentText: some View {
         let content = object["content"]?.stringValue
         if let content, !content.isEmpty {
-            Text(content)
-                .stockMonitorTypography(.body)
-                .textSelection(.enabled)
-                .lineSpacing(2)
+            R5MarkdownContent(text: content)
         } else if object["has_partial_content"]?.boolValue == true, let safe = object["error_message_safe"]?.stringValue {
             InlineError("回复中断", message: safe)
         } else {
             Text("（无文本内容）").stockMonitorTypography(.metadata).foregroundStyle(.secondary)
+        }
+    }
+
+    private var contentParts: [JSONValue] {
+        if case let .object(document)? = object["content_parts"], case let .array(parts)? = document["parts"] {
+            return parts
+        }
+        return []
+    }
+
+    private var activityParts: [JSONValue] {
+        contentParts.filter { part in
+            let type = part.objectValue["block"]?.objectValue["block_type"]?.stringValue
+                ?? part.objectValue["block_type"]?.stringValue
+                ?? part.objectValue["type"]?.stringValue ?? ""
+            return type.contains("tool") || type.contains("progress") || type.contains("status")
+        }
+    }
+
+    private var citations: [String] {
+        var values = object["citations"]?.arrayValue.compactMap { item in
+            item.stringValue ?? item.objectValue["url"]?.stringValue ?? item.objectValue["title"]?.stringValue
+        } ?? []
+        for part in contentParts {
+            let item = part.objectValue["block"]?.objectValue ?? part.objectValue
+            let type = item["block_type"]?.stringValue ?? item["type"]?.stringValue ?? ""
+            if type.contains("citation"), let value = item["url"]?.stringValue ?? item["title"]?.stringValue {
+                values.append(value)
+            }
+        }
+        return Array(Set(values)).sorted()
+    }
+
+    @ViewBuilder private var activityDisclosure: some View {
+        if !activityParts.isEmpty {
+            DisclosureSection("工具活动（\(activityParts.count)）") {
+                TimelineList(activityParts.enumerated().map { index, part in
+                    let item = part.objectValue["block"]?.objectValue ?? part.objectValue
+                    let title = item["title"]?.stringValue ?? item["tool_name"]?.stringValue ?? "工具步骤 \(index + 1)"
+                    let detail = item["message"]?.stringValue ?? item["status"]?.stringValue ?? "已记录"
+                    return TimelineEntry(id: "tool-\(index)", title: title, timestamp: "", detail: detail, systemImage: "hammer")
+                })
+            }
+        }
+    }
+
+    @ViewBuilder private var citationDisclosure: some View {
+        if !citations.isEmpty {
+            DisclosureSection("引用（\(citations.count)）") {
+                VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+                    ForEach(citations, id: \.self) { citation in
+                        if let url = URL(string: citation), url.scheme != nil {
+                            Link(citation, destination: url).lineLimit(2)
+                        } else {
+                            Text(citation).textSelection(.enabled)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -394,18 +480,98 @@ struct AIChatMessageRow: View {
     }
 
     @ViewBuilder private var richContentDisclosure: some View {
-        if case let .object(partsDocument)? = object["content_parts"],
-           case let .array(parts)? = partsDocument["parts"], !parts.isEmpty
-        {
-            DisclosureSection("结构化内容（\(parts.count) 块）") {
+        let richParts = contentParts.filter { !activityParts.contains($0) }
+        if !richParts.isEmpty {
+            DisclosureSection("丰富内容（\(richParts.count) 块）") {
                 VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
-                    ForEach(Array(parts.prefix(20).enumerated()), id: \.offset) { _, part in
-                        let blockType = part.objectValue["block"]?.objectValue["block_type"]?.stringValue
-                            ?? part.objectValue["type"]?.stringValue ?? "block"
-                        Text(blockType).stockMonitorTypography(.microAnnotation).textSelection(.enabled)
+                    ForEach(Array(richParts.prefix(20).enumerated()), id: \.offset) { index, part in
+                        R5RichContentBlock(part: part, index: index)
                     }
                 }
             }
         }
+    }
+}
+
+struct AIStreamingResponseView: View {
+    let stream: AIStreamSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+            HStack {
+                SemanticStatusLabel("助手正在生成", status: .info)
+                Spacer()
+                ProgressView().controlSize(.small)
+            }
+            R5MarkdownContent(text: stream.answer)
+            if let progress = stream.progressMessage {
+                Label(progress, systemImage: "magnifyingglass")
+                    .stockMonitorTypography(.metadata)
+            }
+            if !stream.activeTools.isEmpty {
+                DisclosureSection("工具活动（\(stream.activeTools.count)）") {
+                    TimelineList(stream.activeTools.sorted().enumerated().map { index, tool in
+                        TimelineEntry(id: "active-\(index)", title: tool, timestamp: "进行中", detail: "服务端正在执行", systemImage: "hammer")
+                    })
+                }
+            }
+        }
+        .padding(StockMonitorSpacing.regular)
+        .frame(maxWidth: 760, alignment: .leading)
+        .stockMonitorSurface(.grouped)
+        .accessibilityIdentifier("ai.streaming-response")
+    }
+}
+
+struct R5MarkdownContent: View {
+    let text: String
+
+    private var blocks: [String] {
+        text.components(separatedBy: "\n\n").filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                let trimmed = block.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("#") {
+                    Text(trimmed.drop(while: { $0 == "#" || $0 == " " }))
+                        .font(.headline)
+                        .textSelection(.enabled)
+                } else {
+                    Text((try? AttributedString(markdown: trimmed)) ?? AttributedString(trimmed))
+                        .stockMonitorTypography(.body)
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+}
+
+struct R5RichContentBlock: View {
+    let part: JSONValue
+    let index: Int
+
+    var body: some View {
+        let item = part.objectValue["block"]?.objectValue ?? part.objectValue
+        let type = item["block_type"]?.stringValue ?? item["type"]?.stringValue ?? "内容"
+        let title = item["title"]?.stringValue ?? type
+        let text = item["text"]?.stringValue ?? item["content"]?.stringValue ?? item["code"]?.stringValue
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
+            Text(title).font(.headline)
+            if let text {
+                Text(text)
+                    .font(type.contains("code") ? .system(.body, design: .monospaced) : .body)
+                    .textSelection(.enabled)
+            } else {
+                Text("结构化内容块 \(index + 1)").stockMonitorTypography(.metadata)
+            }
+            if let urlString = item["url"]?.stringValue, let url = URL(string: urlString) {
+                Link("打开来源", destination: url)
+            }
+        }
+        .padding(StockMonitorSpacing.small)
+        .stockMonitorSurface(.content)
     }
 }
