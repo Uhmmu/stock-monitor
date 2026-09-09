@@ -147,20 +147,20 @@ public struct OwnershipView: View {
     @State private var symbol = ""
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
+    let companySummary: CompanySummaryModel
 
-    init(model: OwnershipModel, tickerContext: CompanyTickerContext, symbol: String?) {
+    init(model: OwnershipModel, tickerContext: CompanyTickerContext, companySummary: CompanySummaryModel, symbol: String?) {
         _model = State(initialValue: model)
         _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
         self.tickerContext = tickerContext
+        self.companySummary = companySummary
     }
 
     public var body: some View {
         ResourceStateView(state: model.state) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    M4SectionHeader("机构持仓", subtitle: "13F 机构持仓、SEC 内部人交易与国会交易聚合视图")
-                    Spacer()
+            PageScaffold(width: StockMonitorContentWidth.wide) {
+                PageHeader("机构持仓", summary: "13F 机构持仓、SEC 内部人交易与国会交易聚合视图。") {
                     CompanySymbolBar(
                         context: tickerContext,
                         service: model.service,
@@ -170,7 +170,8 @@ public struct OwnershipView: View {
                         await model.load(symbol: value)
                     }
                 }
-                .padding(.horizontal, 20).padding(.top, 16)
+            } content: {
+                CompanyHeaderView(summary: companySummary.summary(for: symbol))
                 Picker("数据集", selection: Binding(
                     get: { model.tab },
                     set: { model.select($0) }
@@ -178,14 +179,14 @@ public struct OwnershipView: View {
                     ForEach(OwnershipModel.Tab.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .padding(.horizontal, 20)
-                FeatureErrorBanner(error: model.error).padding(.horizontal, 20)
+                .frame(width: 300)
+                FeatureErrorBanner(error: model.error)
                 tabContent
-                    .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }
         .navigationTitle("机构持仓")
         .task {
+            await companySummary.loadIfNeeded()
             if let resolved = await bootstrapSymbol() {
                 await model.load(symbol: resolved)
             }
@@ -223,31 +224,24 @@ public struct OwnershipView: View {
             if page.holdings.isEmpty {
                 ContentUnavailableView("该股暂无 13F 持仓数据", systemImage: "person.3")
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 16) {
-                        LabeledContent("报告期", value: page.reportPeriod ?? "数据不足")
-                        LabeledContent("上期", value: page.prevPeriod ?? "—")
-                    }.font(.callout)
+                VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+                    MetadataStrip([
+                        .init(label: "报告期", value: page.reportPeriod ?? "数据不足"),
+                        .init(label: "上期", value: page.prevPeriod ?? "—"),
+                        .init(label: "口径", value: "13F 季度快照，滞后约 45 天"),
+                    ])
                     Table(page.holdings) {
                         TableColumn("机构") { row in Text(row.managerName ?? "数据不足") }
                         TableColumn("股数") { row in optionalCount(row.shares) }
                         TableColumn("市值 USD") { row in
                             Text(row.valueUsd.map { $0.formatted(.number.notation(.compactName)) } ?? "数据不足")
-                                .monospacedDigit().foregroundStyle(row.valueUsd == nil ? .secondary : .primary)
+                                .financialFigures().foregroundStyle(row.valueUsd == nil ? .secondary : .primary)
                         }
                         TableColumn("类型") { row in Text(row.putCall ?? "—") }
-                        TableColumn("环比") { row in
-                            if let change = row.shareChange {
-                                Text((change >= 0 ? "+" : "") + change.formatted(.number.precision(.fractionLength(0))))
-                                    .monospacedDigit().foregroundStyle(change >= 0 ? .green : .red)
-                            } else if row.isNew == true {
-                                Text("新建仓").foregroundStyle(.orange)
-                            } else {
-                                Text("数据不足").foregroundStyle(.secondary)
-                            }
-                        }
+                        TableColumn("环比") { row in holdingChangeBadge(row) }
                         TableColumn("申报日") { row in Text(row.filingDate ?? "—") }
                     }
+                    .alternatingRowBackgrounds(.enabled)
                     .frame(minHeight: 300)
                 }
             }
@@ -298,6 +292,25 @@ public struct OwnershipView: View {
                 }
             }
             .frame(minHeight: 300)
+        }
+    }
+
+    /// 环比用符号 + 文字徽标表达，颜色不是唯一编码。
+    @ViewBuilder
+    private func holdingChangeBadge(_ row: Sec13FHoldingItem) -> some View {
+        if let change = row.shareChange {
+            HStack(spacing: StockMonitorSpacing.xSmall) {
+                Image(systemName: change >= 0 ? "arrow.up" : "arrow.down")
+                    .font(.caption.weight(.bold))
+                    .accessibilityHidden(true)
+                Text((change >= 0 ? "+" : "") + change.formatted(.number.precision(.fractionLength(0))))
+                    .financialFigures()
+            }
+            .foregroundStyle(change >= 0 ? StockMonitorChartPalette.positive : StockMonitorChartPalette.negative)
+        } else if row.isNew == true {
+            SemanticStatusLabel("新建仓", status: .info)
+        } else {
+            Text("数据不足").foregroundStyle(.secondary)
         }
     }
 

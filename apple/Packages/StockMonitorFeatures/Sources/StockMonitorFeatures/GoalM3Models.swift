@@ -33,6 +33,7 @@ public final class OverviewModel {
     public private(set) var indices: [MarketIndex] = []
     public private(set) var benchmark: PortfolioBenchmark?
     public private(set) var alerts: [MovementAlert] = []
+    public private(set) var investigations: [InvestigationItem] = []
     public private(set) var reports: [ReportSummary] = []
     public private(set) var liveQuotes: [String: RealtimeQuote] = [:]
     public private(set) var streamConnected = false
@@ -53,12 +54,15 @@ public final class OverviewModel {
             async let alerts = service.alerts(limit: 8)
             async let reports = service.reports(limit: 6)
             async let benchmark = service.portfolioBenchmark()
+            async let investigations = service.investigations(limit: 12)
             let values = try await (dashboard, indices, alerts, reports, benchmark)
             self.dashboard = values.0
             self.indices = values.1.indices
             self.alerts = values.2
             self.reports = values.3
             self.benchmark = values.4
+            // 调查状态只影响徽标；失败时保留空列表，不阻塞总览主数据。
+            self.investigations = await (try? investigations) ?? []
             state = .ready
             error = nil
             lastUpdated = .now

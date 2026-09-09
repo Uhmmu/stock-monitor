@@ -73,31 +73,34 @@ public struct SecView: View {
     @State private var symbol = ""
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
+    let companySummary: CompanySummaryModel
 
-    init(model: SecModel, tickerContext: CompanyTickerContext, symbol: String?) {
+    init(model: SecModel, tickerContext: CompanyTickerContext, companySummary: CompanySummaryModel, symbol: String?) {
         _model = State(initialValue: model)
         _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
         self.tickerContext = tickerContext
+        self.companySummary = companySummary
     }
 
     public var body: some View {
         ResourceStateView(state: model.state) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    M4SectionHeader("SEC 官方数据", subtitle: "结构化 filing item 映射；原文与 LLM 不参与事件判定")
-                    Spacer()
-                    CompanySymbolBar(
-                        context: tickerContext,
-                        service: model.service,
-                        symbol: $symbol,
-                        initialSymbol: initialSymbol
-                    ) { value in
-                        await model.load(symbol: value)
+            PageScaffold(width: StockMonitorContentWidth.wide) {
+                PageHeader("SEC 官方数据", summary: "结构化 filing item 映射；原文与 LLM 不参与事件判定。") {
+                    HStack(spacing: StockMonitorSpacing.small) {
+                        CompanySymbolBar(
+                            context: tickerContext,
+                            service: model.service,
+                            symbol: $symbol,
+                            initialSymbol: initialSymbol
+                        ) { value in
+                            await model.load(symbol: value)
+                        }
+                        Button("刷新") { Task { await model.refresh(symbol: symbol) } }
                     }
-                    Button("刷新") { Task { await model.refresh(symbol: symbol) } }
                 }
-                .padding(.horizontal, 20).padding(.top, 16)
+            } content: {
+                CompanyHeaderView(summary: companySummary.summary(for: symbol))
                 Picker("数据集", selection: Binding(
                     get: { model.tab },
                     set: { model.select($0) }
@@ -105,18 +108,18 @@ public struct SecView: View {
                     ForEach(SecModel.Tab.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .padding(.horizontal, 20)
-                FeatureErrorBanner(error: model.error).padding(.horizontal, 20)
+                .frame(width: 360)
+                FeatureErrorBanner(error: model.error)
                 if model.refreshQueued {
                     Label("已排队重新采集，稍后查询可见。", systemImage: "clock.arrow.circlepath")
-                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20)
+                        .stockMonitorTypography(.metadata)
                 }
                 tabContent
-                    .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }
         .navigationTitle("SEC")
         .task {
+            await companySummary.loadIfNeeded()
             guard let resolved = await tickerContext.resolveAfterLoad(service: model.service, preferred: initialSymbol) else { return }
             symbol = resolved
             await model.load(symbol: resolved)
@@ -164,28 +167,20 @@ public struct SecView: View {
         .frame(minHeight: 320)
     }
 
+    /// R4.2：SEC 事件用 timeline + 证据链接，不再是无序平铺表格。
+    @ViewBuilder
     private var eventsTable: some View {
-        Table(model.events) {
-            TableColumn("日期") { row in Text(row.filingDate ?? "数据不足") }
-            TableColumn("表格") { row in Text(row.form ?? "—") }
-            TableColumn("条目") { row in Text(row.itemLabel ?? row.itemCode ?? "—") }
-            TableColumn("中文摘要") { row in
-                VStack(alignment: .leading) {
-                    Text(row.summaryZh ?? row.text ?? "摘要数据不足").lineLimit(2)
-                    if let status = row.summaryStatus {
-                        Text("摘要状态：\(status)").font(.caption2).foregroundStyle(.secondary)
-                    }
+        if model.events.isEmpty {
+            EmptyState("暂无 SEC 事件", systemImage: "doc.text.magnifyingglass", description: "近两年没有映射到结构化 filing item 的事件。")
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(model.events) { event in
+                    SecEventTimelineRow(event: event)
+                    Divider()
                 }
             }
-            TableColumn("链接") { row in
-                if let raw = row.filingUrl, let url = URL(string: raw) {
-                    ConfirmExternalLinkButton(url: url)
-                } else {
-                    Text("—").foregroundStyle(.secondary)
-                }
-            }
+            .accessibilityIdentifier("r4.sec.events")
         }
-        .frame(minHeight: 320)
     }
 
     private var financialsTable: some View {
@@ -749,5 +744,43 @@ public struct CongressView: View {
             }
             .frame(minHeight: 220)
         }
+    }
+}
+
+/// SEC 事件时间线行：条目 → 日期/表格 → 中文摘要 → 原文链接。
+struct SecEventTimelineRow: View {
+    let event: SecEventItem
+
+    var body: some View {
+        HStack(alignment: .top, spacing: StockMonitorSpacing.regular) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .foregroundStyle(.tint)
+                .frame(width: 20)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(event.itemLabel ?? event.itemCode ?? "未分类条目").font(.headline)
+                        Spacer()
+                        Text("\(event.form ?? "—") · \(event.filingDate ?? "日期数据不足")").stockMonitorTypography(.metadata)
+                    }
+                    VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
+                        Text(event.itemLabel ?? event.itemCode ?? "未分类条目").font(.headline)
+                        Text("\(event.form ?? "—") · \(event.filingDate ?? "日期数据不足")").stockMonitorTypography(.metadata)
+                    }
+                }
+                Text(event.summaryZh ?? event.text ?? "摘要数据不足")
+                    .stockMonitorTypography(.body)
+                    .textSelection(.enabled)
+                if let status = event.summaryStatus, status != "ready" {
+                    SemanticStatusLabel("摘要状态：\(status)", status: .stale)
+                }
+                if let raw = event.filingUrl, let url = URL(string: raw) {
+                    ConfirmExternalLinkButton(url: url)
+                }
+            }
+        }
+        .padding(.vertical, StockMonitorSpacing.small)
+        .accessibilityElement(children: .combine)
     }
 }

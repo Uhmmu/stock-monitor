@@ -92,46 +92,47 @@ public struct TechnicalAnalysisView: View {
     @State private var newAlertDirection = "above"
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
+    let companySummary: CompanySummaryModel
 
-    init(model: TechnicalAnalysisModel, tickerContext: CompanyTickerContext, symbol: String?) {
+    init(model: TechnicalAnalysisModel, tickerContext: CompanyTickerContext, companySummary: CompanySummaryModel, symbol: String?) {
         _model = State(initialValue: model)
         _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
         self.tickerContext = tickerContext
+        self.companySummary = companySummary
     }
 
     public var body: some View {
         ResourceStateView(state: model.state) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        M4SectionHeader("技术分析", subtitle: "打开图表不触发任何上游行情或付费请求")
-                        Spacer()
-                        CompanySymbolBar(
-                            context: tickerContext,
-                            service: model.service,
-                            symbol: $symbol,
-                            initialSymbol: initialSymbol
-                        ) { value in
-                            await model.load(symbol: value)
-                        }
-                    }
-                    if let detail = model.detail {
-                        headerStrip(detail)
-                        intervalPicker
-                        chartSection(detail)
-                        accessibilitySummary(detail)
-                        alertSection
-                        analysisSection(detail)
-                        eventsSection(detail)
+            PageScaffold(width: StockMonitorContentWidth.wide) {
+                PageHeader("技术分析", summary: "图表为主、关键指标侧栏；打开图表不触发任何上游行情或付费请求。") {
+                    CompanySymbolBar(
+                        context: tickerContext,
+                        service: model.service,
+                        symbol: $symbol,
+                        initialSymbol: initialSymbol
+                    ) { value in
+                        await model.load(symbol: value)
                     }
                 }
-                .padding(24)
+            } content: {
+                CompanyHeaderView(summary: companySummary.summary(for: symbol))
+                if let detail = model.detail {
+                    headerStrip(detail)
+                    intervalPicker
+                    chartWithSideMetrics(detail)
+                    chartFootnote
+                    accessibilitySummary(detail)
+                    alertSection
+                    analysisSection(detail)
+                    eventsSection(detail)
+                }
             }
             .refreshable { await model.load(symbol: symbol) }
         }
         .navigationTitle("技术分析")
         .task {
+            await companySummary.loadIfNeeded()
             guard let resolved = await tickerContext.resolveAfterLoad(service: model.service, preferred: initialSymbol) else { return }
             symbol = resolved
             await model.load(symbol: resolved)
@@ -141,22 +142,86 @@ public struct TechnicalAnalysisView: View {
             symbol = value
             Task { await model.load(symbol: value) }
         }
-        .overlay(alignment: .top) { FeatureErrorBanner(error: model.error).padding() }
+        .overlay(alignment: .top) { FeatureErrorBanner(error: model.error).padding(StockMonitorSpacing.regular) }
         .accessibilityIdentifier("m4.technical")
     }
 
     private func headerStrip(_ detail: TechnicalAnalysisDetail) -> some View {
-        HStack(spacing: 16) {
-            LabeledContent("状态", value: statusLabel(detail.status))
+        HStack(spacing: StockMonitorSpacing.regular) {
+            SemanticStatusLabel("状态：\(statusLabel(detail.status))", status: detail.status == "ready" ? .live : .stale)
             if let generatedAt = detail.generatedAt {
-                LabeledContent("生成于", value: String(generatedAt.prefix(10)))
+                Text("生成于 \(String(generatedAt.prefix(10)))").stockMonitorTypography(.metadata)
             }
             if detail.stale == true {
                 SemanticStatusLabel("数据过期", status: .warning)
             }
-            LabeledContent("图表数据", value: detail.chartDataSource ?? "数据不足")
+            if let source = detail.chartDataSource {
+                Text("图表数据：\(source)").stockMonitorTypography(.metadata)
+            }
         }
-        .font(.callout)
+    }
+
+    /// R4.2：图表占主列，关键指标放在侧栏，解释不再堆在图下。
+    private func chartWithSideMetrics(_ detail: TechnicalAnalysisDetail) -> some View {
+        HStack(alignment: .top, spacing: StockMonitorSpacing.regular) {
+            chartSection(detail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            sideMetrics(detail)
+                .frame(width: 210, alignment: .topLeading)
+        }
+    }
+
+    private func sideMetrics(_ detail: TechnicalAnalysisDetail) -> some View {
+        let candles = model.candles
+        var items: [MetricItem] = []
+        if let latest = candles.last {
+            items.append(.init(label: "最新收盘", value: FinancialDisplayValue(text: two(latest.candle.close)), status: .neutral))
+        }
+        if let high = candles.map(\.candle.high).max() {
+            items.append(.init(label: "区间最高", value: FinancialDisplayValue(text: two(high)), status: .neutral))
+        }
+        if let low = candles.map(\.candle.low).min() {
+            items.append(.init(label: "区间最低", value: FinancialDisplayValue(text: two(low)), status: .neutral))
+        }
+        items.append(.init(label: "K 线数量", value: FinancialDisplayValue(text: "\(candles.count) 根（\(model.interval.rawValue)线）"), status: .neutral))
+        if let cost = detail.portfolioCost {
+            items.append(.init(
+                label: "持仓成本",
+                value: FinancialDisplayValue(
+                    text: two(cost.averageCost),
+                    qualifier: "\(cost.currency ?? "") × \(cost.quantity.formatted(.number.precision(.fractionLength(0))))"
+                ),
+                status: .info
+            ))
+        }
+        items.append(.init(
+            label: "价格提醒",
+            value: FinancialDisplayValue(text: "\(model.alertPrices.count) 条生效"),
+            status: model.alertPrices.isEmpty ? .neutral : .warning
+        ))
+        return VStack(alignment: .leading, spacing: StockMonitorSpacing.regular) {
+            SectionHeader("关键指标")
+            VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+                ForEach(items) { item in
+                    VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
+                        Text(item.label).stockMonitorTypography(.metricLabel)
+                        Text(item.value.text).financialFigures()
+                        if let qualifier = item.value.qualifier {
+                            Text(qualifier).stockMonitorTypography(.microAnnotation)
+                        }
+                    }
+                }
+            }
+            .padding(StockMonitorSpacing.medium)
+            .stockMonitorSurface(.grouped)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("r4.technical.side-metrics")
+    }
+
+    private var chartFootnote: some View {
+        Text("拖动平移、双指缩放、悬停查看十字光标；支撑阻力与 Fibonacci 基于当前可视区间计算，仅作图形参考，不构成服务端结论。")
+            .stockMonitorTypography(.metadata)
     }
 
     private var intervalPicker: some View {

@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
     import AppKit
 #endif
 
+// MARK: - 路由入口（R4.0/R4.1 重设计）
+
 public struct GoalM3RouteView: View {
     public let route: AppRoute
     @Bindable public var navigation: AppNavigationModel
@@ -21,7 +23,7 @@ public struct GoalM3RouteView: View {
     public var body: some View {
         switch route {
         case .overview:
-            OverviewView(model: OverviewModel(service: service), openStock: select)
+            OverviewView(model: OverviewModel(service: service), navigate: navigation.navigate, openStock: select)
         case .watchlist:
             WatchlistView(model: WatchlistModel(service: service), openStock: select)
         case .alerts:
@@ -33,7 +35,7 @@ public struct GoalM3RouteView: View {
         case .reports:
             ReportsView(model: ReportsModel(service: service), openStock: select)
         default:
-            CompanyEntryView(route: route, symbol: navigation.selectedSymbol, navigate: navigation.navigate)
+            ContentUnavailableView(route.title, systemImage: route.systemImage, description: Text("该路由不属于市场工作流。"))
         }
     }
 
@@ -43,68 +45,55 @@ public struct GoalM3RouteView: View {
     }
 }
 
-private struct SectionHeader: View {
-    let title: String
-    let subtitle: String?
-    init(_ title: String, subtitle: String? = nil) {
-        self.title = title; self.subtitle = subtitle
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.title2.bold())
-            if let subtitle {
-                Text(subtitle).font(.callout).foregroundStyle(.secondary)
-            }
-        }
-    }
-}
-
 struct FeatureErrorBanner: View {
     let error: M3FeatureError?
     var body: some View {
         if let error {
-            Label(error.text, systemImage: "exclamationmark.triangle.fill")
-                .font(.callout)
-                .foregroundStyle(.orange)
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(.orange.opacity(0.1), in: .rect(cornerRadius: 8))
-                .accessibilityIdentifier("feature.error")
+            InlineError("部分数据不可用", message: error.text)
         }
     }
 }
 
+// MARK: - 总览（R4.0：首屏四类核心状态，不滚动即可读取）
+
 public struct OverviewView: View {
     @State private var model: OverviewModel
     @State private var exportingQuotes = false
+    let navigate: (AppRoute) -> Void
     let openStock: (String) -> Void
 
-    public init(model: OverviewModel, openStock: @escaping (String) -> Void) {
-        _model = State(initialValue: model); self.openStock = openStock
+    public init(model: OverviewModel, navigate: @escaping (AppRoute) -> Void, openStock: @escaping (String) -> Void) {
+        _model = State(initialValue: model)
+        self.navigate = navigate
+        self.openStock = openStock
     }
 
     public var body: some View {
         ResourceStateView(state: model.state) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
-                    HStack(alignment: .firstTextBaseline) {
-                        SectionHeader("市场总览", subtitle: model.dashboard?.market.isOpen == true ? "美股常规交易时段" : "当前休市或非常规时段")
-                        Spacer()
+            PageScaffold(width: StockMonitorContentWidth.wide) {
+                PageHeader("市场总览", summary: headerSummary) {
+                    HStack(spacing: StockMonitorSpacing.regular) {
                         SemanticStatusLabel(model.streamConnected ? "实时连接" : "快照", status: model.streamConnected ? .live : .stale)
                         if let lastUpdated = model.lastUpdated {
-                            Text(lastUpdated, style: .time).font(.caption).foregroundStyle(.secondary)
+                            Text(lastUpdated, style: .time).stockMonitorTypography(.metadata)
                         }
                     }
-                    FeatureErrorBanner(error: model.error)
-                    indexStrip
-                    benchmarkStrip
-                    quoteTable
-                    HStack(alignment: .top, spacing: 20) {
-                        recentAlerts.frame(maxWidth: .infinity, alignment: .topLeading)
-                        recentReports.frame(maxWidth: .infinity, alignment: .topLeading)
-                    }
                 }
-                .padding(24)
+            } content: {
+                FeatureErrorBanner(error: model.error)
+                OverviewCoreStateStrip(
+                    marketOpen: model.dashboard?.market.isOpen ?? false,
+                    marketSession: model.dashboard?.market.session,
+                    portfolioReturnPercent: model.benchmark?.portfolioReturnPercent,
+                    portfolioConfigured: model.benchmark?.configured ?? false,
+                    breadth: breadth,
+                    alertCount: model.alerts.count,
+                    latestAlertDescription: latestAlertDescription
+                )
+                indexSection
+                notableChangesSection
+                latestReportsSection
+                quoteSection
             }
             .refreshable { await model.load() }
         }
@@ -120,82 +109,147 @@ public struct OverviewView: View {
         .accessibilityIdentifier("m3.overview")
     }
 
-    @ViewBuilder private var benchmarkStrip: some View {
-        if let benchmark = model.benchmark {
-            VStack(alignment: .leading, spacing: 10) {
-                SectionHeader("组合基准", subtitle: benchmark.configured ? benchmark.portfolioReturnSource : "尚未配置入市基准")
-                HStack(spacing: 18) {
-                    LabeledContent("组合", value: benchmark.portfolioReturnPercent.map { $0.formatted(.number.precision(.fractionLength(2))) + "%" } ?? "数据不足")
-                    ForEach(benchmark.benchmarks.prefix(3)) { item in
-                        LabeledContent(item.name, value: item.returnPercent.map { $0.formatted(.number.precision(.fractionLength(2))) + "%" } ?? item.message ?? "数据不足")
+    private var headerSummary: String {
+        model.dashboard?.market.isOpen == true ? "美股常规交易时段" : "当前休市或非常规时段"
+    }
+
+    private var breadth: OverviewBreadth {
+        OverviewSummarizer.breadth(stocks: dashboardStocks, liveQuotes: model.liveQuotes)
+    }
+
+    private var latestAlertDescription: String? {
+        model.alerts.first.map { alert in
+            "\(alert.ticker) \(alert.changePercent > 0 ? "+" : "")\(alert.changePercent.formatted(.number.precision(.fractionLength(2))))%"
+        }
+    }
+
+    @ViewBuilder private var indexSection: some View {
+        SectionHeader("指数", explanation: "收盘价与涨跌在每一行对齐；涨跌同时提供符号、点数与百分比。") {
+            Button("刷新") { Task { await model.load() } }
+        }
+        IndexMetricStrip(indices: model.indices)
+    }
+
+    @ViewBuilder private var notableChangesSection: some View {
+        SectionHeader("值得关注的变化", explanation: "按触发时间倒序；调查状态直接跟随证券。") {
+            Button("全部异动") { navigate(.alerts) }
+        }
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+            if let gainer = breadth.biggestGainer {
+                moverRow(label: "领涨", mover: gainer)
+            }
+            if let loser = breadth.biggestLoser {
+                moverRow(label: "领跌", mover: loser)
+            }
+            ForEach(model.alerts.prefix(5)) { alert in
+                AlertSummaryRow(
+                    alert: alert,
+                    investigationLabel: alertInvestigations[alert.ticker]?.label,
+                    investigationSemantic: AlertGrouper.statusSemantic(alertInvestigations[alert.ticker]?.status ?? ""),
+                    openStock: openStock
+                )
+            }
+            if model.alerts.isEmpty {
+                Text("暂无异动").stockMonitorTypography(.metadata)
+            }
+        }
+    }
+
+    private var alertInvestigations: [String: (status: String, label: String)] {
+        AlertGrouper.investigationLookup(model.investigations)
+    }
+
+    private func moverRow(label: String, mover: OverviewBreadthMover) -> some View {
+        Button {
+            openStock(mover.ticker)
+        } label: {
+            HStack(spacing: StockMonitorSpacing.regular) {
+                Text(label).stockMonitorTypography(.metricLabel)
+                Text(mover.ticker).fontWeight(.semibold)
+                Spacer(minLength: StockMonitorSpacing.regular)
+                ChangeLabel(value: mover.changePercent)
+            }
+            .padding(.vertical, StockMonitorSpacing.small)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("自选\(label) \(mover.ticker)")
+    }
+
+    @ViewBuilder private var latestReportsSection: some View {
+        SectionHeader("最新报告", explanation: "报告中心按时间倒序；点击标题进入全文阅读。") {
+            Button("报告中心") { navigate(.reports) }
+        }
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+            ForEach(model.reports.prefix(4)) { report in
+                HStack(alignment: .firstTextBaseline, spacing: StockMonitorSpacing.regular) {
+                    Text(report.ticker).fontWeight(.semibold)
+                    Text(report.title).lineLimit(1)
+                    Spacer(minLength: StockMonitorSpacing.regular)
+                    if let confidence = report.confidence {
+                        Text(confidence).stockMonitorTypography(.metadata)
                     }
-                }.monospacedDigit()
-            }
-        }
-    }
-
-    private var indexStrip: some View {
-        HStack(spacing: 12) {
-            ForEach(model.indices) { index in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(index.name).font(.caption).foregroundStyle(.secondary)
-                    Text(index.price.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足")
-                        .font(.title3.monospacedDigit().weight(.semibold))
-                    ChangeLabel(value: index.changePercent)
+                    Text(String(report.createdAt.prefix(10))).stockMonitorTypography(.metadata)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-                .background(.background.secondary, in: .rect(cornerRadius: 10))
+                .padding(.vertical, StockMonitorSpacing.xSmall)
+            }
+            if model.reports.isEmpty {
+                Text("暂无报告").stockMonitorTypography(.metadata)
             }
         }
     }
 
-    private var quoteTable: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                SectionHeader("自选行情", subtitle: "快照恢复后接入单一 authenticated SSE")
-                Spacer()
+    @ViewBuilder private var quoteSection: some View {
+        SectionHeader("自选行情明细", explanation: "实时报价优先，回落到轮询快照；来源与状态以徽标扫读。") {
+            HStack(spacing: StockMonitorSpacing.small) {
                 Button("复制", systemImage: "doc.on.doc") { copyQuotes() }
                 Button("导出", systemImage: "square.and.arrow.up") { exportingQuotes = true }
             }
-            Table(dashboardStocks) {
-                TableColumn("代码") { stock in Button(stock.ticker) { openStock(stock.ticker) }.buttonStyle(.plain).fontWeight(.semibold) }
-                TableColumn("公司") { stock in Text(stock.companyName ?? "—").foregroundStyle(stock.companyName == nil ? .secondary : .primary) }
-                TableColumn("价格") { stock in
-                    let live = model.liveQuotes[stock.ticker]
-                    Text((live?.price ?? stock.price)?.formatted(.number.precision(.fractionLength(2))) ?? "数据不足").monospacedDigit()
-                }
-                TableColumn("涨跌") { stock in
-                    let live = model.liveQuotes[stock.ticker]
-                    let change = live.flatMap { quote -> Double? in
-                        guard let price = quote.price, let close = quote.previousClose, close != 0 else { return nil }
-                        return (price / close - 1) * 100
-                    } ?? stock.changePercent
-                    ChangeLabel(value: change)
-                }
-                TableColumn("来源") { stock in Text(model.liveQuotes[stock.ticker]?.provider ?? stock.priceSource ?? "数据不足").foregroundStyle(.secondary) }
-                TableColumn("状态") { stock in
-                    let quote = model.liveQuotes[stock.ticker]
-                    SemanticStatusLabel(quote?.isStale == false ? "Live" : "快照", status: quote?.isStale == false ? .live : .stale)
-                }
-            }
-            .frame(minHeight: 260)
         }
+        Table(dashboardStocks) {
+            TableColumn("代码") { stock in
+                Button(stock.ticker) { openStock(stock.ticker) }.buttonStyle(.plain).fontWeight(.semibold)
+            }
+            .width(min: 60, ideal: 80)
+            TableColumn("公司") { stock in
+                Text(stock.companyName ?? "—").foregroundStyle(stock.companyName == nil ? .secondary : .primary)
+            }
+            TableColumn("价格") { stock in
+                let live = model.liveQuotes[stock.ticker]
+                Text((live?.price ?? stock.price)?.formatted(.number.precision(.fractionLength(2))) ?? FinancialValueFormatter.unavailable)
+                    .financialFigures()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .foregroundStyle((live?.price ?? stock.price) == nil ? .secondary : .primary)
+            }
+            .width(min: 80, ideal: 96)
+            TableColumn("涨跌") { stock in
+                ChangeLabel(value: OverviewSummarizer.changePercent(stock: stock, live: model.liveQuotes[stock.ticker]))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .width(min: 80, ideal: 96)
+            TableColumn("来源") { stock in
+                Text(model.liveQuotes[stock.ticker]?.provider ?? stock.priceSource ?? FinancialValueFormatter.unavailable)
+                    .stockMonitorTypography(.metadata)
+            }
+            TableColumn("状态") { stock in
+                let quote = model.liveQuotes[stock.ticker]
+                SemanticStatusLabel(quote?.isStale == false ? "Live" : "快照", status: quote?.isStale == false ? .live : .stale)
+            }
+            .width(min: 70, ideal: 80)
+        }
+        .frame(minHeight: 220)
     }
 
     private var dashboardStocks: [DashboardStock] {
-        guard let dashboard = model.dashboard else { return [] }
-        return dashboard.stocks
+        model.dashboard?.stocks ?? []
     }
 
     private var quoteCSV: String {
         let rows = dashboardStocks.map { stock in
             let quote = model.liveQuotes[stock.ticker]
             let price = quote?.price ?? stock.price
-            let change = quote.flatMap { live -> Double? in
-                guard let price = live.price, let close = live.previousClose, close != 0 else { return nil }
-                return (price / close - 1) * 100
-            } ?? stock.changePercent
+            let change = OverviewSummarizer.changePercent(stock: stock, live: model.liveQuotes[stock.ticker])
             let fields: [String] = [
                 stock.ticker,
                 stock.companyName ?? "",
@@ -218,37 +272,6 @@ public struct OverviewView: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(quoteCSV, forType: .string)
         #endif
-    }
-
-    private var recentAlerts: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("最近异动")
-            ForEach(model.alerts) { alert in
-                Button { openStock(alert.ticker) } label: {
-                    HStack { Text(alert.ticker).fontWeight(.semibold); Text(alert.period).foregroundStyle(.secondary); Spacer(); ChangeLabel(value: alert.changePercent) }
-                }.buttonStyle(.plain).padding(.vertical, 4)
-            }
-            if model.alerts.isEmpty {
-                Text("暂无异动").foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var recentReports: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("最新报告")
-            ForEach(model.reports) { report in
-                HStack {
-                    Text(report.ticker).fontWeight(.semibold); Text(report.title).lineLimit(1); Spacer(); if let confidence = report.confidence {
-                        Text(confidence).foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            if model.reports.isEmpty {
-                Text("暂无报告").foregroundStyle(.secondary)
-            }
-        }
     }
 }
 
@@ -274,19 +297,13 @@ private struct QuoteCSVDocument: FileDocument {
     }
 }
 
-private struct ChangeLabel: View {
-    let value: Double?
-    var body: some View {
-        if let value {
-            (Text(value, format: .number.precision(.fractionLength(2)).sign(strategy: .always()).scale(1)) + Text("%"))
-                .foregroundStyle(color)
-        } else {
-            Text("—")
-        }
-    }
+// MARK: - 自选股（R4.0：可排序 Table + badge + inspector 编辑）
 
-    private var color: Color {
-        (value ?? 0) > 0 ? .green : (value ?? 0) < 0 ? .red : .secondary
+/// 表格排序键：custom 保持服务端 displayOrder（自选顺序）。
+enum WatchlistSortKey: String, CaseIterable, Identifiable, Sendable {
+    case custom, symbol, price, change
+    var id: String {
+        rawValue
     }
 }
 
@@ -297,11 +314,15 @@ public struct WatchlistView: View {
     @State private var groupName = ""
     @State private var showingNewGroup = false
     @State private var showingGroupManager = false
-    @State private var editingThresholds: ManagedStock?
     @State private var removeCandidate: ManagedStock?
+    @State private var sortKey: WatchlistSortKey = .custom
+    @State private var sortAscending = true
+    @State private var groupFilter: Int?
+    @State private var thresholdDrafts: [String: WatchlistThresholdDraft] = [:]
 
     public init(model: WatchlistModel, openStock: @escaping (String) -> Void) {
-        _model = State(initialValue: model); self.openStock = openStock
+        _model = State(initialValue: model)
+        self.openStock = openStock
     }
 
     public var body: some View {
@@ -309,18 +330,12 @@ public struct WatchlistView: View {
             HSplitView {
                 VStack(spacing: 0) {
                     searchBar
-                    List(selection: $model.selectedSymbol) {
-                        ForEach(groupedStocks, id: \.0) { group, stocks in
-                            Section(group) {
-                                ForEach(stocks) { stock in stockRow(stock).tag(stock.ticker) }
-                                    .onMove { source, destination in Task { await model.move(from: source, to: destination) } }
-                            }
-                        }
-                    }
-                    FeatureErrorBanner(error: model.error).padding()
+                    filterBar
+                    stockTable
+                    FeatureErrorBanner(error: model.error).padding(StockMonitorSpacing.regular)
                 }
-                .frame(minWidth: 430)
-                selectedDetail.frame(minWidth: 300, idealWidth: 360)
+                .frame(minWidth: 480)
+                selectedDetail.frame(minWidth: 320, idealWidth: 380)
             }
         }
         .navigationTitle("自选股")
@@ -359,102 +374,342 @@ public struct WatchlistView: View {
                 delete: { group in Task { await model.deleteGroup(group) } }
             )
         }
-        .sheet(item: $editingThresholds) { stock in
-            ThresholdEditor(stock: stock) { twenty, hour, day in
-                Task { await model.updateThresholds(stock: stock, twentyMinutes: twenty, oneHour: hour, day: day) }
-            }
-        }
         .accessibilityIdentifier("m3.watchlist")
     }
 
-    private var groupedStocks: [(String, [ManagedStock])] {
-        let groups = Dictionary(uniqueKeysWithValues: (model.snapshot?.groups ?? []).map { ($0.id, $0.name) })
-        return Dictionary(grouping: model.stocks) { $0.userGroupID.flatMap { groups[$0] } ?? "未分组" }
-            .map { ($0.key, $0.value.sorted { $0.displayOrder < $1.displayOrder }) }.sorted { $0.0 < $1.0 }
+    private var filteredStocks: [ManagedStock] {
+        let stocks = model.stocks
+        let scoped = groupFilter.map { id in stocks.filter { $0.userGroupID == id } } ?? stocks
+        let sorted: [ManagedStock] = switch sortKey {
+        case .custom:
+            scoped.sorted { $0.displayOrder < $1.displayOrder }
+        case .symbol:
+            scoped.sorted { $0.ticker < $1.ticker }
+        case .price:
+            scoped.sorted { ($0.price ?? -.infinity) < ($1.price ?? -.infinity) }
+        case .change:
+            scoped.sorted { ($0.changePercent ?? -.infinity) < ($1.changePercent ?? -.infinity) }
+        }
+        return sortAscending ? sorted : sorted.reversed()
+    }
+
+    private var groupNames: [Int: String] {
+        Dictionary(uniqueKeysWithValues: (model.snapshot?.groups ?? []).map { ($0.id, $0.name) })
     }
 
     private var searchBar: some View {
         VStack(spacing: 0) {
-            TextField("搜索代码或公司", text: $model.searchQuery)
-                .textFieldStyle(.roundedBorder).padding(12)
+            TextField("搜索代码或公司（支持直接添加）", text: $model.searchQuery)
+                .textFieldStyle(.roundedBorder)
+                .padding(StockMonitorSpacing.regular)
             if !model.searchResults.isEmpty {
                 List(model.searchResults) { candidate in
                     HStack {
-                        VStack(alignment: .leading) { Text(candidate.displaySymbol).fontWeight(.semibold); Text(candidate.displayName).font(.caption).foregroundStyle(.secondary) }
-                        Spacer(); Text(candidate.exchange ?? candidate.market ?? "").font(.caption).foregroundStyle(.secondary)
+                        VStack(alignment: .leading) {
+                            Text(candidate.displaySymbol).fontWeight(.semibold)
+                            Text(candidate.displayName).stockMonitorTypography(.metadata)
+                        }
+                        Spacer()
+                        Text(candidate.exchange ?? candidate.market ?? "").stockMonitorTypography(.metadata)
                         Button("添加") { Task { await model.add(candidate) } }.buttonStyle(.bordered)
                         if model.selectedSymbol != nil {
                             Button("同行") { Task { await model.addPeer(candidate) } }.buttonStyle(.bordered)
                         }
                     }
-                }.frame(height: min(CGFloat(model.searchResults.count) * 52, 260))
-            }
-        }
-    }
-
-    private func stockRow(_ stock: ManagedStock) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(stock.ticker).fontWeight(.semibold); if stock.isPeerReferenced {
-                        Image(systemName: "link").foregroundStyle(.secondary)
-                    }
                 }
-                Text(stock.companyName ?? "名称数据不足").font(.caption).foregroundStyle(.secondary)
+                .frame(height: min(CGFloat(model.searchResults.count) * 52, 260))
             }
-            Spacer()
-            Text(stock.price?.formatted(.number.precision(.fractionLength(2))) ?? "—").monospacedDigit()
-            ChangeLabel(value: stock.changePercent).frame(width: 72, alignment: .trailing)
-            if let id = stock.watchlistID, model.pendingIDs.contains(id) {
-                ProgressView().controlSize(.small)
-            }
-        }
-        .contentShape(.rect)
-        .onTapGesture(count: 2) { openStock(stock.ticker) }
-        .contextMenu {
-            Button("打开公司入口") { openStock(stock.ticker) }
-            Menu("移动到分组") { ForEach(model.snapshot?.groups ?? []) { group in Button(group.name) { Task { await model.assign(stock: stock, to: group.id) } } } }
-            Button(stock.alertEnabled ? "关闭异动提醒" : "开启异动提醒") { Task { await model.setAlert(!stock.alertEnabled, stock: stock) } }
-            Button("编辑异动阈值…") { editingThresholds = stock }
-            Divider()
-            Button("移除", role: .destructive) { removeCandidate = stock }
         }
     }
 
-    @ViewBuilder private var selectedDetail: some View {
+    private var filterBar: some View {
+        HStack(spacing: StockMonitorSpacing.regular) {
+            Picker(
+                "分组",
+                selection: Binding(
+                    get: { groupFilter },
+                    set: { groupFilter = $0 }
+                )
+            ) {
+                Text("全部分组").tag(Int?.none)
+                ForEach(model.snapshot?.groups ?? []) { group in
+                    Text(group.name).tag(Int?.some(group.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 150)
+            Picker("排序", selection: $sortKey) {
+                Text("自定义").tag(WatchlistSortKey.custom)
+                Text("代码").tag(WatchlistSortKey.symbol)
+                Text("价格").tag(WatchlistSortKey.price)
+                Text("涨跌").tag(WatchlistSortKey.change)
+            }
+            .pickerStyle(.menu)
+            .frame(width: 120)
+            Button {
+                sortAscending.toggle()
+            } label: {
+                Image(systemName: sortAscending ? "arrow.up" : "arrow.down")
+            }
+            .help(sortAscending ? "升序（点击切换）" : "降序（点击切换）")
+            .accessibilityLabel(sortAscending ? "升序排序" : "降序排序")
+            Spacer()
+            Text("\(filteredStocks.count) 只").stockMonitorTypography(.metadata)
+        }
+        .padding(.horizontal, StockMonitorSpacing.regular)
+        .padding(.bottom, StockMonitorSpacing.small)
+    }
+
+    private var stockTable: some View {
+        Table(filteredStocks, selection: $model.selectedSymbol) {
+            TableColumn("代码") { (stock: ManagedStock) in
+                tickerCell(stock)
+            }
+            .width(min: 80, ideal: 100)
+            TableColumn("公司") { stock in
+                companyCell(stock)
+            }
+            .width(min: 150, ideal: 240)
+            TableColumn("分组") { stock in
+                Text(stock.userGroupID.flatMap { groupNames[$0] } ?? "未分组")
+                    .stockMonitorTypography(.metadata)
+            }
+            .width(min: 90, ideal: 110)
+            TableColumn("价格") { (stock: ManagedStock) in
+                priceCell(stock)
+            }
+            .width(min: 80, ideal: 96)
+            TableColumn("涨跌") { (stock: ManagedStock) in
+                ChangeLabel(value: stock.changePercent)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .width(min: 84, ideal: 96)
+            TableColumn("提醒") { (stock: ManagedStock) in
+                alertCell(stock)
+            }
+            .width(min: 70, ideal: 80)
+        }
+        .alternatingRowBackgrounds(.enabled)
+        .overlay(alignment: .bottom) {
+            if model.pendingIDs.count > 1 {
+                Label("正在同步 \(model.pendingIDs.count) 项变更", systemImage: "arrow.triangle.2.circlepath")
+                    .stockMonitorTypography(.metadata)
+                    .padding(StockMonitorSpacing.small)
+                    .background(.bar, in: RoundedRectangle(cornerRadius: StockMonitorCornerRadius.badge))
+                    .padding(.bottom, StockMonitorSpacing.small)
+            }
+        }
+        .accessibilityIdentifier("r4.watchlist.table")
+    }
+
+    private func tickerCell(_ stock: ManagedStock) -> some View {
+        HStack(spacing: StockMonitorSpacing.small) {
+            Button(stock.ticker) { openStock(stock.ticker) }.buttonStyle(.plain).fontWeight(.semibold)
+            if stock.isPeerReferenced {
+                Image(systemName: "link")
+                    .foregroundStyle(.secondary)
+                    .help("被同行样本引用：\(stock.peerReferencedBy.joined(separator: "、"))")
+            }
+        }
+        .contextMenu { rowMenu(stock) }
+    }
+
+    private func companyCell(_ stock: ManagedStock) -> some View {
+        Text(stock.companyName ?? "名称数据不足")
+            .foregroundStyle(stock.companyName == nil ? .secondary : .primary)
+            .contextMenu { rowMenu(stock) }
+    }
+
+    private func priceCell(_ stock: ManagedStock) -> some View {
+        let price = stock.price
+        return Text(price?.formatted(.number.precision(.fractionLength(2))) ?? FinancialValueFormatter.unavailable)
+            .financialFigures()
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .foregroundStyle(price == nil ? .secondary : .primary)
+    }
+
+    @ViewBuilder
+    private func alertCell(_ stock: ManagedStock) -> some View {
+        if stock.alertEnabled {
+            SemanticStatusLabel("提醒开", status: .live)
+        } else {
+            SemanticStatusLabel("提醒关", status: .unavailable)
+        }
+    }
+
+    @ViewBuilder
+    private func rowMenu(_ stock: ManagedStock) -> some View {
+        Button("打开公司入口") { openStock(stock.ticker) }
+        Menu("移动到分组") {
+            ForEach(model.snapshot?.groups ?? []) { group in
+                Button(group.name) { Task { await model.assign(stock: stock, to: group.id) } }
+            }
+        }
+        Button(stock.alertEnabled ? "关闭异动提醒" : "开启异动提醒") { Task { await model.setAlert(!stock.alertEnabled, stock: stock) } }
+        Divider()
+        Button("移除", role: .destructive) { removeCandidate = stock }
+    }
+
+    @ViewBuilder
+    private var selectedDetail: some View {
         if let symbol = model.selectedSymbol, let stock = model.stocks.first(where: { $0.ticker == symbol }) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    SectionHeader(stock.ticker, subtitle: stock.companyName)
-                    HStack {
-                        Button("公司入口") { openStock(stock.ticker) }.buttonStyle(.borderedProminent)
-                        Toggle("行情监控", isOn: Binding(
-                            get: { model.contractItems[stock.watchlistID ?? -1]?.enabled ?? true },
-                            set: { value in Task { await model.setMonitoring(value, stock: stock) } }
-                        ))
-                        Toggle("异动提醒", isOn: Binding(get: { stock.alertEnabled }, set: { value in Task { await model.setAlert(value, stock: stock) } }))
-                    }
-                    LabeledContent("行业", value: stock.officialIndustry ?? "数据不足")
-                    LabeledContent("20 分钟阈值", value: stock.threshold20m.map { "\($0)%" } ?? "默认")
-                    Divider()
-                    SectionHeader("同行样本", subtitle: "代码映射完全由服务端 Security entity 决定")
-                    ForEach(model.peers) { peer in
-                        HStack {
-                            Text(peer.ticker).fontWeight(.medium)
-                            Text(peer.source == "official" ? "官方" : "手动").font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Button(peer.source == "manual" ? "移除" : (peer.excluded ? "恢复" : "排除")) { Task { await model.togglePeer(peer) } }
-                                .buttonStyle(.borderless)
+                VStack(alignment: .leading, spacing: StockMonitorSpacing.regular) {
+                    VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
+                        HStack(spacing: StockMonitorSpacing.small) {
+                            Text(stock.ticker).font(.title3.weight(.semibold))
+                            if model.pendingIDs.contains(stock.watchlistID ?? -1) {
+                                ProgressView().controlSize(.small)
+                            }
                         }
+                        Text(stock.companyName ?? "名称数据不足").stockMonitorTypography(.body)
+                        Text(stock.officialIndustry ?? "行业数据不足").stockMonitorTypography(.metadata)
                     }
-                    if model.peers.isEmpty {
-                        Text("暂无同行数据").foregroundStyle(.secondary)
-                    }
-                }.padding(20)
+                    Button("打开公司入口") { openStock(stock.ticker) }
+                        .buttonStyle(.borderedProminent)
+                    Divider()
+                    monitoringSection(stock)
+                    Divider()
+                    thresholdSection(stock)
+                    Divider()
+                    peersSection(stock)
+                }
+                .padding(StockMonitorSpacing.medium)
             }
         } else {
-            ContentUnavailableView("选择一只证券", systemImage: "cursorarrow.click")
+            ContentUnavailableView("选择一只证券", systemImage: "cursorarrow.click", description: Text("在左侧表格中选择后可在此编辑监控、阈值与同行样本。"))
         }
+    }
+
+    @ViewBuilder
+    private func monitoringSection(_ stock: ManagedStock) -> some View {
+        SectionHeader("监控", explanation: "关闭后该证券不再参与行情轮询与异动检测。") {
+            if let id = stock.userGroupID {
+                Picker(
+                    "分组",
+                    selection: Binding(
+                        get: { id },
+                        set: { value in Task { await model.assign(stock: stock, to: value) } }
+                    )
+                ) {
+                    ForEach(model.snapshot?.groups ?? []) { group in
+                        Text(group.name).tag(group.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 140)
+            }
+        }
+        HStack(spacing: StockMonitorSpacing.large) {
+            Toggle("行情监控", isOn: Binding(
+                get: { model.contractItems[stock.watchlistID ?? -1]?.enabled ?? true },
+                set: { value in Task { await model.setMonitoring(value, stock: stock) } }
+            ))
+            Toggle("异动提醒", isOn: Binding(get: { stock.alertEnabled }, set: { value in Task { await model.setAlert(value, stock: stock) } }))
+        }
+    }
+
+    /// 阈值编辑直接放在 inspector 中，不再跳转独立 Sheet（R4.0 master + detail）。
+    @ViewBuilder
+    private func thresholdSection(_ stock: ManagedStock) -> some View {
+        let draft = thresholdDrafts[stock.ticker] ?? WatchlistThresholdDraft(stock: stock)
+        SectionHeader("异动阈值", explanation: "留空沿用服务端默认值；保存后服务端立即生效。") {
+            saveThresholdButton(stock, draft: draft)
+        }
+        HStack(spacing: StockMonitorSpacing.regular) {
+            thresholdField("20 分钟 %", text: binding(stock, keypath: \.twentyString))
+            thresholdField("1 小时 %", text: binding(stock, keypath: \.hourString))
+            thresholdField("当日 %", text: binding(stock, keypath: \.dayString))
+        }
+        if let reason = draft.invalidReason {
+            Text(reason).stockMonitorTypography(.metadata).foregroundStyle(.orange)
+        }
+    }
+
+    private func saveThresholdButton(_ stock: ManagedStock, draft: WatchlistThresholdDraft) -> some View {
+        Button("保存") {
+            Task {
+                await model.updateThresholds(stock: stock, twentyMinutes: draft.twenty, oneHour: draft.hour, day: draft.day)
+                thresholdDrafts[stock.ticker] = nil
+            }
+        }
+        .disabled(draft.invalidReason != nil)
+    }
+
+    private func thresholdField(_ label: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
+            Text(label).stockMonitorTypography(.metricLabel)
+            TextField("默认", text: text)
+                .textFieldStyle(.roundedBorder)
+                .financialFigures()
+        }
+    }
+
+    private func binding(_ stock: ManagedStock, keypath: WritableKeyPath<WatchlistThresholdDraft, String>) -> Binding<String> {
+        Binding(
+            get: {
+                let draft = thresholdDrafts[stock.ticker] ?? WatchlistThresholdDraft(stock: stock)
+                return draft[keyPath: keypath]
+            },
+            set: { value in
+                var draft = thresholdDrafts[stock.ticker] ?? WatchlistThresholdDraft(stock: stock)
+                draft[keyPath: keypath] = value
+                thresholdDrafts[stock.ticker] = draft
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func peersSection(_ stock: ManagedStock) -> some View {
+        SectionHeader("同行样本", explanation: "代码映射完全由服务端 Security 实体决定。")
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.xSmall) {
+            ForEach(model.peers) { peer in
+                HStack {
+                    Text(peer.ticker).fontWeight(.medium)
+                    Text(peer.source == "official" ? "官方" : "手动").stockMonitorTypography(.metadata)
+                    Spacer()
+                    Button(peer.source == "manual" ? "移除" : (peer.excluded ? "恢复" : "排除")) { Task { await model.togglePeer(peer) } }
+                        .buttonStyle(.borderless)
+                }
+                .padding(.vertical, StockMonitorSpacing.xSmall)
+            }
+            if model.peers.isEmpty {
+                Text("暂无同行数据").stockMonitorTypography(.metadata)
+            }
+        }
+    }
+}
+
+/// inspector 内联阈值草稿：nil 表示沿用服务端默认。
+struct WatchlistThresholdDraft: Equatable {
+    var twentyString = ""
+    var hourString = ""
+    var dayString = ""
+
+    init(stock: ManagedStock) {
+        twentyString = stock.threshold20m.map { String($0) } ?? ""
+        hourString = stock.threshold1h.map { String($0) } ?? ""
+        dayString = stock.thresholdDay.map { String($0) } ?? ""
+    }
+
+    var twenty: Double? {
+        Double(twentyString.trimmingCharacters(in: .whitespaces))
+    }
+
+    var hour: Double? {
+        Double(hourString.trimmingCharacters(in: .whitespaces))
+    }
+
+    var day: Double? {
+        Double(dayString.trimmingCharacters(in: .whitespaces))
+    }
+
+    var invalidReason: String? {
+        let values = [twenty, hour, day].compactMap(\.self)
+        if values.contains(where: { $0 <= 0 }) {
+            return "所有阈值必须大于 0。"
+        }
+        return nil
     }
 }
 
@@ -484,38 +739,7 @@ private struct GroupManagerView: View {
     }
 }
 
-private struct ThresholdEditor: View {
-    let stock: ManagedStock
-    let save: (Double?, Double?, Double?) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var twenty = ""
-    @State private var hour = ""
-    @State private var day = ""
-    var body: some View {
-        NavigationStack {
-            Form {
-                TextField("20 分钟（%）", text: $twenty)
-                TextField("1 小时（%）", text: $hour)
-                TextField("当日（%）", text: $day)
-                Text("留空会沿用服务端默认值；所有阈值必须大于 0。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.formStyle(.grouped).padding()
-                .navigationTitle("\(stock.ticker) 异动阈值")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("保存") { save(Double(twenty), Double(hour), Double(day)); dismiss() }
-                            .disabled([twenty, hour, day].compactMap(Double.init).contains { $0 <= 0 })
-                    }
-                }
-        }.frame(width: 460, height: 320)
-            .onAppear {
-                twenty = stock.threshold20m.map { String($0) } ?? ""
-                hour = stock.threshold1h.map { String($0) } ?? ""
-                day = stock.thresholdDay.map { String($0) } ?? ""
-            }
-    }
-}
+// MARK: - 异动中心（R4.0：严重度 + 时间 + 调查状态分组）
 
 public struct ActivityView: View {
     @State private var model: ActivityModel
@@ -526,237 +750,95 @@ public struct ActivityView: View {
 
     public var body: some View {
         ResourceStateView(state: model.state) {
-            VStack(alignment: .leading, spacing: 14) {
+            PageScaffold(width: StockMonitorContentWidth.wide) {
+                PageHeader("异动中心", summary: "首行说明发生了什么；调查状态跟随每条异动。") {
+                    SemanticStatusLabel("\(model.alerts.count) 条异动", status: model.alerts.isEmpty ? .live : .info)
+                }
+            } content: {
                 FeatureErrorBanner(error: model.error)
-                Table(model.alerts) {
-                    TableColumn("证券") { item in Button(item.ticker) { openStock(item.ticker) }.buttonStyle(.plain).fontWeight(.semibold) }
-                    TableColumn("周期", value: \.period)
-                    TableColumn("幅度") { ChangeLabel(value: $0.changePercent) }
-                    TableColumn("触发时间", value: \.triggeredAt)
+                severitySummary
+                alertGroup("需要关注", explanation: notableExplanation, alerts: buckets.notableDayMoves)
+                alertGroup("盘中异动", explanation: "当日一般幅度与 1 小时窗口触发的异动。", alerts: buckets.intradayMoves)
+                alertGroup("短时波动", explanation: "20 分钟窗口触发，通常噪音更高。", alerts: buckets.briefMoves)
+                alertGroup("目标价触发", explanation: "自选价格目标线触发，独立于波动阈值。", alerts: buckets.priceTargets)
+                if !buckets.unclassified.isEmpty {
+                    alertGroup("其他周期", explanation: nil, alerts: buckets.unclassified)
                 }
-                DisclosureGroup("调查任务（\(model.investigations.count)）") {
-                    ForEach(model.investigations) { item in
-                        HStack {
-                            Text(item.ticker).fontWeight(.semibold)
-                            Text(item.status)
-                            Spacer()
-                            Text("\(item.newsCount) 条新闻").foregroundStyle(.secondary)
-                        }.padding(.vertical, 4)
-                    }
-                }
+                investigationsSection
                 if model.canLoadMore {
                     Button("加载更多") { Task { await model.load(reset: false) } }.frame(maxWidth: .infinity)
                 }
-            }.padding(20)
+            }
         }
         .navigationTitle("异动中心").task { await model.load() }.accessibilityIdentifier("m3.alerts")
     }
-}
 
-public struct NewsCenterView: View {
-    @State private var model: NewsModel
-    @State private var selected: NewsItem?
-    let openStock: (String) -> Void
-    public init(model: NewsModel, openStock: @escaping (String) -> Void) {
-        _model = State(initialValue: model); self.openStock = openStock
+    private var buckets: AlertSeverityBuckets {
+        AlertGrouper.buckets(model.alerts)
     }
 
-    public var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Picker("范围", selection: $model.scope) { ForEach(NewsModel.Scope.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(width: 180)
-                if model.scope == .company {
-                    TextField("证券代码", text: $model.symbol).textFieldStyle(.roundedBorder).frame(width: 120)
-                }
-                TextField("主题筛选", text: $model.topic).textFieldStyle(.roundedBorder).frame(width: 180).disabled(model.scope == .company)
-                Button("应用") { Task { await model.load() } }
-                Spacer(); Text("\(model.total) 条").foregroundStyle(.secondary)
-            }.padding(12)
-            FeatureErrorBanner(error: model.error).padding(.horizontal)
-            List(model.items, selection: Binding(get: { selected?.id }, set: { id in selected = model.items.first { $0.id == id } })) { item in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(item.displayTitle).font(.headline).lineLimit(2)
-                    HStack {
-                        Text(item.provider); if let ticker = item.ticker {
-                            Button(ticker) { openStock(ticker) }.buttonStyle(.plain)
-                        }; Spacer(); Text(item.timestamp)
-                    }
-                    .font(.caption).foregroundStyle(.secondary)
-                    Text(item.aiSummary ?? item.summary ?? "摘要数据不足").lineLimit(3).foregroundStyle(.secondary)
-                }.padding(.vertical, 6).tag(item.id).onTapGesture { selected = item }
-            }
-            if model.canLoadMore {
-                Button("加载更多") { Task { await model.load(reset: false) } }.padding(8)
-            }
+    private var notableExplanation: String {
+        "当日幅度 ≥ \(AlertGrouper.notableDayMovePercent.formatted())% 的代表性异动。"
+    }
+
+    private var investigationsByTicker: [String: (status: String, label: String)] {
+        AlertGrouper.investigationLookup(model.investigations)
+    }
+
+    private func investigationSymbol(_ status: String) -> String {
+        switch status {
+        case "completed": "checkmark.circle.fill"
+        case "failed": "xmark.circle.fill"
+        default: "circle.dashed"
         }
-        .navigationTitle("新闻中心").task { await model.load() }
-        .sheet(item: $selected) { item in NewsReader(item: item, summarize: { Task { await model.summarize(item) } }).frame(minWidth: 680, minHeight: 560) }
-        .accessibilityIdentifier("m3.news")
     }
-}
 
-private struct NewsReader: View {
-    let item: NewsItem
-    let summarize: () -> Void
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(item.displayTitle).font(.largeTitle.bold())
-                    HStack {
-                        Text(item.provider); Text(item.timestamp); Spacer(); if let raw = item.url, let url = URL(string: raw) {
-                            ConfirmedExternalLink(url: url)
-                        }
-                    }.foregroundStyle(.secondary)
+    private var severitySummary: some View {
+        let running = model.investigations.filter { $0.status == "active" || $0.status == "reporting" }.count
+        return MetricGrid([
+            .init(
+                label: "显著当日",
+                value: FinancialDisplayValue(text: "\(buckets.notableDayMoves.count) 条"),
+                status: buckets.notableDayMoves.isEmpty ? .live : .warning
+            ),
+            .init(label: "盘中/短时", value: .init(text: "\(buckets.intradayMoves.count + buckets.briefMoves.count) 条"), status: .neutral),
+            .init(label: "调查进行中", value: .init(text: "\(running) 项"), status: running > 0 ? .info : .live),
+            .init(label: "目标价触发", value: .init(text: "\(buckets.priceTargets.count) 条"), status: .neutral),
+        ])
+    }
+
+    @ViewBuilder
+    private func alertGroup(_ title: String, explanation: String?, alerts: [MovementAlert]) -> some View {
+        if !alerts.isEmpty {
+            SectionHeader(title, explanation: explanation)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(alerts) { alert in
+                    AlertSummaryRow(
+                        alert: alert,
+                        investigationLabel: investigationsByTicker[alert.ticker]?.label,
+                        investigationSemantic: AlertGrouper.statusSemantic(investigationsByTicker[alert.ticker]?.status ?? ""),
+                        openStock: openStock
+                    )
                     Divider()
-                    if let summary = item.aiSummary {
-                        Text("AI 摘要").font(.headline); SafeMarkdownText(summary)
-                    } else {
-                        Button("生成一次 AI 摘要", action: summarize).buttonStyle(.borderedProminent); Text(item.summary ?? "正文与摘要数据不足").foregroundStyle(.secondary)
-                    }
-                    if let analysis = item.aiAnalysis {
-                        Text("分析").font(.headline); SafeMarkdownText(analysis.displayText)
-                    }
-                }.padding(28).frame(maxWidth: 820, alignment: .leading)
-            }
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
-        }
-    }
-}
-
-public struct InvestmentCalendarView: View {
-    @State private var model: CalendarModel
-    let openStock: (String) -> Void
-    public init(model: CalendarModel, openStock: @escaping (String) -> Void) {
-        _model = State(initialValue: model); self.openStock = openStock
-    }
-
-    public var body: some View {
-        ResourceStateView(state: model.state) {
-            VStack(spacing: 10) {
-                FeatureErrorBanner(error: model.error)
-                Table(model.items) {
-                    TableColumn("日期", value: \.eventDate)
-                    TableColumn("证券") {
-                        event in if let symbol = event.symbol {
-                            Button(symbol) { openStock(symbol) }.buttonStyle(.plain)
-                        } else {
-                            Text("市场")
-                        }
-                    }
-                    TableColumn("事件", value: \.title)
-                    TableColumn("类型", value: \.eventType)
-                    TableColumn("影响") { event in
-                        SemanticStatusLabel(
-                            event.impactLevel,
-                            status: event.impactLevel == "critical" || event.impactLevel == "high" ? .warning : .unavailable
-                        )
-                    }
-                    TableColumn("来源") { event in VStack(alignment: .leading) {
-                        Text(event.primarySource); if event.stale {
-                            Text("旧缓存").font(.caption).foregroundStyle(.orange)
-                        }
-                    } }
-                }
-                if model.nextCursor != nil {
-                    Button("加载更多") { Task { await model.load(reset: false) } }
-                }
-            }.padding(16)
-        }
-        .navigationTitle("投资日历").task { await model.load() }.accessibilityIdentifier("m3.calendar")
-    }
-}
-
-public struct ReportsView: View {
-    @State private var model: ReportsModel
-    let openStock: (String) -> Void
-    public init(model: ReportsModel, openStock: @escaping (String) -> Void) {
-        _model = State(initialValue: model); self.openStock = openStock
-    }
-
-    public var body: some View {
-        HSplitView {
-            VStack(spacing: 0) {
-                List(model.reports, selection: Binding(get: { model.selected?.id }, set: {
-                    id in if let report = model.reports.first(where: { $0.id == id }) {
-                        Task { await model.select(report) }
-                    }
-                })) { report in
-                    VStack(alignment: .leading, spacing: 4) { Text(report.title).fontWeight(.medium); HStack {
-                        Text(report.ticker); Text(report.createdAt); if let confidence = report.confidence {
-                            Text("置信度 \(confidence)")
-                        }
-                    }.font(.caption).foregroundStyle(.secondary) }.tag(report.id)
-                }
-                if model.canLoadMore {
-                    Button("加载更多") { Task { await model.load(reset: false) } }.padding(8)
-                }
-            }.frame(minWidth: 300, idealWidth: 380)
-            ScrollView {
-                if let report = model.selected {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text(report.title).font(.largeTitle.bold())
-                        HStack {
-                            Button(report.ticker) { openStock(report.ticker) }.buttonStyle(.plain); Text(report.createdAt); if let source = report.model {
-                                Text(source)
-                            }
-                        }.foregroundStyle(.secondary)
-                        Divider(); SafeMarkdownText(report.content)
-                    }.padding(28).frame(maxWidth: 860, alignment: .leading)
-                } else {
-                    ContentUnavailableView("选择一份报告", systemImage: "doc.richtext")
-                }
-            }.frame(minWidth: 420)
-        }
-        .overlay(alignment: .top) { FeatureErrorBanner(error: model.error).padding() }
-        .navigationTitle("报告中心").task { await model.load() }.accessibilityIdentifier("m3.reports")
-    }
-}
-
-private struct SafeMarkdownText: View {
-    let text: String
-    init(_ text: String) {
-        self.text = text
-    }
-
-    var body: some View {
-        let value = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
-        Text(value).textSelection(.enabled).lineSpacing(4)
-    }
-}
-
-private struct ConfirmedExternalLink: View {
-    let url: URL
-    @State private var showingConfirmation = false
-    @Environment(\.openURL) private var openURL
-    var body: some View {
-        Button("打开原文", systemImage: "arrow.up.right.square") { showingConfirmation = true }
-            .confirmationDialog("打开外部网站？", isPresented: $showingConfirmation) {
-                Button("打开 \(url.host ?? url.absoluteString)") { openURL(url) }
-                Button("取消", role: .cancel) {}
-            } message: { Text(url.host ?? url.absoluteString) }
-    }
-}
-
-private struct CompanyEntryView: View {
-    let route: AppRoute
-    let symbol: String?
-    let navigate: (AppRoute) -> Void
-    private let destinations: [AppRoute] = [.news, .fundamentals, .valuation, .technical, .sec, .holdings, .compare, .ai]
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            SectionHeader(symbol ?? route.title, subtitle: symbol == nil ? "请先从总览或自选股选择证券" : "统一公司研究入口")
-            if symbol != nil {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150))], spacing: 12) {
-                    ForEach(destinations) { destination in
-                        Button { navigate(destination) } label: {
-                            Label(destination.title, systemImage: destination.systemImage)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                        }.buttonStyle(.bordered)
-                    }
                 }
             }
-        }.padding(28).frame(maxWidth: 780, alignment: .topLeading).navigationTitle(route.title)
+        }
+    }
+
+    @ViewBuilder
+    private var investigationsSection: some View {
+        if !model.investigations.isEmpty {
+            SectionHeader("调查任务", explanation: "每条异动最多关联一个调查；状态由服务端任务推进。")
+            TimelineList(model.investigations.map { item in
+                TimelineEntry(
+                    id: "\(item.id)",
+                    title: "\(item.ticker) · \(AlertGrouper.statusLabel(item.status))",
+                    timestamp: String(item.startedAt.prefix(16).replacingOccurrences(of: "T", with: " ")),
+                    detail: "已收集 \(item.newsCount) 条新闻；截止 \(String(item.endsAt.prefix(16).replacingOccurrences(of: "T", with: " ")))"
+                        + (item.lastError.map { "；最近错误：\($0)" } ?? ""),
+                    systemImage: investigationSymbol(item.status)
+                )
+            })
+        }
     }
 }

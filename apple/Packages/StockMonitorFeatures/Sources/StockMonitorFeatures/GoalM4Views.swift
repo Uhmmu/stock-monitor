@@ -9,36 +9,65 @@ public struct GoalM4RouteView: View {
     public let service: ResearchWorkspaceService
     public let openStock: (String) -> Void
     @State private var tickerContext = CompanyTickerContext()
+    /// 公司分析组共享的一次性行情上下文（R4.2 统一公司头）。
+    @State private var companySummary: CompanySummaryModel
 
     public init(route: AppRoute, navigation: AppNavigationModel, service: ResearchWorkspaceService, openStock: @escaping (String) -> Void) {
         self.route = route
         self.navigation = navigation
         self.service = service
         self.openStock = openStock
+        _companySummary = State(initialValue: CompanySummaryModel(service: service))
     }
 
     public var body: some View {
         switch route {
         case .fundamentals:
-            FundamentalsView(model: FundamentalsModel(service: service), tickerContext: tickerContext, symbol: activeSymbol)
+            FundamentalsView(
+                model: FundamentalsModel(service: service),
+                tickerContext: tickerContext,
+                companySummary: companySummary,
+                symbol: activeSymbol
+            )
         case .financials:
-            FinancialsView(model: FinancialsModel(service: service), tickerContext: tickerContext, symbol: activeSymbol)
+            FinancialsView(
+                model: FinancialsModel(service: service),
+                tickerContext: tickerContext,
+                companySummary: companySummary,
+                symbol: activeSymbol
+            )
         case .valuation:
-            ValuationView(model: ValuationModel(service: service), tickerContext: tickerContext, symbol: activeSymbol)
+            ValuationView(
+                model: ValuationModel(service: service),
+                tickerContext: tickerContext,
+                companySummary: companySummary,
+                symbol: activeSymbol
+            )
         case .compare:
             CompareView(model: CompareModel(service: service), openStock: openStock)
         case .sec:
-            SecView(model: SecModel(service: service), tickerContext: tickerContext, symbol: activeSymbol)
+            SecView(
+                model: SecModel(service: service),
+                tickerContext: tickerContext,
+                companySummary: companySummary,
+                symbol: activeSymbol
+            )
         case .ownership:
             OwnershipView(
                 model: OwnershipModel(service: service),
                 tickerContext: tickerContext,
+                companySummary: companySummary,
                 symbol: navigation.selectedSymbol
             )
         case .congress:
             CongressView(model: CongressModel(service: service), openStock: openStock)
         case .technical:
-            TechnicalAnalysisView(model: TechnicalAnalysisModel(service: service), tickerContext: tickerContext, symbol: activeSymbol)
+            TechnicalAnalysisView(
+                model: TechnicalAnalysisModel(service: service),
+                tickerContext: tickerContext,
+                companySummary: companySummary,
+                symbol: activeSymbol
+            )
         case .macro:
             MacroView(model: MacroModel(service: service))
         case .industry:
@@ -167,47 +196,51 @@ public struct FundamentalsView: View {
     @State private var symbol = ""
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
+    let companySummary: CompanySummaryModel
 
-    init(model: FundamentalsModel, tickerContext: CompanyTickerContext, symbol: String?) {
+    init(model: FundamentalsModel, tickerContext: CompanyTickerContext, companySummary: CompanySummaryModel, symbol: String?) {
         _model = State(initialValue: model)
         _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
         self.tickerContext = tickerContext
+        self.companySummary = companySummary
     }
 
     public var body: some View {
         ResourceStateView(state: model.state) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack {
-                        M4SectionHeader("基本面指标", subtitle: "Yahoo 为主数据源，Finnhub 仅作可选补充")
-                        Spacer()
-                        CompanySymbolBar(
-                            context: tickerContext,
-                            service: model.service,
-                            symbol: $symbol,
-                            initialSymbol: initialSymbol
-                        ) { value in
-                            await model.load(symbol: value)
-                        }
-                    }
-                    if let response = model.response {
-                        headerStrip(response)
-                        metricsGrid(response.metrics)
-                        if let rating = response.rating {
-                            ratingSection(rating)
-                        } else {
-                            Text("评级数据不足").foregroundStyle(.secondary)
-                        }
-                        sourceStrip(response.sourceSupport)
+            PageScaffold(width: StockMonitorContentWidth.wide) {
+                PageHeader("基本面", summary: "按估值、盈利、成长、效率与风险分组；Yahoo 为主数据源，Finnhub 仅作可选补充。") {
+                    CompanySymbolBar(
+                        context: tickerContext,
+                        service: model.service,
+                        symbol: $symbol,
+                        initialSymbol: initialSymbol
+                    ) { value in
+                        await model.load(symbol: value)
                     }
                 }
-                .padding(24)
+            } content: {
+                CompanyHeaderView(summary: companySummary.summary(for: symbol))
+                if let response = model.response {
+                    MetadataStrip([
+                        .init(label: "证券", value: response.ticker),
+                        .init(label: "查询时间", value: String(response.asOf.prefix(19).replacingOccurrences(of: "T", with: " "))),
+                        .init(label: "模式", value: response.dataMode),
+                    ])
+                    metricGroups(response.metrics)
+                    if let rating = response.rating {
+                        ratingSection(rating)
+                    } else {
+                        Text("评级数据不足").stockMonitorTypography(.metadata)
+                    }
+                    sourceStrip(response.sourceSupport)
+                }
             }
             .refreshable { await model.load(symbol: symbol) }
         }
         .navigationTitle("基本面")
         .task {
+            await companySummary.loadIfNeeded()
             guard let resolved = await tickerContext.resolveAfterLoad(service: model.service, preferred: initialSymbol) else { return }
             symbol = resolved
             await model.load(symbol: resolved)
@@ -217,59 +250,52 @@ public struct FundamentalsView: View {
             symbol = value
             Task { await model.load(symbol: value) }
         }
-        .overlay(alignment: .top) { FeatureErrorBanner(error: model.error).padding() }
+        .overlay(alignment: .top) { FeatureErrorBanner(error: model.error).padding(StockMonitorSpacing.regular) }
         .accessibilityIdentifier("m4.fundamentals")
     }
 
-    private func headerStrip(_ response: FundamentalsResponse) -> some View {
-        HStack(spacing: 16) {
-            LabeledContent("证券", value: response.ticker)
-            LabeledContent("查询时间", value: String(response.asOf.prefix(19).replacingOccurrences(of: "T", with: " ")))
-            LabeledContent("模式", value: response.dataMode)
-        }
-        .font(.callout)
-    }
-
-    private func metricsGrid(_ metrics: [FundamentalsMetric]) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220))], spacing: 10) {
-            ForEach(metrics) { metric in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(metric.label).font(.callout)
-                        Spacer()
-                        Text(metric.source ?? "—").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Text(metric.value.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足")
-                        .font(.title3.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(metric.value == nil ? .secondary : .primary)
-                }
-                .padding(12)
-                .background(.background.secondary, in: .rect(cornerRadius: 10))
+    /// R4.2：指标按业务分组，不再是无层级的均匀卡片墙。
+    private func metricGroups(_ metrics: [FundamentalsMetric]) -> some View {
+        let groups = FundamentalsMetricGroup.grouped(metrics)
+        return ForEach(groups, id: \.0) { group, values in
+            SectionHeader(group.rawValue) {
+                Text(sourceSummary(values)).stockMonitorTypography(.metadata)
             }
+            MetricGrid(values.map { metric in
+                MetricItem(
+                    id: metric.label,
+                    label: metric.label,
+                    value: fundamentalsDisplayValue(metric),
+                    status: metric.value == nil ? .unavailable : .neutral
+                )
+            })
         }
     }
 
+    private func sourceSummary(_ metrics: [FundamentalsMetric]) -> String {
+        let sources = Set(metrics.compactMap(\.source))
+        return sources.isEmpty ? "数据不足" : sources.sorted().joined(separator: " + ")
+    }
+
+    @ViewBuilder
     private func ratingSection(_ rating: AnalystRating) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            M4SectionHeader("分析师评级", subtitle: rating.period.map { "周期 \($0)" })
-            HStack(spacing: 18) {
-                LabeledContent("强力买入", value: "\(rating.strongBuy)")
-                LabeledContent("买入", value: "\(rating.buy)")
-                LabeledContent("持有", value: "\(rating.hold)")
-                LabeledContent("卖出", value: "\(rating.sell)")
-                LabeledContent("强力卖出", value: "\(rating.strongSell)")
-            }
-            .monospacedDigit()
+        SectionHeader("分析师评级", explanation: rating.period.map { "周期 \($0)" })
+        HStack(spacing: StockMonitorSpacing.large) {
+            LabeledContent("强力买入") { Text("\(rating.strongBuy)").financialFigures() }
+            LabeledContent("买入") { Text("\(rating.buy)").financialFigures() }
+            LabeledContent("持有") { Text("\(rating.hold)").financialFigures() }
+            LabeledContent("卖出") { Text("\(rating.sell)").financialFigures() }
+            LabeledContent("强力卖出") { Text("\(rating.strongSell)").financialFigures() }
         }
-        .padding(14)
-        .background(.background.secondary, in: .rect(cornerRadius: 10))
+        .padding(StockMonitorSpacing.medium)
+        .stockMonitorSurface(.grouped)
     }
 
     private func sourceStrip(_ support: SourceSupport) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: StockMonitorSpacing.regular) {
             SemanticStatusLabel("Yahoo", status: support.yahoo ? .live : .unavailable)
             SemanticStatusLabel("Finnhub 补充", status: support.finnhub ? .live : .unavailable)
-            Text("百分比与市值单位由服务端归一化，客户端不重复换算").font(.caption).foregroundStyle(.secondary)
+            Text("百分比与市值单位由服务端归一化，客户端不重复换算").stockMonitorTypography(.metadata)
         }
     }
 }
@@ -325,60 +351,40 @@ public struct FinancialsView: View {
     }
 
     let tickerContext: CompanyTickerContext
+    let companySummary: CompanySummaryModel
 
-    init(model: FinancialsModel, tickerContext: CompanyTickerContext, symbol: String?) {
+    init(model: FinancialsModel, tickerContext: CompanyTickerContext, companySummary: CompanySummaryModel, symbol: String?) {
         _model = State(initialValue: model)
         _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
         self.tickerContext = tickerContext
+        self.companySummary = companySummary
     }
 
     public var body: some View {
         ResourceStateView(state: model.state) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack {
-                        M4SectionHeader("财务数据", subtitle: "季度指标来自最新四期；三表为服务端已存 Yahoo 快照")
-                        Spacer()
-                        CompanySymbolBar(
-                            context: tickerContext,
-                            service: model.service,
-                            symbol: $symbol,
-                            initialSymbol: initialSymbol
-                        ) { value in
-                            await model.load(symbol: value, frequency: frequency)
-                        }
+            PageScaffold(width: StockMonitorContentWidth.wide) {
+                PageHeader("财务数据", summary: "季度矩阵指标为行、期间为列；三表为服务端已存 Yahoo 快照。") {
+                    CompanySymbolBar(
+                        context: tickerContext,
+                        service: model.service,
+                        symbol: $symbol,
+                        initialSymbol: initialSymbol
+                    ) { value in
+                        await model.load(symbol: value, frequency: frequency)
                     }
-                    quarterlyTable
-                    Divider()
-                    HStack {
-                        Picker("频率", selection: $frequency) {
-                            Text("年度").tag("annual")
-                            Text("季度").tag("quarterly")
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 180)
-                        .onChange(of: frequency) { _, value in
-                            Task { await model.load(symbol: symbol, frequency: value) }
-                        }
-                        Spacer()
-                        if let syncedAt = model.statements?.rows.first?.syncedAt {
-                            Text("同步于 \(String(syncedAt.prefix(10)))").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Picker("报表", selection: $statementKind) {
-                        ForEach(StatementKind.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 320)
-                    statementSections
                 }
-                .padding(24)
+            } content: {
+                CompanyHeaderView(summary: companySummary.summary(for: symbol))
+                quarterlyMatrix
+                statementControls
+                statementSections
             }
             .refreshable { await model.load(symbol: symbol, frequency: frequency) }
         }
         .navigationTitle("财务报表")
         .task {
+            await companySummary.loadIfNeeded()
             guard let resolved = await tickerContext.resolveAfterLoad(service: model.service, preferred: initialSymbol) else { return }
             symbol = resolved
             await model.load(symbol: resolved, frequency: frequency)
@@ -388,28 +394,44 @@ public struct FinancialsView: View {
             symbol = value
             Task { await model.load(symbol: value, frequency: frequency) }
         }
-        .overlay(alignment: .top) { FeatureErrorBanner(error: model.error).padding() }
+        .overlay(alignment: .top) { FeatureErrorBanner(error: model.error).padding(StockMonitorSpacing.regular) }
         .accessibilityIdentifier("m4.financials")
     }
 
-    private var quarterlyTable: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            M4SectionHeader("季度关键指标")
-            Table(model.quarterly) {
-                TableColumn("财季") { row in
-                    Text("\(row.fiscalYear.map(String.init) ?? "—") \(row.fiscalPeriod ?? "")")
-                }
-                TableColumn("期末") { row in Text(row.periodEnd ?? "—") }
-                TableColumn("营收") { row in optionalNumber(row.revenue, digits: 0) }
-                TableColumn("EPS") { row in optionalNumber(row.eps, digits: 2) }
-                TableColumn("净利润") { row in optionalNumber(row.netIncome, digits: 0) }
-                TableColumn("毛利率") { row in optionalPercent(row.grossMargin) }
-                TableColumn("净利率") { row in optionalPercent(row.netMargin) }
-                TableColumn("FCF") { row in optionalNumber(row.freeCashFlow, digits: 0) }
-                TableColumn("来源") { row in Text(row.source ?? "数据不足") }
-            }
-            .frame(minHeight: 150)
+    /// R4.2：行列层级 + 冻结指标列 + 期间对齐 + 同比辅助。
+    @ViewBuilder
+    private var quarterlyMatrix: some View {
+        SectionHeader("季度关键指标", explanation: "最新期间在最左；同比仅在存在上年同季数据时显示。")
+        let matrix = FinancialMatrixBuilder.build(quarters: model.quarterly)
+        if matrix.isEmpty {
+            EmptyState("暂无季度数据", systemImage: "tablecells", description: "等待服务端采集该证券的季度指标。")
+        } else {
+            FinancialMatrixTable(matrix: matrix)
         }
+    }
+
+    private var statementControls: some View {
+        HStack(spacing: StockMonitorSpacing.regular) {
+            Picker("频率", selection: $frequency) {
+                Text("年度").tag("annual")
+                Text("季度").tag("quarterly")
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 180)
+            .onChange(of: frequency) { _, value in
+                Task { await model.load(symbol: symbol, frequency: value) }
+            }
+            Picker("报表", selection: $statementKind) {
+                ForEach(StatementKind.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 320)
+            Spacer()
+            if let syncedAt = model.statements?.rows.first?.syncedAt {
+                FreshnessBadge("同步于 \(String(syncedAt.prefix(10)))", stale: false)
+            }
+        }
+        .padding(.top, StockMonitorSpacing.regular)
     }
 
     @ViewBuilder
@@ -439,16 +461,6 @@ public struct FinancialsView: View {
         case .balance: row.balanceSheet
         case .cashFlow: row.cashFlow
         }
-    }
-
-    private func optionalNumber(_ value: Double?, digits: Int) -> Text {
-        Text(value.map { $0.formatted(.number.precision(.fractionLength(digits))) } ?? "数据不足")
-            .monospacedDigit()
-            .foregroundStyle(value == nil ? .secondary : .primary)
-    }
-
-    private func optionalPercent(_ value: Double?) -> Text {
-        optionalNumber(value, digits: 1)
     }
 }
 
@@ -503,21 +515,21 @@ public struct ValuationView: View {
     @State private var showingGraham = false
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
+    let companySummary: CompanySummaryModel
 
-    init(model: ValuationModel, tickerContext: CompanyTickerContext, symbol: String?) {
+    init(model: ValuationModel, tickerContext: CompanyTickerContext, companySummary: CompanySummaryModel, symbol: String?) {
         _model = State(initialValue: model)
         _symbol = State(initialValue: symbol ?? "")
         initialSymbol = symbol
         self.tickerContext = tickerContext
+        self.companySummary = companySummary
     }
 
     public var body: some View {
         ResourceStateView(state: model.state) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack {
-                        M4SectionHeader("多模型估值", subtitle: "读取每日估值快照；页面不在请求期间实时拉取外部数据")
-                        Spacer()
+            PageScaffold(width: StockMonitorContentWidth.wide) {
+                PageHeader("多模型估值", summary: "先看适用性与共识结论，再展开模型与证据；页面不在请求期间实时拉取外部数据。") {
+                    HStack(spacing: StockMonitorSpacing.small) {
                         CompanySymbolBar(
                             context: tickerContext,
                             service: model.service,
@@ -529,27 +541,30 @@ public struct ValuationView: View {
                         Button("历史 P/E") { showingHistory = true }
                         Button("Graham 调整") { showingGraham = true }
                     }
-                    if model.refreshQueued {
-                        Label("已排队刷新，稍后重新查询即可看到新快照", systemImage: "clock.arrow.circlepath")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    if let snapshot = model.snapshot {
-                        snapshotHeader(snapshot)
-                        consensusSection
-                        signalsSection
-                        metricsSection
-                        grahamSection(snapshot)
-                        extraSections(snapshot)
-                        Text("客户端不重算任何估值模型；所有数值、单位与来源以服务端快照为准。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                 }
-                .padding(24)
+            } content: {
+                CompanyHeaderView(summary: companySummary.summary(for: symbol))
+                if model.refreshQueued {
+                    Label("已排队刷新，稍后重新查询即可看到新快照", systemImage: "clock.arrow.circlepath")
+                        .stockMonitorTypography(.metadata)
+                }
+                if let snapshot = model.snapshot {
+                    snapshotMetadata(snapshot)
+                    firstScreenSummary
+                    consensusSection
+                    signalsSection
+                    metricsSection
+                    grahamSection(snapshot)
+                    extraSections(snapshot)
+                    Text("客户端不重算任何估值模型；所有数值、单位与来源以服务端快照为准。")
+                        .stockMonitorTypography(.metadata)
+                }
             }
             .refreshable { await model.load(symbol: symbol) }
         }
         .navigationTitle("估值")
         .task {
+            await companySummary.loadIfNeeded()
             guard let resolved = await tickerContext.resolveAfterLoad(service: model.service, preferred: initialSymbol) else { return }
             symbol = resolved
             await model.load(symbol: resolved)
@@ -559,7 +574,7 @@ public struct ValuationView: View {
             symbol = value
             Task { await model.load(symbol: value) }
         }
-        .overlay(alignment: .top) { FeatureErrorBanner(error: model.error).padding() }
+        .overlay(alignment: .top) { FeatureErrorBanner(error: model.error).padding(StockMonitorSpacing.regular) }
         .sheet(isPresented: $showingHistory) {
             HistoricalPESheet(service: model.service, symbol: symbol).frame(minWidth: 720, minHeight: 520)
         }
@@ -570,67 +585,114 @@ public struct ValuationView: View {
         .accessibilityIdentifier("m4.valuation")
     }
 
-    private func snapshotHeader(_ snapshot: ValuationCrossModel) -> some View {
-        HStack(spacing: 16) {
-            LabeledContent("快照日期", value: snapshot.snapshotDate ?? "数据不足")
-            if let generatedAt = snapshot.generatedAt {
-                LabeledContent("生成时间", value: String(generatedAt.prefix(19).replacingOccurrences(of: "T", with: " ")))
-            }
-            if let aiModel = snapshot.aiModel {
-                LabeledContent("AI 模型", value: aiModel)
-            }
+    private func snapshotMetadata(_ snapshot: ValuationCrossModel) -> some View {
+        MetadataStrip(snapshotItems(snapshot))
+    }
+
+    private func snapshotItems(_ snapshot: ValuationCrossModel) -> [MetadataItem] {
+        var items: [MetadataItem] = [
+            .init(label: "快照日期", value: snapshot.snapshotDate ?? "数据不足"),
+        ]
+        if let generatedAt = snapshot.generatedAt {
+            items.append(.init(label: "生成时间", value: String(generatedAt.prefix(19).replacingOccurrences(of: "T", with: " "))))
         }
-        .font(.callout)
+        if let aiModel = snapshot.aiModel {
+            items.append(.init(label: "AI 模型", value: aiModel))
+        }
+        return items
+    }
+
+    /// R4.2 首屏：适用性、共识区间、现价差异、置信与分歧。
+    private var firstScreenSummary: some View {
+        let consensus = model.consensus
+        let hasModels = !model.metrics.isEmpty || !model.signals.isEmpty
+        let conflict = model.snapshot?.fields["model_conflict"]?.numberValue == 1
+        let upside: Double? = if let fair = consensus?.value, let current = consensus?.current, fair > 0 {
+            (current / fair - 1) * 100
+        } else {
+            nil
+        }
+        return MetricGrid([
+            .init(
+                id: "valuation.applicability",
+                label: "模型适用性",
+                value: FinancialDisplayValue(
+                    text: hasModels ? "适用" : "不适用",
+                    qualifier: hasModels ? "\(model.metrics.count) 项指标 · \(model.signals.count) 个模型" : "快照缺少模型输出"
+                ),
+                status: hasModels ? .live : .unavailable
+            ),
+            .init(
+                id: "valuation.consensus",
+                label: "共识公允价值",
+                value: FinancialValueFormatter.price(consensus?.value, currency: "USD"),
+                status: .neutral
+            ),
+            .init(
+                id: "valuation.upside",
+                label: "现价相对共识",
+                value: upside.map {
+                    FinancialDisplayValue(text: $0.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always())) + "%", qualifier: $0 <= 0 ? "低于共识" : "高于共识")
+                } ?? FinancialValueFormatter.missing(.missing),
+                status: upside.map { $0 <= 0 ? .positive : .warning } ?? .unavailable
+            ),
+            .init(
+                id: "valuation.conflict",
+                label: "模型分歧",
+                value: FinancialDisplayValue(text: conflict ? "存在分歧" : "方向一致", qualifier: conflict ? "各模型结论需分别核对" : nil),
+                status: conflict ? .warning : .live
+            ),
+        ])
     }
 
     @ViewBuilder
     private var consensusSection: some View {
         if let consensus = model.consensus {
-            VStack(alignment: .leading, spacing: 8) {
-                M4SectionHeader("模型共识")
-                HStack(spacing: 18) {
+            SectionHeader("模型共识区间")
+            VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+                HStack(spacing: StockMonitorSpacing.large) {
                     LabeledContent("共识公允价值") {
                         Text(consensus.value.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足")
-                            .monospacedDigit()
+                            .financialFigures()
                     }
                     LabeledContent("快照现价") {
                         Text(consensus.current.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足")
-                            .monospacedDigit()
+                            .financialFigures()
                     }
                 }
                 if let items = consensus.items, !items.isEmpty {
-                    HStack(spacing: 14) {
+                    HStack(spacing: StockMonitorSpacing.regular) {
                         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                             LabeledContent(item.label ?? item.key ?? "—") {
                                 Text(item.value.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足")
-                                    .monospacedDigit()
+                                    .financialFigures()
                             }
                         }
                     }
-                    .font(.callout)
+                    .stockMonitorTypography(.metadata)
                 }
             }
-            .padding(14)
-            .background(.background.secondary, in: .rect(cornerRadius: 10))
+            .padding(StockMonitorSpacing.medium)
+            .stockMonitorSurface(.grouped)
         }
     }
 
     @ViewBuilder
     private var signalsSection: some View {
         if !model.signals.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                M4SectionHeader("模型信号", subtitle: model.snapshot?.fields["model_conflict"]?.numberValue == 1 ? "模型之间存在分歧" : nil)
+            SectionHeader("模型信号", explanation: model.snapshot?.fields["model_conflict"]?.numberValue == 1 ? "模型之间存在分歧，结论需分别核对。" : nil)
+            VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
                 ForEach(model.signals) { signal in
                     HStack {
                         Text(signal.label ?? signal.key)
                         Text(stars(signal.stars)).foregroundStyle(.yellow)
                         Spacer()
                         Text(signal.verdict ?? "数据不足").fontWeight(.medium)
-                    }.font(.callout)
+                    }.stockMonitorTypography(.body)
                 }
             }
-            .padding(14)
-            .background(.background.secondary, in: .rect(cornerRadius: 10))
+            .padding(StockMonitorSpacing.medium)
+            .stockMonitorSurface(.grouped)
         }
     }
 
@@ -642,8 +704,8 @@ public struct ValuationView: View {
     @ViewBuilder
     private var metricsSection: some View {
         if !model.metrics.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                M4SectionHeader("估值指标与同行对比")
+            SectionHeader("估值指标与同行对比")
+            VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
                 Table(model.metrics) {
                     TableColumn("指标") { row in Text(row.label ?? row.key) }
                     TableColumn("数值") { row in

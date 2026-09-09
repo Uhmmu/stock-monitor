@@ -110,6 +110,11 @@ public actor ResearchWorkspaceService {
         return items.compactMap(\.ticker).filter { !$0.isEmpty }
     }
 
+    /// 公司头上下文（R4.2）：既有 dashboard 只读契约，市场状态与自选行情一次拉取。
+    public func dashboardSnapshot() async throws -> DashboardSnapshot {
+        try await authSession.authorizedGet(DashboardSnapshot.self, path: "/api/dashboard")
+    }
+
     public func companyProfile(symbol: String) async throws -> CompanyProfileOut {
         try await authSession.authorizedGet(CompanyProfileOut.self, path: "/api/company-profile/\(symbol)")
     }
