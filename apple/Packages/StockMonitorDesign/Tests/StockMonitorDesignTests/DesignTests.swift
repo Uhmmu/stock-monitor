@@ -68,3 +68,52 @@ import Testing
     #expect(StockMonitorLayoutWidth.narrow.maximumMetricColumns == 2)
     #expect(StockMonitorLayoutWidth.wide.maximumMetricColumns == 6)
 }
+
+// MARK: - R6 表格/图表/材质动效 token
+
+@Test func tableFoundationRolesAndAlignmentAreComplete() {
+    #expect(TableColumnRole.allCases.map(\.rawValue) == ["main", "comparison", "metadata", "action"])
+    #expect(TableColumnAlignment.allCases.count == 2)
+    #expect(TableNarrowStrategy.allCases.count == 3)
+    let spec = TableColumnSpec(
+        id: "value", title: "市值", role: .comparison, alignment: .trailing,
+        minWidth: 100, idealWidth: 120, monospacedDigits: true, sortableKey: "valueUsd"
+    )
+    #expect(spec.id == "value")
+    #expect(spec.role == .comparison)
+    #expect(spec.alignment == .trailing)
+}
+
+@Test func chartPalettePairsColorWithNonColorEncoding() {
+    // 每个分类色都有对应形状标记；颜色不是唯一编码。
+    let markerCount = Set((0 ..< 6).map(StockMonitorChartPalette.seriesMarker)).count
+    #expect(markerCount == 6)
+    #expect(StockMonitorChartPalette.seriesMarker(0) == .circle)
+    #expect(StockMonitorChartPalette.seriesMarker(6) == .circle)
+    #expect(StockMonitorChartPalette.seriesColor(6) == StockMonitorChartPalette.seriesColor(0))
+    // 线型在第三个系列后出现虚线差异。
+    #expect(StockMonitorChartPalette.seriesStroke(0).dash.isEmpty)
+    #expect(StockMonitorChartPalette.seriesStroke(2).dash.isEmpty == false)
+    #expect(StockMonitorChartPalette.seriesStroke(0).lineWidth > StockMonitorChartPalette.seriesStroke(1).lineWidth)
+    // 涨跌语义色不同且都有语义标签承载（SemanticStatusLabel 图标/文字）。
+    #expect(StockMonitorChartPalette.positive != StockMonitorChartPalette.negative)
+    #expect(ChartSeriesMarker.allCases.count == 6)
+    #expect(ChartSeriesMarker.circle.systemImageName == "circle.fill")
+}
+
+@Test func materialPolicyKeepsContentLayerFreeOfSystemMaterials() {
+    #expect(MaterialPolicyCatalog.contentLayerUsesSystemMaterial.isEmpty)
+    #expect(MaterialPolicyCatalog.entries.count >= 6)
+    #expect(MaterialPolicyLayer.allCases.map(\.rawValue) == ["content", "chrome", "transient"])
+    // 唯一 transient 自定义材质是 K 线 tooltip。
+    let transient = MaterialPolicyCatalog.entries.filter { $0.layer == .transient && $0.surface.contains("tooltip") }
+    #expect(transient.count == 1)
+}
+
+@Test func motionAuditKeepsHighFrequencyPathsInstant() {
+    #expect(StockMonitorMotionAudit.highFrequencySurfacesWithAnimation.isEmpty)
+    #expect(StockMonitorMotionAudit.animatedSurfacesMissingFallback.isEmpty)
+    #expect(StockMonitorMotionAudit.highFrequencySurfaces.count >= 5)
+    // stateChange 是短 cross-fade（Reduce Motion 降级路径）。
+    #expect(StockMonitorMotion.hoverHighlightOpacity <= 0.08)
+}

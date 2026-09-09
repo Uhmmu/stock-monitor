@@ -513,6 +513,8 @@ public struct ValuationView: View {
     @State private var symbol = ""
     @State private var showingHistory = false
     @State private var showingGraham = false
+    /// R6.0：估值指标行序默认按业务语义分组；点击列头可改按数值/同行中位排序。
+    @State private var metricsSort: [KeyPathComparator<CrossModelMetric>] = []
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
     let companySummary: CompanySummaryModel
@@ -704,28 +706,33 @@ public struct ValuationView: View {
     @ViewBuilder
     private var metricsSection: some View {
         if !model.metrics.isEmpty {
-            SectionHeader("估值指标与同行对比")
+            SectionHeader("估值指标与同行对比", explanation: "行序为业务语义分组（估值→盈利→成长→风险），不按字母排序。")
             VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
-                Table(model.metrics) {
-                    TableColumn("指标") { row in Text(row.label ?? row.key) }
-                    TableColumn("数值") { row in
-                        Text(row.value.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足")
-                            .monospacedDigit()
-                            .foregroundStyle(row.value == nil ? .secondary : .primary)
+                Table(model.metrics, sortOrder: $metricsSort) {
+                    TableColumn("指标") { row in
+                        MainTableCell(row.label ?? row.key)
                     }
+                    .width(min: 150, ideal: 210)
+                    TableColumn("数值", sortUsing: KeyPathComparator(\CrossModelMetric.value, order: .reverse)) { row in
+                        NumericTableCell(value: row.value, digits: 2)
+                    }
+                    .width(min: 90, ideal: 110)
                     TableColumn("单位") { row in Text(row.unit ?? "—") }
-                    TableColumn("同行中位") { row in
-                        Text(row.peerMedian.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足")
-                            .monospacedDigit()
-                            .foregroundStyle(row.peerMedian == nil ? .secondary : .primary)
+                    .width(min: 70, ideal: 90)
+                    TableColumn("同行中位", sortUsing: KeyPathComparator(\CrossModelMetric.peerMedian, order: .reverse)) { row in
+                        NumericTableCell(value: row.peerMedian, digits: 2)
                     }
+                    .width(min: 90, ideal: 110)
                     TableColumn("相对同行") { row in
                         Text(row.comparison ?? (row.peerDeltaPercent.map { "\($0.formatted(.number.precision(.fractionLength(1))))%" } ?? "数据不足"))
                             .monospacedDigit()
                             .foregroundStyle(row.comparison == nil ? .secondary : .primary)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                     }
+                    .width(min: 100, ideal: 120)
                 }
                 .frame(minHeight: 160)
+                .accessibilityIdentifier("r6.valuation.metrics-table")
             }
         }
     }
@@ -855,13 +862,20 @@ private struct HistoricalPEContent: View {
                                 .foregroundStyle(.secondary)
                         } else {
                             statsRow(response)
-                            LineSeriesChart(
-                                series: [LineSeries(name: "P/E", color: .accentColor, points: model.series)],
-                                referenceLines: referenceLines(response)
-                            )
-                            .frame(height: 280)
-                            Text("TTM 为当时已公开的最近四个连续财季之和；亏损期（TTM≤0）不出现在序列中。")
-                                .font(.caption).foregroundStyle(.secondary)
+                            ChartPanel(
+                                "历史 P/E 图表",
+                                unitLabel: "倍（TTM P/E）",
+                                source: "SEC XBRL EPS facts + FMP/Yahoo/yfinance 价格",
+                                asOf: model.series.last.map { ChartTime.formatDay($0.date) }
+                            ) {
+                                LineSeriesChart(
+                                    series: [LineSeries(name: "P/E", paletteIndex: 0, points: model.series)],
+                                    referenceLines: referenceLines(response)
+                                )
+                                .frame(height: 280)
+                                Text("TTM 为当时已公开的最近四个连续财季之和；亏损期（TTM≤0）不出现在序列中。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }

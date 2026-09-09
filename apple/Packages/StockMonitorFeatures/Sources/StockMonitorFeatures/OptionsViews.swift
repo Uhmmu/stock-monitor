@@ -54,6 +54,10 @@ public struct OptionsView: View {
     @State private var model: OptionsModel
     @State private var selectedSymbol: String?
     @State private var expiration = ""
+    /// R6.0：期权链默认按行权价升序，列可排序、可拖宽。
+    @State private var chainSort: [KeyPathComparator<OptionChainRow>] = [
+        KeyPathComparator(\.strike, order: .forward)
+    ]
 
     private var rankingBinding: Binding<String> {
         Binding(
@@ -167,9 +171,16 @@ public struct OptionsView: View {
                     .pickerStyle(.menu).frame(width: 200)
                 }
                 if model.ivSeries.count >= 2 {
-                    M4SectionHeader("ATM IV 历史")
-                    LineSeriesChart(series: [LineSeries(name: "ATM IV %", color: .indigo, points: model.ivSeries)])
-                        .frame(height: 200)
+                    ChartPanel(
+                        "ATM IV 历史",
+                        unitLabel: "%",
+                        source: detail.provider,
+                        asOf: model.ivSeries.last.map { String(ChartTime.formatDay($0.date)) },
+                        unavailableMessage: nil
+                    ) {
+                        LineSeriesChart(series: [LineSeries(name: "ATM IV %", paletteIndex: 0, points: model.ivSeries)])
+                            .frame(height: 200)
+                    }
                 } else {
                     Text("IV 历史数据不足（需更多每日快照积累）").font(.callout).foregroundStyle(.secondary)
                 }
@@ -209,35 +220,49 @@ public struct OptionsView: View {
     private func chainTable(_ detail: OptionDetailResponse) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             M4SectionHeader("期权链", subtitle: "到期 \(detail.selectedExpiration.map { String($0.prefix(10)) } ?? "—") · \(detail.chain.count) 条")
-            Table(Array(detail.chain.prefix(120))) {
+            Table(sortedChain, sortOrder: $chainSort) {
                 TableColumn("类型") { item in
                     Text(item.optionType == "call" ? "Call" : "Put")
-                        .foregroundStyle(item.optionType == "call" ? .green : .red)
+                        .foregroundStyle(item.optionType == "call" ? StockMonitorChartPalette.positive : StockMonitorChartPalette.negative)
                 }
-                TableColumn("行权价") { item in
-                    Text(item.strike.map { $0.formatted(.number.precision(.fractionLength(1))) } ?? "数据不足").monospacedDigit()
+                .width(min: 60, ideal: 70)
+                TableColumn("行权价", sortUsing: KeyPathComparator(\OptionChainRow.strike)) { item in
+                    NumericTableCell(value: item.strike, digits: 1)
                 }
+                .width(min: 80, ideal: 95)
                 TableColumn("最新") { item in optionalPrice(item.last) }
+                .width(min: 80, ideal: 95)
                 TableColumn("买价") { item in optionalPrice(item.bid) }
+                .width(min: 80, ideal: 90)
                 TableColumn("卖价") { item in optionalPrice(item.ask) }
-                TableColumn("成交量") { item in
-                    Text(item.volume.map { $0.formatted(.number.precision(.fractionLength(0))) } ?? "数据不足").monospacedDigit()
+                .width(min: 80, ideal: 90)
+                TableColumn("成交量", sortUsing: KeyPathComparator(\OptionChainRow.volume, order: .reverse)) { item in
+                    NumericTableCell(value: item.volume, digits: 0)
                 }
-                TableColumn("未平仓") { item in
-                    Text(item.openInterest.map { $0.formatted(.number.precision(.fractionLength(0))) } ?? "数据不足").monospacedDigit()
+                .width(min: 70, ideal: 85)
+                TableColumn("未平仓", sortUsing: KeyPathComparator(\OptionChainRow.openInterest, order: .reverse)) { item in
+                    NumericTableCell(value: item.openInterest, digits: 0)
                 }
-                TableColumn("IV") { item in
-                    Text(item.impliedVolatility.map { value in value.formatted(.percent.precision(.fractionLength(1))) } ?? "数据不足").monospacedDigit()
+                .width(min: 70, ideal: 85)
+                TableColumn("IV", sortUsing: KeyPathComparator(\OptionChainRow.impliedVolatility, order: .reverse)) { item in
+                    NumericTableCell(percent: item.impliedVolatility)
                 }
-                TableColumn("Delta") { item in
-                    Text(item.delta.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足").monospacedDigit()
+                .width(min: 70, ideal: 85)
+                TableColumn("Delta", sortUsing: KeyPathComparator(\OptionChainRow.delta)) { item in
+                    NumericTableCell(value: item.delta, digits: 2)
                 }
+                .width(min: 70, ideal: 85)
             }
             .frame(minHeight: 260)
+            .accessibilityIdentifier("r6.options.chain-table")
             if detail.chain.count > 120 {
-                Text("仅展示前 120 条（共 \(detail.chain.count) 条）").font(.caption).foregroundStyle(.secondary)
+                TableTruncationFooter(shown: 120, total: detail.chain.count)
             }
         }
+    }
+
+    private var sortedChain: [OptionChainRow] {
+        Array(model.detail?.chain.prefix(120) ?? []).sorted(using: chainSort)
     }
 
     private func optionalPrice(_ value: Double?) -> Text {

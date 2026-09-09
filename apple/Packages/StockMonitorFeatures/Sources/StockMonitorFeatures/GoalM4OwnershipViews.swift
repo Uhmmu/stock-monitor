@@ -145,6 +145,16 @@ public final class OwnershipModel {
 public struct OwnershipView: View {
     @State private var model: OwnershipModel
     @State private var symbol = ""
+    /// R6.0：三张表默认排序——13F 按市值降序、内部人/国会按交易日期降序，列头可再排序。
+    @State private var holdingsSort: [KeyPathComparator<Sec13FHoldingItem>] = [
+        KeyPathComparator(\.valueUsd, order: .reverse)
+    ]
+    @State private var insiderSort: [KeyPathComparator<SecInsiderItem>] = [
+        KeyPathComparator(\.transactionDate, order: .reverse)
+    ]
+    @State private var congressSort: [KeyPathComparator<CongressTradeItem>] = [
+        KeyPathComparator(\.transactionDate, order: .reverse)
+    ]
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
     let companySummary: CompanySummaryModel
@@ -230,19 +240,31 @@ public struct OwnershipView: View {
                         .init(label: "上期", value: page.prevPeriod ?? "—"),
                         .init(label: "口径", value: "13F 季度快照，滞后约 45 天"),
                     ])
-                    Table(page.holdings) {
-                        TableColumn("机构") { row in Text(row.managerName ?? "数据不足") }
-                        TableColumn("股数") { row in optionalCount(row.shares) }
-                        TableColumn("市值 USD") { row in
-                            Text(row.valueUsd.map { $0.formatted(.number.notation(.compactName)) } ?? "数据不足")
-                                .financialFigures().foregroundStyle(row.valueUsd == nil ? .secondary : .primary)
+                    Table(model.holdings?.holdings ?? [], sortOrder: $holdingsSort) {
+                        TableColumn("机构", sortUsing: KeyPathComparator(\Sec13FHoldingItem.managerName)) { row in
+                            MainTableCell(row.managerName ?? "数据不足")
                         }
+                        .width(min: 200, ideal: 300)
+                        TableColumn("股数", sortUsing: KeyPathComparator(\Sec13FHoldingItem.shares, order: .reverse)) { row in
+                            optionalCount(row.shares)
+                        }
+                        .width(min: 90, ideal: 110)
+                        TableColumn("市值 USD", sortUsing: KeyPathComparator(\Sec13FHoldingItem.valueUsd, order: .reverse)) { row in
+                            NumericTableCell(value: row.valueUsd, digits: 1, compact: true)
+                        }
+                        .width(min: 100, ideal: 120)
                         TableColumn("类型") { row in Text(row.putCall ?? "—") }
-                        TableColumn("环比") { row in holdingChangeBadge(row) }
+                        .width(min: 60, ideal: 80)
+                        TableColumn("环比", sortUsing: KeyPathComparator(\Sec13FHoldingItem.shareChange, order: .reverse)) { row in
+                            holdingChangeBadge(row)
+                        }
+                        .width(min: 90, ideal: 110)
                         TableColumn("申报日") { row in Text(row.filingDate ?? "—") }
+                        .width(min: 90, ideal: 110)
                     }
                     .alternatingRowBackgrounds(.enabled)
                     .frame(minHeight: 300)
+                    .accessibilityIdentifier("r6.ownership.13f-table")
                 }
             }
         }
@@ -253,22 +275,33 @@ public struct OwnershipView: View {
         if model.insider.isEmpty {
             ContentUnavailableView("该股暂无内部人交易数据", systemImage: "person.crop.square")
         } else {
-            Table(model.insider) {
-                TableColumn("交易日期") { row in Text(row.transactionDate ?? "数据不足") }
-                TableColumn("内部人") { row in Text(row.insiderName ?? "数据不足") }
-                TableColumn("职务") { row in Text(row.insiderTitle ?? "—") }
+            Table(model.insider, sortOrder: $insiderSort) {
+                TableColumn("交易日期", sortUsing: KeyPathComparator(\SecInsiderItem.transactionDate, order: .reverse)) { row in
+                    Text(row.transactionDate ?? "数据不足")
+                }
+                .width(min: 100, ideal: 120)
+                TableColumn("内部人", sortUsing: KeyPathComparator(\SecInsiderItem.insiderName)) { row in
+                    MainTableCell(row.insiderName ?? "数据不足", subtitle: row.insiderTitle)
+                }
+                .width(min: 180, ideal: 260)
                 TableColumn("代码") { row in Text(row.transactionCode ?? "—") }
-                TableColumn("股数") { row in optionalCount(row.shares) }
-                TableColumn("价格") { row in
-                    Text(row.price.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足")
-                        .monospacedDigit().foregroundStyle(row.price == nil ? .secondary : .primary)
+                .width(min: 60, ideal: 80)
+                TableColumn("股数", sortUsing: KeyPathComparator(\SecInsiderItem.shares, order: .reverse)) { row in
+                    optionalCount(row.shares)
                 }
-                TableColumn("金额") { row in
-                    Text(row.value.map { $0.formatted(.number.notation(.compactName)) } ?? "数据不足")
-                        .monospacedDigit().foregroundStyle(row.value == nil ? .secondary : .primary)
+                .width(min: 90, ideal: 110)
+                TableColumn("价格", sortUsing: KeyPathComparator(\SecInsiderItem.price, order: .reverse)) { row in
+                    NumericTableCell(value: row.price, digits: 2)
                 }
+                .width(min: 80, ideal: 100)
+                TableColumn("金额", sortUsing: KeyPathComparator(\SecInsiderItem.value, order: .reverse)) { row in
+                    NumericTableCell(value: row.value, digits: 1, compact: true)
+                }
+                .width(min: 90, ideal: 110)
             }
+            .alternatingRowBackgrounds(.enabled)
             .frame(minHeight: 300)
+            .accessibilityIdentifier("r6.ownership.insider-table")
         }
     }
 
@@ -277,12 +310,21 @@ public struct OwnershipView: View {
         if model.congress.isEmpty {
             ContentUnavailableView("该股暂无国会交易数据", systemImage: "building.columns")
         } else {
-            Table(model.congress) {
-                TableColumn("交易日期") { row in Text(row.transactionDate ?? "数据不足") }
-                TableColumn("交易人") { row in Text(row.filerName ?? "数据不足") }
+            Table(model.congress, sortOrder: $congressSort) {
+                TableColumn("交易日期", sortUsing: KeyPathComparator(\CongressTradeItem.transactionDate, order: .reverse)) { row in
+                    Text(row.transactionDate ?? "数据不足")
+                }
+                .width(min: 100, ideal: 120)
+                TableColumn("交易人", sortUsing: KeyPathComparator(\CongressTradeItem.filerName)) { row in
+                    Text(row.filerName ?? "数据不足")
+                }
+                .width(min: 140, ideal: 200)
                 TableColumn("方向") { row in Text(row.transactionType ?? "—") }
+                .width(min: 90, ideal: 120)
                 TableColumn("金额区间") { row in Text(row.amountLabel ?? "数据不足") }
+                .width(min: 120, ideal: 150)
                 TableColumn("申报日") { row in Text(row.filingDate ?? "—") }
+                .width(min: 100, ideal: 120)
                 TableColumn("迟报") { row in
                     if row.isLate == true {
                         Text("迟报").foregroundStyle(.orange)
@@ -290,8 +332,11 @@ public struct OwnershipView: View {
                         Text("—").foregroundStyle(.secondary)
                     }
                 }
+                .width(min: 60, ideal: 70)
             }
+            .alternatingRowBackgrounds(.enabled)
             .frame(minHeight: 300)
+            .accessibilityIdentifier("r6.ownership.congress-table")
         }
     }
 
@@ -314,9 +359,7 @@ public struct OwnershipView: View {
         }
     }
 
-    private func optionalCount(_ value: Double?) -> Text {
-        Text(value.map { $0.formatted(.number.precision(.fractionLength(0))) } ?? "数据不足")
-            .monospacedDigit()
-            .foregroundStyle(value == nil ? .secondary : .primary)
+    private func optionalCount(_ value: Double?) -> some View {
+        NumericTableCell(value: value, digits: 0)
     }
 }

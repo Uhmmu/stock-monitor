@@ -210,8 +210,14 @@ public struct MacroView: View {
                     if let detail = model.detail {
                         M4SectionHeader(detail.nameZh ?? detail.seriesKey ?? "指标详情", subtitle: detail.seriesKey)
                         if model.detailPoints.count >= 2 {
-                            LineSeriesChart(series: [LineSeries(name: detail.nameZh ?? "数值", color: .accentColor, points: model.detailPoints)])
-                                .frame(height: 260)
+                            ChartPanel(
+                                "指标序列图表",
+                                source: "Alpha Vantage 日同步",
+                                asOf: model.detailPoints.last.map { ChartTime.formatDay($0.date) }
+                            ) {
+                                LineSeriesChart(series: [LineSeries(name: detail.nameZh ?? "数值", paletteIndex: 0, points: model.detailPoints)])
+                                    .frame(height: 260)
+                            }
                         } else {
                             Text("数据不足：该序列没有足够观察值。").foregroundStyle(.secondary)
                         }
@@ -253,33 +259,14 @@ public struct MacroView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     M4SectionHeader("收益率曲线", subtitle: "最新与前一观察日的国债期限结构")
-                    Chart {
-                        ForEach(curve.curves) { snapshot in
-                            ForEach(Array(snapshot.points.enumerated()), id: \.offset) { _, point in
-                                LineMark(
-                                    x: .value("期限", point.maturity),
-                                    y: .value("收益率 %", point.value ?? 0)
-                                )
-                                .foregroundStyle(by: .value("曲线", snapshot.label))
-                                .lineStyle(StrokeStyle(lineWidth: 1.8))
-                                .interpolationMethod(.catmullRom)
-                                if let value = point.value {
-                                    PointMark(
-                                        x: .value("期限", point.maturity),
-                                        y: .value("收益率 %", value)
-                                    )
-                                    .foregroundStyle(by: .value("曲线", snapshot.label))
-                                    .symbolSize(24)
-                                }
-                            }
-                        }
+                    ChartPanel(
+                        "期限结构图表",
+                        unitLabel: "%",
+                        source: "Alpha Vantage 日同步",
+                        asOf: curve.curves.compactMap(\.observationDate).max()
+                    ) {
+                        YieldCurveChart(curves: curve.curves)
                     }
-                    .chartXAxis {
-                        AxisMarks { _ in
-                            AxisValueLabel().font(.caption)
-                        }
-                    }
-                    .frame(height: 300)
                     SemanticEvidenceView(value: curve.spreads, domain: .macro)
                     Text(curve.disclaimer ?? "").font(.caption).foregroundStyle(.secondary)
                 }.padding(20)

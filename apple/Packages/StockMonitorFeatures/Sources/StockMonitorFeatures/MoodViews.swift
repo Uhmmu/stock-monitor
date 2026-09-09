@@ -314,6 +314,10 @@ public struct MoodLabView: View {
     @State private var recoveryDate = ""
     @State private var recoveryScopes = "market"
     @State private var recoveryReason = ""
+    /// R6.0：验证任务默认按创建时间降序。
+    @State private var runsSort: [KeyPathComparator<MoodValidationRun>] = [
+        KeyPathComparator(\.createdAt, order: .reverse)
+    ]
 
     init(model: MoodLabModel) {
         _model = State(initialValue: model)
@@ -369,24 +373,34 @@ public struct MoodLabView: View {
     private var runsTable: some View {
         VStack(alignment: .leading, spacing: 8) {
             M4SectionHeader("验证任务")
-            Table(model.runs) {
-                TableColumn("任务") { run in Text("#\(run.runID)") }
-                TableColumn("状态") { run in Text(run.status ?? "—") }
-                TableColumn("进度") { run in
-                    Text(run.progress.map { "\(Int($0 * 100))%" } ?? "数据不足").monospacedDigit()
+            Table(model.runs, sortOrder: $runsSort) {
+                TableColumn("任务", sortUsing: KeyPathComparator(\MoodValidationRun.runID, order: .reverse)) { run in
+                    Text("#\(run.runID)")
                 }
-                TableColumn("创建") { run in
+                .width(min: 70, ideal: 90)
+                TableColumn("状态") { run in Text(run.status ?? "—") }
+                .width(min: 90, ideal: 110)
+                TableColumn("进度", sortUsing: KeyPathComparator(\MoodValidationRun.progress, order: .reverse)) { run in
+                    Text(run.progress.map { "\(Int($0 * 100))%" } ?? "数据不足").monospacedDigit()
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .width(min: 70, ideal: 85)
+                TableColumn("创建", sortUsing: KeyPathComparator(\MoodValidationRun.createdAt, order: .reverse)) { run in
                     Text(run.createdAt.map { String($0.prefix(19).replacingOccurrences(of: "T", with: " ")) } ?? "—")
                 }
-                TableColumn("完成") { run in
+                .width(min: 150, ideal: 170)
+                TableColumn("完成", sortUsing: KeyPathComparator(\MoodValidationRun.completedAt, order: .reverse)) { run in
                     Text(run.completedAt.map { String($0.prefix(19).replacingOccurrences(of: "T", with: " ")) } ?? "—")
                 }
+                .width(min: 150, ideal: 170)
                 TableColumn("结果") { run in
                     Button("查看") { Task { await model.select(runID: run.runID) } }
                         .buttonStyle(.borderless)
                 }
+                .width(min: 60, ideal: 70)
             }
             .frame(minHeight: 140)
+            .accessibilityIdentifier("r6.mood-lab.runs-table")
         }
     }
 
@@ -399,15 +413,25 @@ public struct MoodLabView: View {
                 } else {
                     Table(Array(model.results.prefix(150))) {
                         TableColumn("研究") { item in Text(item.studyType ?? "—") }
+                            .width(min: 110, ideal: 150)
                         TableColumn("范围") { item in Text("\(item.scopeType ?? "—"):\(item.scopeKey ?? "—")") }
+                            .width(min: 130, ideal: 170)
                         TableColumn("状态") { item in Text(item.state ?? "—") }
+                            .width(min: 90, ideal: 110)
                         TableColumn("周期") { item in Text(item.horizon.map(String.init) ?? "—") }
-                        TableColumn("样本数") { item in Text(item.sampleCount.map(String.init) ?? "数据不足") }
+                            .width(min: 60, ideal: 75)
+                        TableColumn("样本数") { item in
+                            Text(item.sampleCount.map(String.init) ?? "数据不足").monospacedDigit()
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                        .width(min: 70, ideal: 90)
                         TableColumn("指标") { item in SemanticEvidenceView(value: item.metrics, domain: .mood) }
+                            .width(min: 240, ideal: 320)
                     }
                     .frame(minHeight: 180)
+                    .accessibilityIdentifier("r6.mood-lab.results-table")
                     if model.results.count > 150 {
-                        Text("仅展示前 150 条（共 \(model.results.count) 条）").font(.caption).foregroundStyle(.secondary)
+                        TableTruncationFooter(shown: 150, total: model.results.count)
                     }
                 }
             }

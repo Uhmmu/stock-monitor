@@ -63,6 +63,10 @@ public final class IndustryPulseModel {
 
 public struct IndustryPulseView: View {
     @State private var model: IndustryPulseModel
+    /// R6.0：板块概览默认按脉冲值降序，可再按涨跌/信心排序。
+    @State private var overviewSort: [KeyPathComparator<IndustryPulseItem>] = [
+        KeyPathComparator(\.pulse, order: .reverse)
+    ]
 
     init(model: IndustryPulseModel) {
         _model = State(initialValue: model)
@@ -120,35 +124,50 @@ public struct IndustryPulseView: View {
             if overview.status == "unavailable" {
                 ContentUnavailableView("行业板块数据不足", systemImage: "square.grid.3x3")
             } else {
-                Table(overview.sectors) {
+                Table(overview.sectors, sortOrder: $overviewSort) {
                     TableColumn("板块") { row in
-                        Text(row.nameZh ?? row.name ?? row.nodeKey ?? "数据不足").fontWeight(.medium)
+                        MainTableCell(row.nameZh ?? row.name ?? row.nodeKey ?? "数据不足")
                     }
-                    TableColumn("脉冲") { row in
+                    .width(min: 130, ideal: 180)
+                    TableColumn("脉冲", sortUsing: KeyPathComparator(\IndustryPulseItem.pulse, order: .reverse)) { row in
                         pulseLabel(row.pulse)
                     }
-                    TableColumn("1 日") { row in percentLabel(row.change1d) }
-                    TableColumn("5 日") { row in percentLabel(row.change5d) }
-                    TableColumn("20 日") { row in percentLabel(row.change20d) }
+                    .width(min: 70, ideal: 85)
+                    TableColumn("1 日", sortUsing: KeyPathComparator(\IndustryPulseItem.change1d, order: .reverse)) { row in
+                        percentLabel(row.change1d)
+                    }
+                    .width(min: 80, ideal: 95)
+                    TableColumn("5 日", sortUsing: KeyPathComparator(\IndustryPulseItem.change5d, order: .reverse)) { row in
+                        percentLabel(row.change5d)
+                    }
+                    .width(min: 80, ideal: 95)
+                    TableColumn("20 日", sortUsing: KeyPathComparator(\IndustryPulseItem.change20d, order: .reverse)) { row in
+                        percentLabel(row.change20d)
+                    }
+                    .width(min: 80, ideal: 95)
                     TableColumn("方向") { row in
                         Text(row.direction ?? "—")
                     }
-                    TableColumn("信心") { row in
-                        Text(row.confidence.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足")
-                            .monospacedDigit()
+                    .width(min: 70, ideal: 90)
+                    TableColumn("信心", sortUsing: KeyPathComparator(\IndustryPulseItem.confidence, order: .reverse)) { row in
+                        NumericTableCell(value: row.confidence, digits: 2)
                     }
-                    TableColumn("覆盖") { row in
-                        Text(row.coverageQuality.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足")
-                            .monospacedDigit()
+                    .width(min: 60, ideal: 80)
+                    TableColumn("覆盖", sortUsing: KeyPathComparator(\IndustryPulseItem.coverageQuality, order: .reverse)) { row in
+                        NumericTableCell(value: row.coverageQuality, digits: 2)
                     }
+                    .width(min: 60, ideal: 80)
                     TableColumn("状态") { row in
                         SemanticStatusLabel(
                             row.calculationStatus == "READY" ? "就绪" : "覆盖不足",
                             status: row.calculationStatus == "READY" ? .live : .unavailable
                         )
                     }
+                    .width(min: 90, ideal: 110)
                 }
+                .alternatingRowBackgrounds(.enabled)
                 .frame(minHeight: 320)
+                .accessibilityIdentifier("r6.industry.overview-table")
                 if let asOf = overview.asOf {
                     Text("数据截至 \(asOf)；代理 ETF：\(overview.sectors.compactMap(\.proxyEtfs).flatMap(\.self).prefix(6).joined(separator: "、"))")
                         .font(.caption).foregroundStyle(.secondary)
@@ -162,11 +181,12 @@ public struct IndustryPulseView: View {
             .monospacedDigit()
             .foregroundStyle(value == nil ? .secondary : .primary)
             .fontWeight(.semibold)
+            .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     private func percentageColor(_ value: Double?) -> Color {
         guard let value else { return .secondary }
-        return value >= 0 ? .green : .red
+        return value >= 0 ? StockMonitorChartPalette.positive : StockMonitorChartPalette.negative
     }
 
     private func percentLabel(_ value: Double?) -> some View {
@@ -175,6 +195,7 @@ public struct IndustryPulseView: View {
         } ?? "数据不足")
             .monospacedDigit()
             .foregroundStyle(percentageColor(value))
+            .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     @ViewBuilder

@@ -1,4 +1,5 @@
 import Charts
+import StockMonitorDesign
 import SwiftUI
 
 // MARK: - 时间解析（服务端序列使用 ISO 日期或日期时间字符串）
@@ -18,6 +19,19 @@ public enum ChartTime {
     public static func day(_ raw: String) -> Date? {
         parse(String(raw.prefix(10)))
     }
+
+    /// R6.0：图表 as-of 统一格式（UTC 日粒度）。
+    public static func formatDay(_ date: Date) -> String {
+        dayFormatter.string(from: date)
+    }
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .iso8601)
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
 }
 
 /// 图表使用日历日本身作为 X 轴；把所有蜡烛时间归一到 UTC 零点，避免时区偏移引起的空档。
@@ -139,12 +153,60 @@ public struct LineSeries: Identifiable, Equatable, Sendable {
     public var id: String {
         name
     }
+
+    /// R6.0：颜色由共享 palette 按系列序号分配，调用方不再各自硬编码。
+    public init(name: String, paletteIndex: Int, points: [TimedPoint]) {
+        self.name = name
+        color = StockMonitorChartPalette.chartTint(paletteIndex)
+        self.points = points
+    }
+
+    public init(name: String, color: Color, points: [TimedPoint]) {
+        self.name = name
+        self.color = color
+        self.points = points
+    }
+}
+
+/// 折线图序列的等价文本摘要（VoiceOver/色觉障碍用户与图表互为印证）。
+public enum LineSeriesSummaryBuilder {
+    public static func build(
+        series: [LineSeries],
+        digits: Int = 2,
+        calendar: Calendar = Calendar(identifier: .iso8601)
+    ) -> [ChartSeriesSummaryRow] {
+        series.map { line in
+            let values = line.points.map(\.value)
+            let window: String
+            if let first = line.points.first?.date, let last = line.points.last?.date {
+                let formatter = DateFormatter()
+                formatter.calendar = calendar
+                formatter.dateFormat = "yyyy-MM-dd"
+                window = "\(formatter.string(from: first)) 至 \(formatter.string(from: last))（\(line.points.count) 点）"
+            } else {
+                window = "无观测点"
+            }
+            func text(_ value: Double?) -> FinancialDisplayValue {
+                value.map { FinancialDisplayValue(text: $0.formatted(.number.precision(.fractionLength(digits)))) }
+                    ?? FinancialValueFormatter.missing(.notCollected)
+            }
+            return ChartSeriesSummaryRow(
+                name: line.name,
+                latest: text(values.last),
+                minimum: text(values.min()),
+                maximum: text(values.max()),
+                observationWindow: window
+            )
+        }
+    }
 }
 
 public struct LineSeriesChart: View {
     package let series: [LineSeries]
     public var unitLabel: String = ""
     public var referenceLines: [(label: String, value: Double)] = []
+    /// R6.0：默认展示数据摘要表，图表必须能回答明确问题而非装饰页面。
+    public var showsDataSummary = true
     @State private var hoverDate: Date?
 
     public init(series: [LineSeries], unitLabel: String = "", referenceLines: [(label: String, value: Double)] = []) {
@@ -153,24 +215,52 @@ public struct LineSeriesChart: View {
         self.referenceLines = referenceLines
     }
 
+    public init(
+        series: [LineSeries],
+        unitLabel: String = "",
+        referenceLines: [(label: String, value: Double)] = [],
+        showsDataSummary: Bool
+    ) {
+        self.series = series
+        self.unitLabel = unitLabel
+        self.referenceLines = referenceLines
+        self.showsDataSummary = showsDataSummary
+    }
+
     public var body: some View {
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+            chartBody
+            seriesLegend
+            if showsDataSummary {
+                DisclosureGroup("图表数据摘要（非视觉访问）") {
+                    ChartSeriesSummaryTable(LineSeriesSummaryBuilder.build(series: series))
+                }
+                .font(.headline)
+                .accessibilityIdentifier("chart.line-series.summary-disclosure")
+            }
+        }
+    }
+
+    private var chartBody: some View {
         Chart {
-            ForEach(series) { line in
+            ForEach(Array(series.enumerated()), id: \.element.id) { index, line in
                 ForEach(line.points) { point in
                     LineMark(
                         x: .value("日期", point.date, unit: .day),
                         y: .value("数值", point.value)
                     )
-                    .foregroundStyle(by: .value("序列", line.name))
-                    .lineStyle(StrokeStyle(lineWidth: 1.8))
+                    .foregroundStyle(line.color)
+                    .lineStyle(StockMonitorChartPalette.seriesStroke(index))
                     .interpolationMethod(.monotone)
+                    .symbol(StockMonitorChartPalette.seriesMarker(index).basicSymbol)
+                    .symbolSize(index == 0 ? 36 : 24)
                     if hoverDate == point.date {
                         PointMark(
                             x: .value("日期", point.date, unit: .day),
                             y: .value("数值", point.value)
                         )
-                        .foregroundStyle(by: .value("序列", line.name))
-                        .symbolSize(60)
+                        .foregroundStyle(line.color)
+                        .symbolSize(90)
                     }
                 }
             }
@@ -185,11 +275,16 @@ public struct LineSeriesChart: View {
                     }
             }
         }
-        .chartLegend(position: .bottom, spacing: 8)
         .chartYAxis {
             AxisMarks(position: .leading) { _ in
                 AxisGridLine().foregroundStyle(.quaternary)
                 AxisValueLabel().font(.system(.caption2, design: .monospaced))
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel(format: .dateTime.year().month())
             }
         }
         .chartOverlay { proxy in
@@ -203,9 +298,48 @@ public struct LineSeriesChart: View {
                             hoverDate = nil
                         }
                     }
+                    .overlay(alignment: .topLeading) {
+                        if let hoverDate {
+                            SeriesValueTooltip(
+                                title: hoverDate.formatted(.dateTime.year().month().day()),
+                                entries: series.map { line in
+                                    let nearest = line.points.min {
+                                        abs($0.date.timeIntervalSince(hoverDate)) < abs($1.date.timeIntervalSince(hoverDate))
+                                    }
+                                    return SeriesValueTooltip.Entry(
+                                        name: line.name,
+                                        color: line.color,
+                                        value: nearest.map { $0.value.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足"
+                                    )
+                                },
+                                footnote: unitLabel.isEmpty ? nil : "单位：\(unitLabel)"
+                            )
+                            .padding(6)
+                        }
+                    }
             }
         }
         .accessibilityLabel(chartAccessibilitySummary)
+    }
+
+    /// 图例 = 形状 + 颜色 + 名称，颜色不是唯一编码。
+    private var seriesLegend: some View {
+        HStack(spacing: StockMonitorSpacing.regular) {
+            ForEach(Array(series.enumerated()), id: \.element.id) { index, line in
+                HStack(spacing: StockMonitorSpacing.xSmall) {
+                    Image(systemName: StockMonitorChartPalette.seriesMarker(index).systemImageName)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(line.color)
+                        .accessibilityHidden(true)
+                    Text(line.name).stockMonitorTypography(.metadata)
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if !unitLabel.isEmpty {
+                Text(unitLabel).stockMonitorTypography(.microAnnotation)
+            }
+        }
+        .accessibilityIdentifier("chart.line-series.legend")
     }
 
     private func date(at location: CGPoint, proxy: ChartProxy, size: CGSize) -> Date? {
@@ -225,6 +359,41 @@ public struct LineSeriesChart: View {
             return "\(line.name) 最新 \(latest)\(unitLabel)"
         }
         return summaries.joined(separator: "，")
+    }
+}
+
+/// 图表十字光标 tooltip：标题（日期或期限）+ 每个序列的颜色点、名称与值。
+struct SeriesValueTooltip: View {
+    struct Entry {
+        let name: String
+        let color: Color
+        let value: String
+    }
+
+    let title: String
+    let entries: [Entry]
+    let footnote: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption2.bold())
+            ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                HStack(spacing: 6) {
+                    Circle().fill(entry.color).frame(width: 6, height: 6)
+                    Text(entry.name)
+                    Spacer(minLength: 6)
+                    Text(entry.value).monospacedDigit()
+                }
+            }
+            if let footnote {
+                Text(footnote).foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption2.monospacedDigit())
+        .padding(8)
+        .frame(minWidth: 130)
+        .background(.regularMaterial, in: .rect(cornerRadius: 8))
+        .accessibilityIdentifier("chart.series-tooltip")
     }
 }
 
@@ -619,5 +788,155 @@ public struct CandleTooltip: View {
         .padding(8)
         .background(.regularMaterial, in: .rect(cornerRadius: 8))
         .accessibilityIdentifier("chart.candle-tooltip")
+    }
+}
+
+// MARK: - 收益率曲线（宏观期限结构专用，R6.0 统一 chrome）
+
+/// 宏观收益率曲线：palette 颜色 + 形状双编码、十字光标 tooltip、图例与数据摘要。
+public struct YieldCurveChart: View {
+    public let curves: [YieldCurveSnapshot]
+    @State private var hoverMaturity: String?
+
+    public init(curves: [YieldCurveSnapshot]) {
+        self.curves = curves
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: StockMonitorSpacing.small) {
+            chartBody
+            curveLegend
+            DisclosureGroup("图表数据摘要（非视觉访问）") {
+                ChartSeriesSummaryTable(curveSummaries)
+            }
+            .font(.headline)
+            .accessibilityIdentifier("chart.yield-curve.summary-disclosure")
+        }
+    }
+
+    private var chartBody: some View {
+        Chart {
+            ForEach(Array(curves.enumerated()), id: \.element.id) { index, snapshot in
+                ForEach(Array(snapshot.points.enumerated()), id: \.offset) { _, point in
+                    LineMark(
+                        x: .value("期限", point.maturity),
+                        y: .value("收益率 %", point.value ?? 0)
+                    )
+                    .foregroundStyle(StockMonitorChartPalette.chartTint(index))
+                    .lineStyle(StockMonitorChartPalette.seriesStroke(index))
+                    .interpolationMethod(.catmullRom)
+                    .symbol(StockMonitorChartPalette.seriesMarker(index).basicSymbol)
+                    .symbolSize(index == 0 ? 36 : 24)
+                    if hoverMaturity == point.maturity, let value = point.value {
+                        PointMark(
+                            x: .value("期限", point.maturity),
+                            y: .value("收益率 %", value)
+                        )
+                        .foregroundStyle(StockMonitorChartPalette.chartTint(index))
+                        .symbolSize(90)
+                    }
+                }
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading) { _ in
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel().font(.system(.caption2, design: .monospaced))
+            }
+        }
+        .chartXAxis {
+            AxisMarks { _ in
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel().font(.caption2)
+            }
+        }
+        .frame(height: 300)
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle().fill(.clear).contentShape(.rect)
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case let .active(location):
+                            hoverMaturity = maturity(at: location, proxy: proxy, size: geometry.size)
+                        case .ended:
+                            hoverMaturity = nil
+                        }
+                    }
+                    .overlay(alignment: .topLeading) {
+                        if let hoverMaturity {
+                            SeriesValueTooltip(
+                                title: "期限 \(hoverMaturity)",
+                                entries: Array(curves.enumerated()).map { index, snapshot in
+                                    let value = snapshot.points.first { $0.maturity == hoverMaturity }?.value
+                                    return SeriesValueTooltip.Entry(
+                                        name: snapshot.label,
+                                        color: StockMonitorChartPalette.chartTint(index),
+                                        value: value.map { $0.formatted(.number.precision(.fractionLength(2))) + "%" } ?? "数据不足"
+                                    )
+                                },
+                                footnote: nil
+                            )
+                            .padding(6)
+                        }
+                    }
+            }
+        }
+        .accessibilityLabel(accessibilitySummary)
+        .accessibilityIdentifier("chart.yield-curve")
+    }
+
+    /// 图例 = 形状 + 颜色 + 名称 + 观察日，颜色不是唯一编码。
+    private var curveLegend: some View {
+        HStack(spacing: StockMonitorSpacing.regular) {
+            ForEach(Array(curves.enumerated()), id: \.element.id) { index, snapshot in
+                HStack(spacing: StockMonitorSpacing.xSmall) {
+                    Image(systemName: StockMonitorChartPalette.seriesMarker(index).systemImageName)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(StockMonitorChartPalette.chartTint(index))
+                        .accessibilityHidden(true)
+                    Text("\(snapshot.label)\(snapshot.observationDate.map { "（\($0)）" } ?? "")")
+                        .stockMonitorTypography(.metadata)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .accessibilityIdentifier("chart.yield-curve.legend")
+    }
+
+    private var curveSummaries: [ChartSeriesSummaryRow] {
+        curves.map { snapshot in
+            let values = snapshot.points.compactMap(\.value)
+            let maturityText = snapshot.points.first { $0.value == values.last }.map(\.maturity)
+            func text(_ value: Double?) -> FinancialDisplayValue {
+                value.map { FinancialDisplayValue(text: $0.formatted(.number.precision(.fractionLength(2)))) }
+                    ?? FinancialValueFormatter.missing(.notCollected)
+            }
+            return ChartSeriesSummaryRow(
+                name: snapshot.label,
+                latest: text(values.last),
+                minimum: text(values.min()),
+                maximum: text(values.max()),
+                observationWindow: "期限 \(snapshot.points.first?.maturity ?? "—") 至 \(snapshot.points.last?.maturity ?? "—")；观察日 \(snapshot.observationDate ?? "—")（最新值位于 \(maturityText ?? "—")）"
+            )
+        }
+    }
+
+    private var accessibilitySummary: String {
+        curves.map { snapshot in
+            let values = snapshot.points.compactMap(\.value)
+            let latest = values.last.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "数据不足"
+            return "\(snapshot.label) 最新 \(latest)%"
+        }.joined(separator: "，")
+    }
+
+    private func maturity(at location: CGPoint, proxy: ChartProxy, size: CGSize) -> String? {
+        if let value = proxy.value(atX: location.x, as: String.self) {
+            return value
+        }
+        let all = curves.flatMap(\.points).map(\.maturity)
+        guard !all.isEmpty else { return nil }
+        let fraction = max(0, min(1, location.x / max(size.width, 1)))
+        let index = min(all.count - 1, Int(fraction * Double(all.count)))
+        return all[index]
     }
 }

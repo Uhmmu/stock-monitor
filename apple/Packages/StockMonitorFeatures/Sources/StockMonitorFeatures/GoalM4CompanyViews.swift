@@ -71,6 +71,19 @@ public final class SecModel {
 public struct SecView: View {
     @State private var model: SecModel
     @State private var symbol = ""
+    /// R6.0：默认排序——文件/内部人按日期降序、SEC 财务按财年降序、13F 按市值降序。
+    @State private var filingsSort: [KeyPathComparator<SecFilingItem>] = [
+        KeyPathComparator(\.filingDate, order: .reverse)
+    ]
+    @State private var financialsSort: [KeyPathComparator<SecFinancialRow>] = [
+        KeyPathComparator(\.fiscalYear, order: .reverse)
+    ]
+    @State private var insiderSort: [KeyPathComparator<SecInsiderItem>] = [
+        KeyPathComparator(\.transactionDate, order: .reverse)
+    ]
+    @State private var holdingsSort: [KeyPathComparator<Sec13FHoldingItem>] = [
+        KeyPathComparator(\.valueUsd, order: .reverse)
+    ]
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
     let companySummary: CompanySummaryModel
@@ -144,18 +157,25 @@ public struct SecView: View {
     }
 
     private var filingsTable: some View {
-        Table(model.filings) {
-            TableColumn("日期") { row in Text(row.filingDate ?? "数据不足") }
+        Table(model.filings, sortOrder: $filingsSort) {
+            TableColumn("日期", sortUsing: KeyPathComparator(\SecFilingItem.filingDate, order: .reverse)) { row in
+                Text(row.filingDate ?? "数据不足")
+            }
+            .width(min: 100, ideal: 120)
             TableColumn("表格") { row in
                 Text(row.form).fontWeight(.semibold)
             }
+            .width(min: 70, ideal: 90)
             TableColumn("说明") { row in Text(row.formLabel ?? "—") }
+            .width(min: 180, ideal: 260)
             TableColumn("事件标签") { row in
                 Text(row.eventLabels.joined(separator: "、")).foregroundStyle(row.eventLabels.isEmpty ? .secondary : .primary)
             }
+            .width(min: 140, ideal: 200)
             TableColumn("优先级") { row in
                 Text(row.priority.map(String.init) ?? "—")
             }
+            .width(min: 60, ideal: 80)
             TableColumn("链接") { row in
                 if let raw = row.filingUrl, let url = URL(string: raw) {
                     ConfirmExternalLinkButton(url: url)
@@ -163,8 +183,10 @@ public struct SecView: View {
                     Text("数据不足").foregroundStyle(.secondary)
                 }
             }
+            .width(min: 70, ideal: 90)
         }
         .frame(minHeight: 320)
+        .accessibilityIdentifier("r6.sec.filings-table")
     }
 
     /// R4.2：SEC 事件用 timeline + 证据链接，不再是无序平铺表格。
@@ -184,82 +206,131 @@ public struct SecView: View {
     }
 
     private var financialsTable: some View {
-        Table(model.financials) {
-            TableColumn("财年") { row in Text(row.fiscalYear.map(String.init) ?? "—") }
+        Table(model.financials, sortOrder: $financialsSort) {
+            TableColumn("财年", sortUsing: KeyPathComparator(\SecFinancialRow.fiscalYear, order: .reverse)) { row in
+                Text(row.fiscalYear.map(String.init) ?? "—")
+            }
+            .width(min: 60, ideal: 70)
             TableColumn("期间") { row in Text(row.fiscalPeriod ?? "—") }
+            .width(min: 60, ideal: 70)
             TableColumn("期末") { row in Text(row.periodEnd ?? "—") }
-            TableColumn("营收") { row in optionalMoney(row.revenue) }
-            TableColumn("净利润") { row in optionalMoney(row.netIncome) }
-            TableColumn("EPS 稀释") { row in optionalNumber(row.epsDiluted, 2) }
-            TableColumn("现金") { row in optionalMoney(row.cashAndEquivalents) }
-            TableColumn("总债务") { row in optionalMoney(row.totalDebt) }
-            TableColumn("经营现金流") { row in optionalMoney(row.operatingCashFlow) }
+            .width(min: 100, ideal: 110)
+            TableColumn("营收", sortUsing: KeyPathComparator(\SecFinancialRow.revenue, order: .reverse)) { row in
+                optionalMoney(row.revenue)
+            }
+            .width(min: 100, ideal: 120)
+            TableColumn("净利润", sortUsing: KeyPathComparator(\SecFinancialRow.netIncome, order: .reverse)) { row in
+                optionalMoney(row.netIncome)
+            }
+            .width(min: 100, ideal: 120)
+            TableColumn("EPS 稀释", sortUsing: KeyPathComparator(\SecFinancialRow.epsDiluted, order: .reverse)) { row in
+                optionalNumber(row.epsDiluted, 2)
+            }
+            .width(min: 80, ideal: 100)
+            TableColumn("现金", sortUsing: KeyPathComparator(\SecFinancialRow.cashAndEquivalents, order: .reverse)) { row in
+                optionalMoney(row.cashAndEquivalents)
+            }
+            .width(min: 100, ideal: 120)
+            TableColumn("总债务", sortUsing: KeyPathComparator(\SecFinancialRow.totalDebt, order: .reverse)) { row in
+                optionalMoney(row.totalDebt)
+            }
+            .width(min: 100, ideal: 120)
+            TableColumn("经营现金流", sortUsing: KeyPathComparator(\SecFinancialRow.operatingCashFlow, order: .reverse)) { row in
+                optionalMoney(row.operatingCashFlow)
+            }
+            .width(min: 110, ideal: 130)
         }
         .frame(minHeight: 320)
+        .accessibilityIdentifier("r6.sec.financials-table")
     }
 
     private var insiderTable: some View {
-        Table(model.insider) {
-            TableColumn("交易日期") { row in Text(row.transactionDate ?? "数据不足") }
-            TableColumn("内部人") { row in
-                VStack(alignment: .leading) {
-                    Text(row.insiderName ?? "数据不足")
-                    if let title = row.insiderTitle {
-                        Text(title).font(.caption2).foregroundStyle(.secondary)
-                    }
-                }
+        Table(model.insider, sortOrder: $insiderSort) {
+            TableColumn("交易日期", sortUsing: KeyPathComparator(\SecInsiderItem.transactionDate, order: .reverse)) { row in
+                Text(row.transactionDate ?? "数据不足")
             }
+            .width(min: 100, ideal: 120)
+            TableColumn("内部人", sortUsing: KeyPathComparator(\SecInsiderItem.insiderName)) { row in
+                MainTableCell(row.insiderName ?? "数据不足", subtitle: row.insiderTitle)
+            }
+            .width(min: 170, ideal: 240)
             TableColumn("代码") { row in Text(row.transactionCode ?? "—") }
-            TableColumn("股数") { row in optionalNumber(row.shares, 0) }
-            TableColumn("价格") { row in optionalNumber(row.price, 2) }
-            TableColumn("金额") { row in optionalMoney(row.value) }
+            .width(min: 60, ideal: 80)
+            TableColumn("股数", sortUsing: KeyPathComparator(\SecInsiderItem.shares, order: .reverse)) { row in
+                optionalNumber(row.shares, 0)
+            }
+            .width(min: 90, ideal: 110)
+            TableColumn("价格", sortUsing: KeyPathComparator(\SecInsiderItem.price, order: .reverse)) { row in
+                optionalNumber(row.price, 2)
+            }
+            .width(min: 80, ideal: 100)
+            TableColumn("金额", sortUsing: KeyPathComparator(\SecInsiderItem.value, order: .reverse)) { row in
+                optionalMoney(row.value)
+            }
+            .width(min: 90, ideal: 110)
             TableColumn("标记") { row in Text(row.flag ?? "—") }
+            .width(min: 70, ideal: 100)
         }
         .frame(minHeight: 320)
+        .accessibilityIdentifier("r6.sec.insider-table")
     }
 
     @ViewBuilder
     private var holdingsTable: some View {
         if let page = model.holdings {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 16) {
-                    LabeledContent("报告期", value: page.reportPeriod ?? "数据不足")
-                    LabeledContent("上期", value: page.prevPeriod ?? "—")
-                }
-                .font(.callout)
-                Table(page.holdings) {
-                    TableColumn("机构") { row in Text(row.managerName ?? "数据不足") }
-                    TableColumn("股数") { row in optionalNumber(row.shares, 0) }
-                    TableColumn("市值 USD") { row in optionalMoney(row.valueUsd) }
+                MetadataStrip([
+                    .init(label: "报告期", value: page.reportPeriod ?? "数据不足"),
+                    .init(label: "上期", value: page.prevPeriod ?? "—"),
+                ])
+                Table(model.holdings?.holdings ?? [], sortOrder: $holdingsSort) {
+                    TableColumn("机构", sortUsing: KeyPathComparator(\Sec13FHoldingItem.managerName)) { row in
+                        MainTableCell(row.managerName ?? "数据不足")
+                    }
+                    .width(min: 200, ideal: 300)
+                    TableColumn("股数", sortUsing: KeyPathComparator(\Sec13FHoldingItem.shares, order: .reverse)) { row in
+                        optionalNumber(row.shares, 0)
+                    }
+                    .width(min: 90, ideal: 110)
+                    TableColumn("市值 USD", sortUsing: KeyPathComparator(\Sec13FHoldingItem.valueUsd, order: .reverse)) { row in
+                        optionalMoney(row.valueUsd)
+                    }
+                    .width(min: 100, ideal: 120)
                     TableColumn("类型") { row in Text(row.putCall ?? "—") }
-                    TableColumn("环比变化") { row in
+                    .width(min: 60, ideal: 80)
+                    TableColumn("环比变化", sortUsing: KeyPathComparator(\Sec13FHoldingItem.shareChange, order: .reverse)) { row in
                         if let change = row.shareChange {
-                            Text((change >= 0 ? "+" : "") + change.formatted(.number.precision(.fractionLength(0))))
-                                .monospacedDigit()
-                                .foregroundStyle(change >= 0 ? .green : .red)
+                            HStack(spacing: StockMonitorSpacing.xSmall) {
+                                Image(systemName: change >= 0 ? "arrow.up" : "arrow.down")
+                                    .font(.caption.weight(.bold))
+                                    .accessibilityHidden(true)
+                                Text((change >= 0 ? "+" : "") + change.formatted(.number.precision(.fractionLength(0))))
+                                    .financialFigures()
+                            }
+                            .foregroundStyle(change >= 0 ? StockMonitorChartPalette.positive : StockMonitorChartPalette.negative)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                         } else if row.isNew == true {
-                            Text("新建仓").foregroundStyle(.orange)
+                            SemanticStatusLabel("新建仓", status: .info)
                         } else {
                             Text("数据不足").foregroundStyle(.secondary)
                         }
                     }
+                    .width(min: 90, ideal: 110)
                     TableColumn("申报日") { row in Text(row.filingDate ?? "—") }
+                    .width(min: 90, ideal: 110)
                 }
                 .frame(minHeight: 260)
+                .accessibilityIdentifier("r6.sec.13f-table")
             }
         }
     }
 
-    private func optionalNumber(_ value: Double?, _ digits: Int) -> Text {
-        Text(value.map { $0.formatted(.number.precision(.fractionLength(digits))) } ?? "数据不足")
-            .monospacedDigit()
-            .foregroundStyle(value == nil ? .secondary : .primary)
+    private func optionalNumber(_ value: Double?, _ digits: Int) -> some View {
+        NumericTableCell(value: value, digits: digits)
     }
 
-    private func optionalMoney(_ value: Double?) -> Text {
-        Text(value.map { $0.formatted(.number.notation(.compactName)) } ?? "数据不足")
-            .monospacedDigit()
-            .foregroundStyle(value == nil ? .secondary : .primary)
+    private func optionalMoney(_ value: Double?) -> some View {
+        NumericTableCell(value: value, digits: 1, compact: true)
     }
 }
 
@@ -308,10 +379,10 @@ public final class CompareModel {
             let value = try await service.compareHistory(symbols: symbols, metricKey: metricKey)
             history = value
             historyMetricKey = metricKey
-            historySeries = value.series.map { series in
+            historySeries = value.series.enumerated().map { index, series in
                 LineSeries(
                     name: series.symbol,
-                    color: .accentColor,
+                    paletteIndex: index,
                     points: series.points.compactMap { point in
                         guard let raw = point.indexed ?? point.value, let date = ChartTime.day(point.date) else { return nil }
                         return TimedPoint(date: ChartDomain.normalize(date), value: raw)
@@ -409,8 +480,9 @@ public struct CompareView: View {
                     }
                     .padding(10)
                     .background(.background.secondary, in: .rect(cornerRadius: 8))
+                    .subtleHoverHighlight()
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ImmediatePressButtonStyle())
             }
         }
     }
@@ -512,8 +584,18 @@ public struct CompareView: View {
                 }
                 .disabled(historyMetricKey.isEmpty)
                 if let history = model.history, !model.historySeries.isEmpty {
-                    LineSeriesChart(series: model.historySeries, unitLabel: history.mode == "indexed" ? "（首日=100）" : "")
+                    ChartPanel(
+                        "历史序列图表",
+                        unitLabel: history.mode == "indexed" ? "首日=100" : nil,
+                        source: "已持久化 FMP/Yahoo/估值快照",
+                        asOf: model.historySeries.compactMap(\.points.last?.date).max().map(ChartTime.formatDay)
+                    ) {
+                        LineSeriesChart(
+                            series: model.historySeries,
+                            unitLabel: history.mode == "indexed" ? "（首日=100）" : ""
+                        )
                         .frame(height: 260)
+                    }
                 } else if model.history != nil {
                     Text("数据不足：该指标暂无历史序列。").foregroundStyle(.secondary)
                 }
@@ -621,6 +703,10 @@ public final class CongressModel {
 
 public struct CongressView: View {
     @State private var model: CongressModel
+    /// R6.0：人物交易默认按交易日期降序。
+    @State private var tradesSort: [KeyPathComparator<CongressTradeItem>] = [
+        KeyPathComparator(\.transactionDate, order: .reverse)
+    ]
     let openStock: (String) -> Void
 
     init(model: CongressModel, openStock: @escaping (String) -> Void) {
@@ -688,7 +774,7 @@ public struct CongressView: View {
                 ForEach(detail.positions.prefix(20)) { position in
                     HStack {
                         if let ticker = position.ticker {
-                            Button(ticker) { openStock(ticker) }.buttonStyle(.plain).fontWeight(.semibold)
+                            Button(ticker) { openStock(ticker) }.buttonStyle(.plain).subtleHoverHighlight().fontWeight(.semibold).subtleHoverHighlight()
                         } else {
                             Text(position.assetName ?? "—")
                         }
@@ -721,19 +807,29 @@ public struct CongressView: View {
     private func tradesSection(_ detail: CongressFigureDetail) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             M4SectionHeader("交易时间线", subtitle: "\(detail.trades.count) 条记录")
-            Table(detail.trades) {
-                TableColumn("交易日期") { row in Text(row.transactionDate ?? "数据不足") }
+            Table(detail.trades, sortOrder: $tradesSort) {
+                TableColumn("交易日期", sortUsing: KeyPathComparator(\CongressTradeItem.transactionDate, order: .reverse)) { row in
+                    Text(row.transactionDate ?? "数据不足")
+                }
+                .width(min: 100, ideal: 120)
                 TableColumn("代码") { trade in
                     if let ticker = trade.ticker {
-                        Button(ticker) { openStock(ticker) }.buttonStyle(.plain)
+                        Button(ticker) { openStock(ticker) }.buttonStyle(.plain).subtleHoverHighlight()
                     } else {
                         Text("—")
                     }
                 }
-                TableColumn("资产") { row in Text(row.assetName ?? "—") }
+                .width(min: 70, ideal: 90)
+                TableColumn("资产") { row in
+                    MainTableCell(row.assetName ?? "—")
+                }
+                .width(min: 160, ideal: 220)
                 TableColumn("方向") { row in Text(row.transactionType ?? "—") }
+                .width(min: 90, ideal: 120)
                 TableColumn("金额区间") { row in Text(row.amountLabel ?? "数据不足") }
+                .width(min: 120, ideal: 150)
                 TableColumn("申报日") { row in Text(row.filingDate ?? "—") }
+                .width(min: 100, ideal: 120)
                 TableColumn("迟报") { trade in
                     if trade.isLate == true {
                         Text("迟报").foregroundStyle(.orange)
@@ -741,8 +837,10 @@ public struct CongressView: View {
                         Text("—").foregroundStyle(.secondary)
                     }
                 }
+                .width(min: 60, ideal: 70)
             }
             .frame(minHeight: 220)
+            .accessibilityIdentifier("r6.congress.trades-table")
         }
     }
 }

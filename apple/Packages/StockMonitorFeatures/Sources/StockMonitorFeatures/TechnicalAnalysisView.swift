@@ -90,6 +90,13 @@ public struct TechnicalAnalysisView: View {
     @State private var symbol = ""
     @State private var newAlertTarget = ""
     @State private var newAlertDirection = "above"
+    /// R6.0：价格提醒默认按目标价升序、图表事件按日期降序。
+    @State private var alertsSort: [KeyPathComparator<TechnicalPriceAlert>] = [
+        KeyPathComparator(\.targetPrice, order: .forward)
+    ]
+    @State private var eventsSort: [KeyPathComparator<TechnicalChartEvent>] = [
+        KeyPathComparator(\.time, order: .reverse)
+    ]
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
     let companySummary: CompanySummaryModel
@@ -238,25 +245,37 @@ public struct TechnicalAnalysisView: View {
     @ViewBuilder
     private func chartSection(_ detail: TechnicalAnalysisDetail) -> some View {
         if model.hasChartData {
-            CandleChartView(
-                candles: model.candles,
-                movingAverages: model.movingAverages,
-                events: detail.events ?? [],
-                portfolioCost: detail.portfolioCost?.averageCost,
-                alertPrices: model.alertPrices
-            )
-            .padding(12)
-            .background(.background.secondary, in: .rect(cornerRadius: 12))
-            Text("拖动平移、双指缩放、悬停查看十字光标；支撑阻力与 Fibonacci 基于当前可视区间计算，仅作图形参考，不构成服务端结论。")
-                .font(.caption).foregroundStyle(.secondary)
+            ChartPanel(
+                "价格图表",
+                unitLabel: "本币价格",
+                source: detail.chartDataSource,
+                asOf: model.candles.last.map { ChartTime.formatDay($0.date) }
+            ) {
+                CandleChartView(
+                    candles: model.candles,
+                    movingAverages: model.movingAverages,
+                    events: detail.events ?? [],
+                    portfolioCost: detail.portfolioCost?.averageCost,
+                    alertPrices: model.alertPrices
+                )
+                Text("拖动平移、双指缩放、悬停查看十字光标；支撑阻力与 Fibonacci 基于当前可视区间计算，仅作图形参考，不构成服务端结论。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .accessibilityIdentifier("r6.technical.chart-panel")
         } else if detail.chartDataStatus == "insufficient" {
-            ContentUnavailableView {
-                Label("图表数据不足", systemImage: "chart.xyaxis.line")
-            } description: {
-                Text(chartReason(detail.chartDataReason))
+            ChartPanel(
+                "价格图表",
+                unavailableMessage: chartReason(detail.chartDataReason)
+            ) {
+                EmptyView()
             }
         } else {
-            ContentUnavailableView("等待技术图表生成", systemImage: "hourglass")
+            ChartPanel(
+                "价格图表",
+                unavailableMessage: "服务端技术图表尚未生成，稍后自动可用。"
+            ) {
+                EmptyView()
+            }
         }
     }
 
@@ -339,29 +358,36 @@ public struct TechnicalAnalysisView: View {
             if alerts.isEmpty {
                 Text("暂无价格提醒").foregroundStyle(.secondary)
             } else {
-                Table(alerts) {
-                    TableColumn("目标价") { alert in
+                Table(alerts, sortOrder: $alertsSort) {
+                    TableColumn("目标价", sortUsing: KeyPathComparator(\TechnicalPriceAlert.targetPrice)) { alert in
                         Text(alert.targetPrice.formatted(.number.precision(.fractionLength(2)))).monospacedDigit()
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                     }
+                    .width(min: 90, ideal: 110)
                     TableColumn("方向") { alert in
                         Text(alert.direction == "above" ? "上穿" : "下穿")
                     }
+                    .width(min: 60, ideal: 80)
                     TableColumn("状态") { alert in
                         SemanticStatusLabel(
                             alert.triggeredAt != nil ? "已触发" : (alert.enabled ? "监控中" : "停用"),
                             status: alert.triggeredAt != nil ? .warning : .live
                         )
                     }
-                    TableColumn("创建于") { alert in
+                    .width(min: 80, ideal: 100)
+                    TableColumn("创建于", sortUsing: KeyPathComparator(\TechnicalPriceAlert.createdAt, order: .reverse)) { alert in
                         Text(alert.createdAt.map { String($0.prefix(10)) } ?? "—")
                     }
-                    TableColumn("") { alert in
+                    .width(min: 90, ideal: 110)
+                    TableColumn("操作") { alert in
                         Button("删除", role: .destructive) {
                             Task { await model.deleteAlert(symbol: symbol, alert: alert) }
                         }.buttonStyle(.borderless)
                     }
+                    .width(min: 60, ideal: 70)
                 }
                 .frame(minHeight: 120)
+                .accessibilityIdentifier("r6.technical.alerts-table")
             }
         }
         .padding(14)
@@ -383,16 +409,19 @@ public struct TechnicalAnalysisView: View {
         let events = detail.events ?? []
         if !events.isEmpty {
             DisclosureGroup("图表事件（\(events.count)）") {
-                Table(events) {
-                    TableColumn("日期") { event in
+                Table(events, sortOrder: $eventsSort) {
+                    TableColumn("日期", sortUsing: KeyPathComparator(\TechnicalChartEvent.time, order: .reverse)) { event in
                         Text(String(event.time.prefix(10)))
                     }
+                    .width(min: 100, ideal: 120)
                     TableColumn("类型") { event in
                         Text(event.type)
                     }
+                    .width(min: 110, ideal: 140)
                     TableColumn("说明") { event in
                         Text(event.title ?? event.label ?? "—")
                     }
+                    .width(min: 200, ideal: 280)
                     TableColumn("来源") { event in
                         if let raw = event.href, let url = URL(string: raw), raw.hasPrefix("http") {
                             ConfirmExternalLinkButton(url: url)
@@ -400,8 +429,10 @@ public struct TechnicalAnalysisView: View {
                             Text("内部深链").foregroundStyle(.secondary)
                         }
                     }
+                    .width(min: 90, ideal: 110)
                 }
                 .frame(minHeight: 140)
+                .accessibilityIdentifier("r6.technical.events-table")
                 .padding(.top, 8)
             }
             .font(.headline)
