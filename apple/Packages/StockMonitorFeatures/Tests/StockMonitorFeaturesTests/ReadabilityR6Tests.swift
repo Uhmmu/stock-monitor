@@ -5,7 +5,7 @@ import Testing
 
 // MARK: - Goal R6 表格/图表/验收逻辑测试
 
-@Test func r6TableAuditCoversEverySurfaceWithMainColumnSortAndNarrowStrategy() {
+@Test func r6TableAuditCoversEverySurfaceWithMainColumnSortAndNarrowStrategy() throws {
     #expect(R6TableAuditCatalog.entries.count >= 20)
     #expect(Set(R6TableAuditCatalog.entries.map(\.id)).count == R6TableAuditCatalog.entries.count)
 
@@ -19,7 +19,7 @@ import Testing
         }
         // 行数上限必须伴随可恢复说明（截断脚注组件存在）。
         if entry.rowCap != nil {
-            #expect(entry.rowCap! > 0)
+            #expect(try #require(entry.rowCap) > 0)
         }
     }
 }
@@ -41,8 +41,8 @@ import Testing
             paletteIndex: 0,
             points: [
                 TimedPoint(date: base, value: 20),
-                TimedPoint(date: base.addingTimeInterval(86_400 * 5), value: 31.4),
-                TimedPoint(date: base.addingTimeInterval(86_400 * 10), value: 25),
+                TimedPoint(date: base.addingTimeInterval(86400 * 5), value: 31.4),
+                TimedPoint(date: base.addingTimeInterval(86400 * 10), value: 25),
             ]
         ),
         LineSeries(name: "空序列", paletteIndex: 1, points: []),
@@ -57,11 +57,11 @@ import Testing
     #expect(summaries[1].observationWindow == "无观测点")
 }
 
-@Test func r6ChartTimeFormatsStableUTCDays() {
+@Test func r6ChartTimeFormatsStableUTCDays() throws {
     let raw = "2026-09-01T15:30:00Z"
     let parsed = ChartTime.parse(raw)
     #expect(parsed != nil)
-    #expect(ChartTime.formatDay(ChartTime.day(raw)!) == "2026-09-01")
+    #expect(try ChartTime.formatDay(#require(ChartTime.day(raw))) == "2026-09-01")
 }
 
 @Test func r6AccessibilityCatalogCoversEveryRouteWithStableAnchors() {
@@ -111,7 +111,7 @@ import Testing
         let time = "2026-" + (month < 10 ? "0" + String(month) : String(month)) + "-01T00:00:00Z"
         let open = Double(index)
         return TimedCandle(
-            date: base.addingTimeInterval(Double(index) * 86_400),
+            date: base.addingTimeInterval(Double(index) * 86400),
             candle: ChartCandle(time: time, open: open, high: open + 2, low: open - 1, close: open + 1, volume: index)
         )
     }

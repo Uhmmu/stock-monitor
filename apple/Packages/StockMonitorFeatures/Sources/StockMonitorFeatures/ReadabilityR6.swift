@@ -374,7 +374,7 @@ public struct R6ChartSurfaceEntry: Identifiable, Equatable, Sendable {
             hasUnavailableState ? "unavailable" : nil,
             paletteDriven ? "palette" : nil,
             nonColorEncoding ? "nonColorEncoding" : nil,
-        ].compactMap { $0 }
+        ].compactMap(\.self)
     }
 }
 
@@ -408,7 +408,7 @@ public enum R6ChartSurfaceCatalog {
     ]
 
     public static let requiredAspects: Set<String> = [
-        "unit", "source", "asOf", "legend", "crosshair/tooltip", "dataSummary", "unavailable", "palette", "nonColorEncoding"
+        "unit", "source", "asOf", "legend", "crosshair/tooltip", "dataSummary", "unavailable", "palette", "nonColorEncoding",
     ]
 
     public static func missingAspects(_ entry: R6ChartSurfaceEntry) -> Set<String> {
@@ -426,11 +426,14 @@ public struct R6RouteAccessibilityRecord: Identifiable, Equatable, Sendable {
     public let keyboardPath: String
     public let voiceOverSpots: [String]
 
-    public var id: AppRoute { route }
+    public var id: AppRoute {
+        route
+    }
 }
 
 public enum R6AccessibilityCatalog {
     /// 31 个路由的根 accessibilityIdentifier（实现侧逐页挂载，测试侧核对目录完整）。
+    // swiftlint:disable:next cyclomatic_complexity
     public static func rootIdentifier(for route: AppRoute) -> String {
         switch route {
         case .overview: "m3.overview"
@@ -470,26 +473,25 @@ public enum R6AccessibilityCatalog {
     /// 首屏 VoiceOver 阅读顺序锚点（导航标题 → 页头 → 主内容 → 证据/来源）。
     public static func readingOrder(for route: AppRoute) -> [String] {
         let base = ["navigation.title", "page.header", rootIdentifier(for: route)]
-        let evidenceAnchors: [String]
-        switch route {
-        case .overview: evidenceAnchors = ["r4.overview.indices", "r4.overview.core-states"]
-        case .watchlist: evidenceAnchors = ["r4.watchlist.table"]
-        case .technical: evidenceAnchors = ["r6.technical.chart-panel", "r4.technical.side-metrics", "r6.technical.alerts-table"]
-        case .sec: evidenceAnchors = ["r6.sec.filings-table", "r4.sec.events"]
-        case .ownership: evidenceAnchors = ["r6.ownership.13f-table"]
-        case .congress: evidenceAnchors = ["r6.congress.trades-table"]
-        case .options: evidenceAnchors = ["r6.options.chain-table", "chart.line-series"]
-        case .industry: evidenceAnchors = ["r6.industry.overview-table"]
-        case .moodLab: evidenceAnchors = ["r6.mood-lab.runs-table"]
-        case .valuation: evidenceAnchors = ["r6.valuation.metrics-table", "chart.line-series"]
-        case .macro: evidenceAnchors = ["chart.yield-curve", "chart.line-series"]
-        case .financials: evidenceAnchors = ["r4.financials.matrix"]
-        case .news: evidenceAnchors = ["r4.news.reader"]
-        case .reports: evidenceAnchors = ["r4.reports.reader"]
-        case .holdings: evidenceAnchors = ["portfolio.holdings-table"]
-        case .paper: evidenceAnchors = ["paper.boundary"]
-        case .quantBacktests: evidenceAnchors = ["quant.research-flow"]
-        default: evidenceAnchors = ["workspace.semantic", "workspace.content"]
+        let evidenceAnchors: [String] = switch route {
+        case .overview: ["r4.overview.indices", "r4.overview.core-states"]
+        case .watchlist: ["r4.watchlist.table"]
+        case .technical: ["r6.technical.chart-panel", "r4.technical.side-metrics", "r6.technical.alerts-table"]
+        case .sec: ["r6.sec.filings-table", "r4.sec.events"]
+        case .ownership: ["r6.ownership.13f-table"]
+        case .congress: ["r6.congress.trades-table"]
+        case .options: ["r6.options.chain-table", "chart.line-series"]
+        case .industry: ["r6.industry.overview-table"]
+        case .moodLab: ["r6.mood-lab.runs-table"]
+        case .valuation: ["r6.valuation.metrics-table", "chart.line-series"]
+        case .macro: ["chart.yield-curve", "chart.line-series"]
+        case .financials: ["r4.financials.matrix"]
+        case .news: ["r4.news.reader"]
+        case .reports: ["r4.reports.reader"]
+        case .holdings: ["portfolio.holdings-table"]
+        case .paper: ["paper.boundary"]
+        case .quantBacktests: ["quant.research-flow"]
+        default: ["workspace.semantic", "workspace.content"]
         }
         return base + evidenceAnchors + ["metadata.strip"]
     }
@@ -534,10 +536,16 @@ public struct R6Issue: Identifiable, Equatable, Sendable {
 public enum R6IssueLedger {
     /// R1 审计发现的问题在 R2–R6 的关闭记录；P0/P1 必须全部 resolved。
     public static let issues: [R6Issue] = [
-        .init(id: "raw-json-main-path", severity: .p0, title: "M5 各主页面用递归 JSON 展示，无法理解", status: .resolved, resolution: "typed presentation model + 语义工作区，raw JSON 仅剩调试 fallback", closedBy: "R2/R5"),
+        .init(
+            id: "raw-json-main-path", severity: .p0, title: "M5 各主页面用递归 JSON 展示，无法理解",
+            status: .resolved, resolution: "typed presentation model + 语义工作区，raw JSON 仅剩调试 fallback", closedBy: "R2/R5"
+        ),
         .init(id: "json-evidence-flat", severity: .p0, title: "M4 证据按 key 排序平铺 24 字段", status: .resolved, resolution: "字段目录 + 中文名称/单位/排序 + progressive disclosure", closedBy: "R2"),
         .init(id: "caption2-metadata", severity: .p1, title: "来源/日期/解释大量 caption2+secondary", status: .resolved, resolution: "5 级文字角色 + metadata 最低可读角色", closedBy: "R1/R2"),
-        .init(id: "page-anatomy-drift", severity: .p1, title: "页面标题/边距/层级各自实现", status: .resolved, resolution: "PageScaffold/PageHeader/SectionHeader 统一 anatomy", closedBy: "R1/R3"),
+        .init(
+            id: "page-anatomy-drift", severity: .p1, title: "页面标题/边距/层级各自实现",
+            status: .resolved, resolution: "PageScaffold/PageHeader/SectionHeader 统一 anatomy", closedBy: "R1/R3"
+        ),
         .init(id: "sidebar-flat-31", severity: .p1, title: "31 个平级 sidebar 入口寻找成本高", status: .resolved, resolution: "分组折叠 + 最近使用 + Command-K 搜索", closedBy: "R3"),
         .init(id: "overview-density", severity: .p1, title: "总览重复/同权重卡片过多", status: .resolved, resolution: "市场→组合→自选→异动分层摘要", closedBy: "R4"),
         .init(id: "news-reading-width", severity: .p1, title: "新闻/报告阅读宽度不适", status: .resolved, resolution: "舒适正文宽度 + 稳定 leading + 分层来源", closedBy: "R4"),
@@ -546,10 +554,16 @@ public enum R6IssueLedger {
         .init(id: "paper-manual-ids", severity: .p1, title: "M5 页面要求手填 instrument_id/run_id", status: .resolved, resolution: "实体选择器 + 上下文自动带入", closedBy: "R5"),
         .init(id: "fx-coverage-hidden", severity: .p1, title: "多币种缺 FX 项的覆盖缺口解释不可见", status: .resolved, resolution: "估值不可用项在汇总邻近位置显式解释", closedBy: "R5"),
         .init(id: "table-no-sort", severity: .p1, title: "表格无原生排序、列宽与主列策略缺失", status: .resolved, resolution: "20 张表全部登记审计目录并接入 sortOrder/列宽/主列", closedBy: "R6"),
-        .init(id: "chart-chrome-inconsistent", severity: .p1, title: "图表缺 unit/source/as-of/tooltip/等价数据表", status: .resolved, resolution: "ChartPanel 统一 chrome + tooltip + 数据摘要表", closedBy: "R6"),
+        .init(
+            id: "chart-chrome-inconsistent", severity: .p1, title: "图表缺 unit/source/as-of/tooltip/等价数据表",
+            status: .resolved, resolution: "ChartPanel 统一 chrome + tooltip + 数据摘要表", closedBy: "R6"
+        ),
         .init(id: "chart-color-only-series", severity: .p2, title: "多序列图表只靠颜色区分", status: .resolved, resolution: "palette + 形状标记 + 线型三重编码", closedBy: "R6"),
         .init(id: "content-layer-material", severity: .p2, title: "材质使用未分层审计", status: .resolved, resolution: "MaterialPolicyCatalog：内容层零材质，transient 仅 tooltip", closedBy: "R6"),
-        .init(id: "hover-feedback-missing", severity: .p3, title: "自定义可点卡片无 hover/press 反馈", status: .resolved, resolution: "subtleHoverHighlight + ImmediatePressButtonStyle", closedBy: "R6"),
+        .init(
+            id: "hover-feedback-missing", severity: .p3, title: "自定义可点卡片无 hover/press 反馈",
+            status: .resolved, resolution: "subtleHoverHighlight + ImmediatePressButtonStyle", closedBy: "R6"
+        ),
         .init(id: "truncation-caption", severity: .p3, title: "「仅展示前 N 条」脚注样式不一", status: .resolved, resolution: "TableTruncationFooter 统一", closedBy: "R6"),
         .init(id: "compare-matrix-frozen-col", severity: .p3, title: "对比矩阵窄窗口横向迷失", status: .accepted, resolution: "横向滚动 + 首列固定已是当前接受的策略；后续可在 R7 提供 inspector 详情", closedBy: "R6"),
     ]
@@ -583,7 +597,9 @@ public enum R6ParityStatus: String, Sendable {
     case verified
     case verifiedWithNotes
 
-    public var isVerified: Bool { self == .verified || self == .verifiedWithNotes }
+    public var isVerified: Bool {
+        self == .verified || self == .verifiedWithNotes
+    }
 }
 
 public struct R6RouteAcceptanceRecord: Identifiable, Equatable, Sendable {
@@ -591,7 +607,9 @@ public struct R6RouteAcceptanceRecord: Identifiable, Equatable, Sendable {
     public let layers: [R6ParityLayer: R6ParityStatus]
     public let note: String?
 
-    public var id: AppRoute { route }
+    public var id: AppRoute {
+        route
+    }
 
     public func status(for layer: R6ParityLayer) -> R6ParityStatus? {
         layers[layer]

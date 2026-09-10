@@ -316,7 +316,7 @@ public struct MoodLabView: View {
     @State private var recoveryReason = ""
     /// R6.0：验证任务默认按创建时间降序。
     @State private var runsSort: [KeyPathComparator<MoodValidationRun>] = [
-        KeyPathComparator(\.createdAt, order: .reverse)
+        KeyPathComparator(\.createdAt, order: .reverse),
     ]
 
     init(model: MoodLabModel) {
@@ -379,7 +379,7 @@ public struct MoodLabView: View {
                 }
                 .width(min: 70, ideal: 90)
                 TableColumn("状态") { run in Text(run.status ?? "—") }
-                .width(min: 90, ideal: 110)
+                    .width(min: 90, ideal: 110)
                 TableColumn("进度", sortUsing: KeyPathComparator(\MoodValidationRun.progress, order: .reverse)) { run in
                     Text(run.progress.map { "\(Int($0 * 100))%" } ?? "数据不足").monospacedDigit()
                         .frame(maxWidth: .infinity, alignment: .trailing)

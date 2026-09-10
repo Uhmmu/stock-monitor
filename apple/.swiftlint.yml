@@ -7,6 +7,8 @@ excluded:
 line_length:
   warning: 140
   error: 180
+file_length:
+  ignore_comment_only_lines: true
 identifier_name:
   min_length: 2
 reporter: xcode

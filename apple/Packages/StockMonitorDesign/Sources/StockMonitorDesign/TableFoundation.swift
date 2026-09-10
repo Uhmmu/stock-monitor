@@ -78,11 +78,10 @@ public struct NumericTableCell: View {
 
     public init(value: Double?, digits: Int = 2, compact: Bool = false) {
         if let value {
-            let format: FloatingPointFormatStyle<Double>
-            if compact {
-                format = .number.notation(.compactName).precision(.fractionLength(digits))
+            let format: FloatingPointFormatStyle<Double> = if compact {
+                .number.notation(.compactName).precision(.fractionLength(digits))
             } else {
-                format = .number.precision(.fractionLength(digits))
+                .number.precision(.fractionLength(digits))
             }
             text = value.formatted(format)
             missing = false

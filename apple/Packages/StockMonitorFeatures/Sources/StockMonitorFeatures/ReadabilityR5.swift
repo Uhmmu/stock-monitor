@@ -98,6 +98,7 @@ public enum R5WorkspaceBlueprint {
         }
     }
 
+    // swiftlint:disable:next cyclomatic_complexity
     private static func sectionTitle(for semantic: String?, phase: GoalM5Phase) -> String {
         guard let semantic else { return "其他" }
         switch phase {

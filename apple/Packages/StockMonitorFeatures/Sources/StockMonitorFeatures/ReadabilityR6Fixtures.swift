@@ -15,7 +15,7 @@ public struct R6ChartsFixture: View {
         func points(_ transform: (Int) -> Double) -> [TimedPoint] {
             (0 ..< 90).map { index in
                 TimedPoint(
-                    date: base.addingTimeInterval(Double(index) * 86_400 * 7),
+                    date: base.addingTimeInterval(Double(index) * 86400 * 7),
                     value: transform(index)
                 )
             }
@@ -158,7 +158,7 @@ public struct R6TablesFixture: View {
             .alternatingRowBackgrounds(.enabled)
             .frame(minHeight: 220)
             .accessibilityIdentifier("r6.fixture.13f-table")
-            TableTruncationFooter(shown: 5, total: 1_204)
+            TableTruncationFooter(shown: 5, total: 1204)
         }
     }
 }

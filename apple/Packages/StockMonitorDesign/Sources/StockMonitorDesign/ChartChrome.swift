@@ -45,7 +45,6 @@ public extension StockMonitorChartPalette {
         seriesColor(index)
     }
 
-
     static func seriesMarker(_ index: Int) -> ChartSeriesMarker {
         ChartSeriesMarker.allCases[((index % ChartSeriesMarker.allCases.count) + ChartSeriesMarker.allCases.count) % ChartSeriesMarker.allCases.count]
     }
@@ -113,7 +112,7 @@ public struct ChartPanel<Controls: View, Content: View>: View {
                 [
                     source.map { MetadataItem(label: "来源", value: $0) },
                     asOf.map { MetadataItem(label: "数据截至", value: $0) },
-                ].compactMap { $0 }
+                ].compactMap(\.self)
             )
         }
     }
@@ -133,7 +132,7 @@ public struct ChartProvenanceFooter: View {
             [
                 source.map { MetadataItem(label: "来源", value: $0) },
                 asOf.map { MetadataItem(label: "数据截至", value: $0) },
-            ].compactMap { $0 }
+            ].compactMap(\.self)
         )
         .accessibilityIdentifier("chart.provenance")
     }
@@ -147,7 +146,9 @@ public struct ChartSeriesSummaryRow: Identifiable, Equatable, Sendable {
     public let maximum: FinancialDisplayValue
     public let observationWindow: String
 
-    public var id: String { name }
+    public var id: String {
+        name
+    }
 
     public init(
         name: String,

@@ -56,11 +56,10 @@
             scenarioCount += 1
 
             let rotation = index % 3
-            let rotated: (VisualAuditState, VisualAuditWidth, ColorScheme)
-            switch rotation {
-            case 0: rotated = (.empty, .narrow, .light)
-            case 1: rotated = (.stale, .wide, .dark)
-            default: rotated = (.error, .standard, .light)
+            let rotated: (VisualAuditState, VisualAuditWidth, ColorScheme) = switch rotation {
+            case 0: (.empty, .narrow, .light)
+            case 1: (.stale, .wide, .dark)
+            default: (.error, .standard, .light)
             }
             let rotatedName = "r6-route-\(route.rawValue)-\(rotated.1.rawValue)-\(rotated.2 == .dark ? "dark" : "light")-comfortable-\(rotated.0.rawValue).png"
             try renderAndCompare(

@@ -117,7 +117,8 @@ enum OverviewSummarizer {
     /// 行情优先级与总览表格一致：实时报价优先，回落到快照价格。
     static func changePercent(stock: DashboardStock, live: RealtimeQuote?) -> Double? {
         if let live, let price = live.price, price.isFinite,
-           let close = live.previousClose, close.isFinite, close != 0 {
+           let close = live.previousClose, close.isFinite, close != 0
+        {
             return (price / close - 1) * 100
         }
         return stock.changePercent

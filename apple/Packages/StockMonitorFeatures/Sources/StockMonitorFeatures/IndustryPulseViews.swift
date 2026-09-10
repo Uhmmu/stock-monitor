@@ -65,7 +65,7 @@ public struct IndustryPulseView: View {
     @State private var model: IndustryPulseModel
     /// R6.0：板块概览默认按脉冲值降序，可再按涨跌/信心排序。
     @State private var overviewSort: [KeyPathComparator<IndustryPulseItem>] = [
-        KeyPathComparator(\.pulse, order: .reverse)
+        KeyPathComparator(\.pulse, order: .reverse),
     ]
 
     init(model: IndustryPulseModel) {

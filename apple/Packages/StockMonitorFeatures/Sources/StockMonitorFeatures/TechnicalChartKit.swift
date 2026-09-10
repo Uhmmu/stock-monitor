@@ -916,7 +916,8 @@ public struct YieldCurveChart: View {
                 latest: text(values.last),
                 minimum: text(values.min()),
                 maximum: text(values.max()),
-                observationWindow: "期限 \(snapshot.points.first?.maturity ?? "—") 至 \(snapshot.points.last?.maturity ?? "—")；观察日 \(snapshot.observationDate ?? "—")（最新值位于 \(maturityText ?? "—")）"
+                observationWindow: "期限 \(snapshot.points.first?.maturity ?? "—") 至 \(snapshot.points.last?.maturity ?? "—")"
+                    + "；观察日 \(snapshot.observationDate ?? "—")（最新值位于 \(maturityText ?? "—")）"
             )
         }
     }

@@ -92,10 +92,10 @@ public struct TechnicalAnalysisView: View {
     @State private var newAlertDirection = "above"
     /// R6.0：价格提醒默认按目标价升序、图表事件按日期降序。
     @State private var alertsSort: [KeyPathComparator<TechnicalPriceAlert>] = [
-        KeyPathComparator(\.targetPrice, order: .forward)
+        KeyPathComparator(\.targetPrice, order: .forward),
     ]
     @State private var eventsSort: [KeyPathComparator<TechnicalChartEvent>] = [
-        KeyPathComparator(\.time, order: .reverse)
+        KeyPathComparator(\.time, order: .reverse),
     ]
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext

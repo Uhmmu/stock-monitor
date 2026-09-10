@@ -22,7 +22,9 @@ public struct MaterialPolicyEntry: Identifiable, Equatable, Sendable {
     public let usesSystemMaterial: Bool
     public let note: String
 
-    public var id: String { surface }
+    public var id: String {
+        surface
+    }
 
     public init(surface: String, layer: MaterialPolicyLayer, usesSystemMaterial: Bool, note: String) {
         self.surface = surface; self.layer = layer; self.usesSystemMaterial = usesSystemMaterial; self.note = note
@@ -61,7 +63,7 @@ public struct SubtleHoverHighlight: ViewModifier {
     public func body(content: Content) -> some View {
         content
             .background(
-                (hovering ? Color.primary.opacity(StockMonitorMotion.hoverHighlightOpacity) : Color.clear),
+                hovering ? Color.primary.opacity(StockMonitorMotion.hoverHighlightOpacity) : Color.clear,
                 in: RoundedRectangle(cornerRadius: StockMonitorCornerRadius.control)
             )
             .onHover { hovering = $0 }
@@ -116,7 +118,7 @@ public enum StockMonitorMotionAudit: Equatable, Sendable {
     ]
 
     public static var animatedSurfacesMissingFallback: [Surface] {
-        animatedSurfaces.filter { $0.reduceMotionFallback.isEmpty }
+        animatedSurfaces.filter(\.reduceMotionFallback.isEmpty)
     }
 
     public static var highFrequencySurfacesWithAnimation: [Surface] {

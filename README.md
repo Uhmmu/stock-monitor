@@ -5,7 +5,14 @@
 <h1 align="center">Stock Monitor</h1>
 
 <p align="center">
-  自托管的市场监控、投资研究与组合分析工作台
+  自托管的市场监控、投资研究与组合分析工作台<br>
+  A self-hosted market monitoring, investment research, and portfolio analytics workbench
+</p>
+
+<p align="center">
+  <a href="https://github.com/Uhmmu/stock-monitor/actions/workflows/macos-native.yml">
+    <img src="https://github.com/Uhmmu/stock-monitor/actions/workflows/macos-native.yml/badge.svg" alt="macOS native foundation">
+  </a>
 </p>
 
 Stock Monitor 将行情、自选股、新闻、SEC 披露、基本面、估值、投资组合和 AI 研究集中在一个应用中。数据、账户信息和第三方 API Key 均由自己的服务器保存。
@@ -191,7 +198,7 @@ make native-test
 ./scripts/dev-macos test-frontend
 
 # iPhone PWA
-cd ../frontend-ios
+cd frontend-ios
 npm ci
 npm test
 npm run build

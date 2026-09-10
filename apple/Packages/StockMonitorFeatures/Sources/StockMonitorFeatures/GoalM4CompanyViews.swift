@@ -73,16 +73,16 @@ public struct SecView: View {
     @State private var symbol = ""
     /// R6.0：默认排序——文件/内部人按日期降序、SEC 财务按财年降序、13F 按市值降序。
     @State private var filingsSort: [KeyPathComparator<SecFilingItem>] = [
-        KeyPathComparator(\.filingDate, order: .reverse)
+        KeyPathComparator(\.filingDate, order: .reverse),
     ]
     @State private var financialsSort: [KeyPathComparator<SecFinancialRow>] = [
-        KeyPathComparator(\.fiscalYear, order: .reverse)
+        KeyPathComparator(\.fiscalYear, order: .reverse),
     ]
     @State private var insiderSort: [KeyPathComparator<SecInsiderItem>] = [
-        KeyPathComparator(\.transactionDate, order: .reverse)
+        KeyPathComparator(\.transactionDate, order: .reverse),
     ]
     @State private var holdingsSort: [KeyPathComparator<Sec13FHoldingItem>] = [
-        KeyPathComparator(\.valueUsd, order: .reverse)
+        KeyPathComparator(\.valueUsd, order: .reverse),
     ]
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
@@ -167,7 +167,7 @@ public struct SecView: View {
             }
             .width(min: 70, ideal: 90)
             TableColumn("说明") { row in Text(row.formLabel ?? "—") }
-            .width(min: 180, ideal: 260)
+                .width(min: 180, ideal: 260)
             TableColumn("事件标签") { row in
                 Text(row.eventLabels.joined(separator: "、")).foregroundStyle(row.eventLabels.isEmpty ? .secondary : .primary)
             }
@@ -212,9 +212,9 @@ public struct SecView: View {
             }
             .width(min: 60, ideal: 70)
             TableColumn("期间") { row in Text(row.fiscalPeriod ?? "—") }
-            .width(min: 60, ideal: 70)
+                .width(min: 60, ideal: 70)
             TableColumn("期末") { row in Text(row.periodEnd ?? "—") }
-            .width(min: 100, ideal: 110)
+                .width(min: 100, ideal: 110)
             TableColumn("营收", sortUsing: KeyPathComparator(\SecFinancialRow.revenue, order: .reverse)) { row in
                 optionalMoney(row.revenue)
             }
@@ -255,7 +255,7 @@ public struct SecView: View {
             }
             .width(min: 170, ideal: 240)
             TableColumn("代码") { row in Text(row.transactionCode ?? "—") }
-            .width(min: 60, ideal: 80)
+                .width(min: 60, ideal: 80)
             TableColumn("股数", sortUsing: KeyPathComparator(\SecInsiderItem.shares, order: .reverse)) { row in
                 optionalNumber(row.shares, 0)
             }
@@ -269,7 +269,7 @@ public struct SecView: View {
             }
             .width(min: 90, ideal: 110)
             TableColumn("标记") { row in Text(row.flag ?? "—") }
-            .width(min: 70, ideal: 100)
+                .width(min: 70, ideal: 100)
         }
         .frame(minHeight: 320)
         .accessibilityIdentifier("r6.sec.insider-table")
@@ -297,7 +297,7 @@ public struct SecView: View {
                     }
                     .width(min: 100, ideal: 120)
                     TableColumn("类型") { row in Text(row.putCall ?? "—") }
-                    .width(min: 60, ideal: 80)
+                        .width(min: 60, ideal: 80)
                     TableColumn("环比变化", sortUsing: KeyPathComparator(\Sec13FHoldingItem.shareChange, order: .reverse)) { row in
                         if let change = row.shareChange {
                             HStack(spacing: StockMonitorSpacing.xSmall) {
@@ -317,7 +317,7 @@ public struct SecView: View {
                     }
                     .width(min: 90, ideal: 110)
                     TableColumn("申报日") { row in Text(row.filingDate ?? "—") }
-                    .width(min: 90, ideal: 110)
+                        .width(min: 90, ideal: 110)
                 }
                 .frame(minHeight: 260)
                 .accessibilityIdentifier("r6.sec.13f-table")
@@ -705,7 +705,7 @@ public struct CongressView: View {
     @State private var model: CongressModel
     /// R6.0：人物交易默认按交易日期降序。
     @State private var tradesSort: [KeyPathComparator<CongressTradeItem>] = [
-        KeyPathComparator(\.transactionDate, order: .reverse)
+        KeyPathComparator(\.transactionDate, order: .reverse),
     ]
     let openStock: (String) -> Void
 
@@ -825,11 +825,11 @@ public struct CongressView: View {
                 }
                 .width(min: 160, ideal: 220)
                 TableColumn("方向") { row in Text(row.transactionType ?? "—") }
-                .width(min: 90, ideal: 120)
+                    .width(min: 90, ideal: 120)
                 TableColumn("金额区间") { row in Text(row.amountLabel ?? "数据不足") }
-                .width(min: 120, ideal: 150)
+                    .width(min: 120, ideal: 150)
                 TableColumn("申报日") { row in Text(row.filingDate ?? "—") }
-                .width(min: 100, ideal: 120)
+                    .width(min: 100, ideal: 120)
                 TableColumn("迟报") { trade in
                     if trade.isLate == true {
                         Text("迟报").foregroundStyle(.orange)

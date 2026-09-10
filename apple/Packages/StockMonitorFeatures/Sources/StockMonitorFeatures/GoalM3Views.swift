@@ -323,6 +323,7 @@ enum WatchlistSortKey: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+// swiftlint:disable:next type_body_length
 public struct WatchlistView: View {
     @State private var model: WatchlistModel
     @Bindable private var navigation: AppNavigationModel
