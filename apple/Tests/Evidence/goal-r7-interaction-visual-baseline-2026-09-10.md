@@ -39,3 +39,12 @@
 - StockMonitorCore：36 passed；StockMonitorDesign：11 passed；StockMonitorFeatures：106 passed。
 - arm64 Release Swift build：passed；R1–R7 串行门禁：passed。
 - 已知编译警告仅来自既有 `GoalM4Models.swift` 两处 optional 字符串插值，本轮未改该模型。
+
+## 本机安装验收
+
+- Xcode Release 候选使用生产配置 `https://jialenb.com`，环境标记为 `production`。
+- 候选与安装后的应用均通过 `verify-app-security.sh`：arm64、Hardened Runtime、App Sandbox、网络客户端权限和 Privacy Manifest 均符合门禁。
+- 原应用已完整备份到 `apple/DerivedData/install-backups/20260910-144655-interaction-r7/`，再以同卷切换方式替换 `/Applications/Stock Monitor.app`。
+- 候选与已安装可执行文件 SHA-256 均为 `4332f307ff6e461f62f33fb27212cfb3729929cc8eec795c890f637c9efecd45`。
+- 已安装应用成功启动，进程路径来自 `/Applications/Stock Monitor.app/Contents/MacOS/Stock Monitor`；生产 `/api/client-capabilities` 返回 HTTP 200。
+- 当前自动化环境仍不能驱动原生 macOS Accessibility 逐页操作，因此焦点返回、真实滚动位置和动画手感保留为人工运行验收项；未用离屏快照代替这部分结论。
