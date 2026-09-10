@@ -76,6 +76,10 @@ jobs:
           -destination 'platform=macOS,arch=arm64'
           CODE_SIGNING_ALLOWED=NO build
       - name: Run macOS accessibility smoke test
+        env:
+          # xcodebuild does not forward job-level env to the UITest runner
+          # process; TEST_RUNNER_* is the documented injection point.
+          TEST_RUNNER_CI: "true"
         run: >-
           xcodebuild -workspace apple/StockMonitor.xcworkspace
           -scheme StockMonitorMac -configuration Debug
