@@ -3,6 +3,7 @@ import SwiftUI
 public struct PageScaffold<Header: View, Content: View>: View {
     @Environment(\.interfaceDensity) private var density
     @Environment(\.stockMonitorLayoutWidth) private var layoutWidth
+    @Environment(\.stockMonitorWebInspired) private var webInspired
     private let width: CGFloat
     private let header: Header
     private let content: Content
@@ -18,6 +19,14 @@ public struct PageScaffold<Header: View, Content: View>: View {
     }
 
     public var body: some View {
+        if webInspired {
+            scrollContent.background(StockMonitorCanvasBackdrop())
+        } else {
+            scrollContent.background(StockMonitorCanvas.background)
+        }
+    }
+
+    private var scrollContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: density.sectionSpacing) {
                 header
@@ -27,7 +36,6 @@ public struct PageScaffold<Header: View, Content: View>: View {
             .padding(effectivePadding)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .background(StockMonitorCanvas.background)
         .accessibilityElement(children: .contain)
     }
 

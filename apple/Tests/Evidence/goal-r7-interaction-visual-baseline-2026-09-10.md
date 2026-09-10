@@ -29,3 +29,13 @@
 - R7.1：31 路由操作目录、每路由状态模型、当前页刷新语义、焦点返回。
 - R7.2：总览、持仓、新闻、设置四类样板及网页风格共享组件。
 - R7.3：三批路由推广、动效与辅助功能检查、全测试和本机应用替换。
+
+## 实施与自动化结果
+
+- 31/31 路由已接入统一窗口级 `RouteInteractionState`；自选股、新闻、公司研究、期权、AI 会话、交易日志及所有服务工作区已保存并恢复其关键上下文。
+- 工具栏刷新改为“刷新当前页面”，重建数据模型但保留导航模型中的筛选和选择；服务工作区继续以 last-good payload 覆盖刷新与失败过程。
+- AppShell 为全部生产路由注入网页风格环境：冷灰/淡蓝原生动态画布、蓝色主操作、连续圆角内容卡片、系统 toolbar/sidebar/filter chrome。Reduce Transparency 与 Increase Contrast 降级仍由共享组件承担。
+- R7 视觉基线 10 张：总览、持仓、新闻、设置四类代表页面各含浅色/深色标准窗口，另含持仓窄窗紧凑与新闻宽窗深色。人工检查通过；`1578.T` 为 JPY，组合汇总为 USD。
+- StockMonitorCore：36 passed；StockMonitorDesign：11 passed；StockMonitorFeatures：106 passed。
+- arm64 Release Swift build：passed；R1–R7 串行门禁：passed。
+- 已知编译警告仅来自既有 `GoalM4Models.swift` 两处 optional 字符串插值，本轮未改该模型。

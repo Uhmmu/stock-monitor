@@ -213,6 +213,34 @@ public enum ContentSemanticRole: String, CaseIterable, Sendable {
 public extension EnvironmentValues {
     @Entry var interfaceDensity: InterfaceDensity = .comfortable
     @Entry var stockMonitorLayoutWidth: StockMonitorLayoutWidth = .standard
+    @Entry var stockMonitorWebInspired = false
+}
+
+public struct StockMonitorCanvasBackdrop: View {
+    @Environment(\.stockMonitorWebInspired) private var webInspired
+
+    public init() {}
+
+    public var body: some View {
+        ZStack {
+            StockMonitorCanvas.background
+            if webInspired {
+                RadialGradient(
+                    colors: [Color.accentColor.opacity(0.085), .clear],
+                    center: .topTrailing,
+                    startRadius: 0,
+                    endRadius: 620
+                )
+                RadialGradient(
+                    colors: [Color.indigo.opacity(0.055), .clear],
+                    center: .topLeading,
+                    startRadius: 0,
+                    endRadius: 520
+                )
+            }
+        }
+        .ignoresSafeArea()
+    }
 }
 
 public struct AdaptiveLayoutReader<Content: View>: View {
@@ -293,20 +321,50 @@ private struct StockMonitorSurfaceModifier: ViewModifier {
     let surface: StockMonitorSurface
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.stockMonitorWebInspired) private var webInspired
 
     func body(content: Content) -> some View {
-        content
-            .background(
-                surface.fill.opacity(reduceTransparency ? 1 : 0.94),
-                in: RoundedRectangle(cornerRadius: StockMonitorCornerRadius.surface)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: StockMonitorCornerRadius.surface)
-                    .stroke(
-                        contrast == .increased ? StockMonitorSeparator.emphasized : StockMonitorSeparator.standard.opacity(0.65),
-                        lineWidth: contrast == .increased ? 1.5 : 0.5
-                    )
-            }
+        if webInspired {
+            content
+                .background(
+                    surface.fill.opacity(reduceTransparency ? 1 : 0.94),
+                    in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(
+                            contrast == .increased ? StockMonitorSeparator.emphasized : StockMonitorSeparator.standard.opacity(0.65),
+                            lineWidth: contrast == .increased ? 1.5 : 0.5
+                        )
+                }
+                .shadow(
+                    color: surface == .raised ? shadowColor : .clear,
+                    radius: surface == .raised ? StockMonitorElevation.cardRadius : 0,
+                    y: surface == .raised ? StockMonitorElevation.cardY : 0
+                )
+        } else {
+            content
+                .background(
+                    surface.fill.opacity(reduceTransparency ? 1 : 0.94),
+                    in: RoundedRectangle(cornerRadius: StockMonitorCornerRadius.surface)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: StockMonitorCornerRadius.surface)
+                        .stroke(
+                            contrast == .increased ? StockMonitorSeparator.emphasized : StockMonitorSeparator.standard.opacity(0.65),
+                            lineWidth: contrast == .increased ? 1.5 : 0.5
+                        )
+                }
+        }
+    }
+
+    private var cornerRadius: CGFloat {
+        webInspired && surface != .content ? StockMonitorCornerRadius.prominent : StockMonitorCornerRadius.surface
+    }
+
+    private var shadowColor: Color {
+        guard contrast != .increased else { return .clear }
+        return Color.black.opacity(StockMonitorElevation.cardOpacity)
     }
 }
 

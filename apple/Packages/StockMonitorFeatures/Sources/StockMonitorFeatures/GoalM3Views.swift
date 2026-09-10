@@ -58,6 +58,7 @@ struct FeatureErrorBanner: View {
 
 public struct OverviewView: View {
     @State private var model: OverviewModel
+    @Environment(\.stockMonitorWebInspired) private var webInspired
     @State private var exportingQuotes = false
     let navigate: (AppRoute) -> Void
     let openStock: (String) -> Void
@@ -71,17 +72,7 @@ public struct OverviewView: View {
     public var body: some View {
         ResourceStateView(state: model.state) {
             PageScaffold(width: StockMonitorContentWidth.wide) {
-                WebInspiredHero("市场总览", eyebrow: "Overview", summary: headerSummary) {
-                    HStack(spacing: StockMonitorSpacing.regular) {
-                        SemanticStatusLabel(model.streamConnected ? "实时连接" : "快照", status: model.streamConnected ? .live : .stale)
-                        if let lastUpdated = model.lastUpdated {
-                            Text(lastUpdated, style: .time).stockMonitorTypography(.metadata)
-                        }
-                    }
-                } actions: {
-                    Button("查看异动", systemImage: "bell") { navigate(.alerts) }
-                        .buttonStyle(.borderedProminent)
-                }
+                overviewHeader
             } content: {
                 FeatureErrorBanner(error: model.error)
                 OverviewCoreStateStrip(
@@ -114,6 +105,28 @@ public struct OverviewView: View {
 
     private var headerSummary: String {
         model.dashboard?.market.isOpen == true ? "美股常规交易时段" : "当前休市或非常规时段"
+    }
+
+    @ViewBuilder private var overviewHeader: some View {
+        if webInspired {
+            WebInspiredHero("市场总览", eyebrow: "Overview", summary: headerSummary) {
+                headerStatus
+            } actions: {
+                Button("查看异动", systemImage: "bell") { navigate(.alerts) }
+                    .buttonStyle(.borderedProminent)
+            }
+        } else {
+            PageHeader("市场总览", summary: headerSummary) { headerStatus }
+        }
+    }
+
+    private var headerStatus: some View {
+        HStack(spacing: StockMonitorSpacing.regular) {
+            SemanticStatusLabel(model.streamConnected ? "实时连接" : "快照", status: model.streamConnected ? .live : .stale)
+            if let lastUpdated = model.lastUpdated {
+                Text(lastUpdated, style: .time).stockMonitorTypography(.metadata)
+            }
+        }
     }
 
     private var breadth: OverviewBreadth {

@@ -55,6 +55,7 @@ public struct AppShellView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(StockMonitorCanvasBackdrop())
                 .inspector(isPresented: $navigation.inspectorVisible) {
                     InspectorView(route: navigation.selection, symbol: navigation.selectedSymbol)
                         .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
@@ -86,6 +87,7 @@ public struct AppShellView: View {
             .navigationSplitViewStyle(.balanced)
         }
         .environment(\.interfaceDensity, InterfaceDensity(rawValue: densityRawValue) ?? .comfortable)
+        .environment(\.stockMonitorWebInspired, true)
         .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
     }
 
