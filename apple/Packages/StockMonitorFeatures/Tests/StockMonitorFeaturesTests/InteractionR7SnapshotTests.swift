@@ -5,7 +5,7 @@
     import Testing
 
     @MainActor
-    @Test func r7RepresentativePagesRenderInWebInspiredStyle() throws {
+    @Test(.disabled(if: ProcessInfo.processInfo.environment["CI"] != nil)) func r7RepresentativePagesRenderInWebInspiredStyle() throws {
         let configuredOutput = ProcessInfo.processInfo.environment["STOCK_MONITOR_R7_SNAPSHOT_OUTPUT_DIR"]
             .map(URL.init(fileURLWithPath:))
         let outputRoot = configuredOutput

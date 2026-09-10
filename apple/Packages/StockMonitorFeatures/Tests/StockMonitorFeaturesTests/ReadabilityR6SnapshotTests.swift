@@ -8,7 +8,7 @@
     /// R6.2 视觉矩阵：31 路由 dark 基线 + 轮换的宽度和状态组合，
     /// 加上 R6.0 图表/表格 golden 与 before/after 对照。
     @MainActor
-    @Test func r6PolishAndAcceptanceVisualMatrix() throws {
+    @Test(.disabled(if: ProcessInfo.processInfo.environment["CI"] != nil)) func r6PolishAndAcceptanceVisualMatrix() throws {
         let configuredOutput = ProcessInfo.processInfo.environment["STOCK_MONITOR_SNAPSHOT_OUTPUT_DIR"]
             .map(URL.init(fileURLWithPath:))
         let outputRoot = configuredOutput

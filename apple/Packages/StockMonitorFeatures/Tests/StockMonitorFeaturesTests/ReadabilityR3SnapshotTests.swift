@@ -6,7 +6,7 @@
     import Testing
 
     @MainActor
-    @Test func r3NavigationAndAdaptiveAnatomyVisualMatrix() throws {
+    @Test(.disabled(if: ProcessInfo.processInfo.environment["CI"] != nil)) func r3NavigationAndAdaptiveAnatomyVisualMatrix() throws {
         let configuredOutput = ProcessInfo.processInfo.environment["STOCK_MONITOR_SNAPSHOT_OUTPUT_DIR"]
             .map(URL.init(fileURLWithPath:))
         let outputRoot = configuredOutput

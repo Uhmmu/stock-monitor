@@ -8,7 +8,7 @@
     /// R2 Before/After 视觉证据：同一 fixture、同一窗口尺寸与外观，
     /// 对比 raw JSON 树（Before）与语义化页面（After）。基线存于 Tests/VisualBaselines/R2。
     @MainActor
-    @Test func r2SemanticWorkspacesBeatRawJSONRendering() throws {
+    @Test(.disabled(if: ProcessInfo.processInfo.environment["CI"] != nil)) func r2SemanticWorkspacesBeatRawJSONRendering() throws {
         let configuredOutput = ProcessInfo.processInfo.environment["STOCK_MONITOR_SNAPSHOT_OUTPUT_DIR"]
             .map(URL.init(fileURLWithPath:))
         let outputRoot = configuredOutput

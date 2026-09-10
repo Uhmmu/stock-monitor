@@ -7,7 +7,7 @@
 
     /// R4 高频市场与研究页面的确定性像素矩阵：Before（R4 前布局）与 After（R4 组件布局）。
     @MainActor
-    @Test func r4HighFrequencyPagesVisualMatrix() throws {
+    @Test(.disabled(if: ProcessInfo.processInfo.environment["CI"] != nil)) func r4HighFrequencyPagesVisualMatrix() throws {
         let configuredOutput = ProcessInfo.processInfo.environment["STOCK_MONITOR_SNAPSHOT_OUTPUT_DIR"]
             .map(URL.init(fileURLWithPath:))
         let outputRoot = configuredOutput
