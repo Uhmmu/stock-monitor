@@ -188,6 +188,12 @@ private struct SettingsWorkspaceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            WebInspiredHero("设置", eyebrow: "Preferences", summary: "外观和密度只影响此 Mac；服务端配置保存后会立即回读确认。") {
+                SemanticStatusLabel("本机与服务端分层", status: .info)
+            } actions: {
+                EmptyView()
+            }
+            .padding(StockMonitorSpacing.medium)
             Form {
                 Section("客户端外观") {
                     Picker("外观", selection: $appearance) {

@@ -95,12 +95,24 @@ public enum StockMonitorCornerRadius {
     public static let control: CGFloat = 7
     public static let surface: CGFloat = 10
     public static let prominent: CGFloat = 14
+    public static let webCard: CGFloat = 18
+    public static let floatingControl: CGFloat = 13
 }
 
 public enum StockMonitorElevation {
     public static let floatingRadius: CGFloat = 12
     public static let floatingY: CGFloat = 5
     public static let floatingOpacity: Double = 0.12
+    public static let cardRadius: CGFloat = 18
+    public static let cardY: CGFloat = 7
+    public static let cardOpacity: Double = 0.07
+}
+
+public enum StockMonitorAccent {
+    public static let primary = Color.accentColor
+    public static let selectionFill = Color.accentColor.opacity(0.12)
+    public static let selectionStroke = Color.accentColor.opacity(0.26)
+    public static let coolTint = Color.indigo.opacity(0.055)
 }
 
 public enum StockMonitorTypographyRole: String, CaseIterable, Sendable {
@@ -298,6 +310,51 @@ private struct StockMonitorSurfaceModifier: ViewModifier {
     }
 }
 
+/// Web-inspired content card rendered with native dynamic colors. It deliberately
+/// stays opaque enough for financial figures; glass remains in chrome/transient layers.
+private struct StockMonitorCardModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                StockMonitorSurface.raised.fill.opacity(reduceTransparency ? 1 : 0.97),
+                in: RoundedRectangle(cornerRadius: StockMonitorCornerRadius.webCard, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: StockMonitorCornerRadius.webCard, style: .continuous)
+                    .stroke(
+                        contrast == .increased ? StockMonitorSeparator.emphasized : StockMonitorSeparator.standard.opacity(0.55),
+                        lineWidth: contrast == .increased ? 1.5 : 0.5
+                    )
+            }
+            .shadow(
+                color: Color.black.opacity(contrast == .increased ? 0 : StockMonitorElevation.cardOpacity),
+                radius: StockMonitorElevation.cardRadius,
+                y: StockMonitorElevation.cardY
+            )
+    }
+}
+
+private struct StockMonitorFilterBarModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, StockMonitorSpacing.regular)
+            .padding(.vertical, StockMonitorSpacing.small)
+            .background(
+                reduceTransparency ? AnyShapeStyle(StockMonitorSurface.raised.fill) : AnyShapeStyle(.bar),
+                in: RoundedRectangle(cornerRadius: StockMonitorCornerRadius.floatingControl, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: StockMonitorCornerRadius.floatingControl, style: .continuous)
+                    .stroke(StockMonitorSeparator.standard.opacity(0.55), lineWidth: 0.5)
+            }
+    }
+}
+
 public extension View {
     func financialFigures() -> some View {
         monospacedDigit()
@@ -309,5 +366,13 @@ public extension View {
 
     func stockMonitorTypography(_ role: StockMonitorTypographyRole) -> some View {
         font(role.font).foregroundStyle(role.foregroundStyle)
+    }
+
+    func stockMonitorCard() -> some View {
+        modifier(StockMonitorCardModifier())
+    }
+
+    func stockMonitorFilterBar() -> some View {
+        modifier(StockMonitorFilterBarModifier())
     }
 }

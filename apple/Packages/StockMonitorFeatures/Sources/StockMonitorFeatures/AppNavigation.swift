@@ -233,6 +233,27 @@ public struct NavigationSearchResult: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A small, per-window snapshot of the choices that define a route's working context.
+/// Views can opt into the typed fields they own without serializing loaded business data.
+public struct RouteInteractionState: Codable, Equatable, Sendable {
+    public var selectedIdentifier: String?
+    public var filterQuery: String
+    public var sortKey: String?
+    public var scrollAnchor: String?
+
+    public init(
+        selectedIdentifier: String? = nil,
+        filterQuery: String = "",
+        sortKey: String? = nil,
+        scrollAnchor: String? = nil
+    ) {
+        self.selectedIdentifier = selectedIdentifier
+        self.filterQuery = filterQuery
+        self.sortKey = sortKey
+        self.scrollAnchor = scrollAnchor
+    }
+}
+
 @MainActor
 @Observable
 public final class AppNavigationModel {
@@ -247,6 +268,7 @@ public final class AppNavigationModel {
     public var routeOrder: [AppRoute]
     public var expandedSections: Set<AppSection>
     public var indexedSearchResults: [NavigationSearchResult] = []
+    public var routeStates: [AppRoute: RouteInteractionState] = [:]
 
     public init(
         selection: AppRoute = .overview,
@@ -314,6 +336,20 @@ public final class AppNavigationModel {
         searchPresented = false
     }
 
+    public func state(for route: AppRoute) -> RouteInteractionState {
+        routeStates[route] ?? RouteInteractionState()
+    }
+
+    public func updateState(for route: AppRoute, _ update: (inout RouteInteractionState) -> Void) {
+        var value = state(for: route)
+        update(&value)
+        routeStates[route] = value
+    }
+
+    public func rememberSelection(_ identifier: String?, for route: AppRoute) {
+        updateState(for: route) { $0.selectedIdentifier = identifier }
+    }
+
     public func navigate(to result: NavigationSearchResult) {
         if let symbol = result.symbol {
             selectedSymbol = symbol
@@ -357,6 +393,7 @@ public final class AppNavigationModel {
         routeOrder = AppRoute.allCases
         expandedSections = [.assets, selection.section]
         inspectorVisible = false
+        routeStates = [:]
     }
 
     @discardableResult

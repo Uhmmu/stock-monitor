@@ -84,3 +84,33 @@ import Testing
     #expect(model.recents == [.news])
     #expect(!model.routes(in: .records).contains(.administration))
 }
+
+@MainActor
+@Test func routeInteractionStateSurvivesNavigationAndResetsWithLayout() {
+    let model = AppNavigationModel(selection: .watchlist)
+    model.updateState(for: .watchlist) {
+        $0.selectedIdentifier = "1578.T"
+        $0.filterQuery = "7"
+        $0.sortKey = "change"
+        $0.scrollAnchor = "row-1578.T"
+    }
+    model.navigate(to: .news)
+    model.updateState(for: .news) { $0.filterQuery = "市场|AAPL|earnings" }
+    model.navigate(to: .watchlist)
+
+    #expect(model.state(for: .watchlist).selectedIdentifier == "1578.T")
+    #expect(model.state(for: .watchlist).sortKey == "change")
+    #expect(model.state(for: .news).filterQuery == "市场|AAPL|earnings")
+
+    model.resetNavigationLayout()
+    #expect(model.routeStates.isEmpty)
+}
+
+@Test func r7InteractionAuditCoversEveryRouteWithRecoverableBehavior() {
+    #expect(R7InteractionAuditCatalog.entries.count == AppRoute.allCases.count)
+    #expect(Set(R7InteractionAuditCatalog.entries.map(\.route)) == Set(AppRoute.allCases))
+    #expect(R7InteractionAuditCatalog.entries.allSatisfy { !$0.primaryAction.isEmpty })
+    #expect(R7InteractionAuditCatalog.entries.allSatisfy { $0.failureRecovery.contains("重试") })
+    #expect(R7InteractionAuditCatalog.entry(for: .watchlist).retainedState.contains("选中证券"))
+    #expect(R7InteractionAuditCatalog.entry(for: .news).detailPattern.contains("Sheet"))
+}

@@ -25,11 +25,11 @@ public struct GoalM3RouteView: View {
         case .overview:
             OverviewView(model: OverviewModel(service: service), navigate: navigation.navigate, openStock: select)
         case .watchlist:
-            WatchlistView(model: WatchlistModel(service: service), openStock: select)
+            WatchlistView(model: WatchlistModel(service: service), navigation: navigation, openStock: select)
         case .alerts:
             ActivityView(model: ActivityModel(service: service), openStock: select)
         case .news:
-            NewsCenterView(model: NewsModel(service: service), openStock: select)
+            NewsCenterView(model: NewsModel(service: service), navigation: navigation, openStock: select)
         case .calendar:
             InvestmentCalendarView(model: CalendarModel(service: service), openStock: select)
         case .reports:
@@ -71,13 +71,16 @@ public struct OverviewView: View {
     public var body: some View {
         ResourceStateView(state: model.state) {
             PageScaffold(width: StockMonitorContentWidth.wide) {
-                PageHeader("市场总览", summary: headerSummary) {
+                WebInspiredHero("市场总览", eyebrow: "Overview", summary: headerSummary) {
                     HStack(spacing: StockMonitorSpacing.regular) {
                         SemanticStatusLabel(model.streamConnected ? "实时连接" : "快照", status: model.streamConnected ? .live : .stale)
                         if let lastUpdated = model.lastUpdated {
                             Text(lastUpdated, style: .time).stockMonitorTypography(.metadata)
                         }
                     }
+                } actions: {
+                    Button("查看异动", systemImage: "bell") { navigate(.alerts) }
+                        .buttonStyle(.borderedProminent)
                 }
             } content: {
                 FeatureErrorBanner(error: model.error)
@@ -309,6 +312,7 @@ enum WatchlistSortKey: String, CaseIterable, Identifiable, Sendable {
 
 public struct WatchlistView: View {
     @State private var model: WatchlistModel
+    @Bindable private var navigation: AppNavigationModel
     @Environment(\.undoManager) private var undoManager
     let openStock: (String) -> Void
     @State private var groupName = ""
@@ -320,8 +324,9 @@ public struct WatchlistView: View {
     @State private var groupFilter: Int?
     @State private var thresholdDrafts: [String: WatchlistThresholdDraft] = [:]
 
-    public init(model: WatchlistModel, openStock: @escaping (String) -> Void) {
+    public init(model: WatchlistModel, navigation: AppNavigationModel, openStock: @escaping (String) -> Void) {
         _model = State(initialValue: model)
+        self.navigation = navigation
         self.openStock = openStock
     }
 
@@ -339,9 +344,22 @@ public struct WatchlistView: View {
             }
         }
         .navigationTitle("自选股")
-        .task { await model.load() }
+        .task {
+            restoreInteractionState()
+            await model.load()
+        }
         .onChange(of: model.searchQuery) { _, _ in model.search() }
-        .onChange(of: model.selectedSymbol) { _, _ in Task { await model.loadPeers() } }
+        .onChange(of: model.selectedSymbol) { _, symbol in
+            navigation.selectedSymbol = symbol
+            navigation.rememberSelection(symbol, for: .watchlist)
+            Task { await model.loadPeers() }
+        }
+        .onChange(of: groupFilter) { _, value in
+            navigation.updateState(for: .watchlist) { $0.filterQuery = value.map(String.init) ?? "" }
+        }
+        .onChange(of: sortKey) { _, value in
+            navigation.updateState(for: .watchlist) { $0.sortKey = value.rawValue }
+        }
         .toolbar {
             ToolbarItem {
                 Button("新建分组", systemImage: "folder.badge.plus") { showingNewGroup = true }
@@ -375,6 +393,13 @@ public struct WatchlistView: View {
             )
         }
         .accessibilityIdentifier("m3.watchlist")
+    }
+
+    private func restoreInteractionState() {
+        let state = navigation.state(for: .watchlist)
+        model.selectedSymbol = state.selectedIdentifier
+        groupFilter = Int(state.filterQuery)
+        sortKey = state.sortKey.flatMap(WatchlistSortKey.init(rawValue:)) ?? .custom
     }
 
     private var filteredStocks: [ManagedStock] {
@@ -458,6 +483,8 @@ public struct WatchlistView: View {
         }
         .padding(.horizontal, StockMonitorSpacing.regular)
         .padding(.bottom, StockMonitorSpacing.small)
+        .stockMonitorFilterBar()
+        .padding(.horizontal, StockMonitorSpacing.regular)
     }
 
     private var stockTable: some View {

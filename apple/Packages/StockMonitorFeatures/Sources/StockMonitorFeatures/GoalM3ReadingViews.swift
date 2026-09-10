@@ -9,15 +9,20 @@ import SwiftUI
 public struct NewsCenterView: View {
     @State private var model: NewsModel
     @State private var selected: NewsItem?
+    @Bindable private var navigation: AppNavigationModel
     let openStock: (String) -> Void
-    public init(model: NewsModel, openStock: @escaping (String) -> Void) {
-        _model = State(initialValue: model); self.openStock = openStock
+    public init(model: NewsModel, navigation: AppNavigationModel, openStock: @escaping (String) -> Void) {
+        _model = State(initialValue: model); self.navigation = navigation; self.openStock = openStock
     }
 
     public var body: some View {
         VStack(spacing: 0) {
+            PageHeader("新闻中心", eyebrow: "Market Intelligence", summary: "标题优先，证券、来源、时间与 AI 内容保持清晰分层。") {
+                SemanticStatusLabel("\(model.total) 条", status: model.items.isEmpty ? .unavailable : .info)
+            }
+            .padding(.horizontal, StockMonitorSpacing.medium)
+            .padding(.top, StockMonitorSpacing.medium)
             filterBar
-            Divider()
             FeatureErrorBanner(error: model.error).padding(.horizontal, StockMonitorSpacing.regular)
             List(model.items, selection: selectedBinding) { item in
                 NewsListRow(item: item, openStock: openStock)
@@ -29,11 +34,44 @@ public struct NewsCenterView: View {
                 Button("加载更多") { Task { await model.load(reset: false) } }.padding(StockMonitorSpacing.small)
             }
         }
-        .navigationTitle("新闻中心").task { await model.load() }
+        .navigationTitle("新闻中心").task {
+            restoreInteractionState()
+            await model.load()
+            restoreSelection()
+        }
+        .onChange(of: model.scope) { _, _ in persistFilters() }
+        .onChange(of: model.symbol) { _, _ in persistFilters() }
+        .onChange(of: model.topic) { _, _ in persistFilters() }
+        .onChange(of: selected) { _, value in navigation.rememberSelection(value.map { String($0.id) }, for: .news) }
         .sheet(item: $selected) { item in
             NewsReader(item: item, summarize: { Task { await model.summarize(item) } }).frame(minWidth: 680, minHeight: 560)
         }
         .accessibilityIdentifier("m3.news")
+    }
+
+    private func restoreInteractionState() {
+        let state = navigation.state(for: .news)
+        let parts = state.filterQuery.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        if let scope = parts.first.flatMap(NewsModel.Scope.init(rawValue:)) {
+            model.scope = scope
+        }
+        if parts.count > 1, !parts[1].isEmpty {
+            model.symbol = parts[1]
+        }
+        if parts.count > 2 {
+            model.topic = parts[2]
+        }
+    }
+
+    private func restoreSelection() {
+        guard let raw = navigation.state(for: .news).selectedIdentifier, let id = Int(raw) else { return }
+        selected = model.items.first { $0.id == id }
+    }
+
+    private func persistFilters() {
+        navigation.updateState(for: .news) {
+            $0.filterQuery = [model.scope.rawValue, model.symbol, model.topic].joined(separator: "|")
+        }
     }
 
     private var selectedBinding: Binding<Int?> {
@@ -56,6 +94,7 @@ public struct NewsCenterView: View {
             Spacer()
             Text("\(model.total) 条").stockMonitorTypography(.metadata)
         }
+        .stockMonitorFilterBar()
         .padding(StockMonitorSpacing.regular)
         .accessibilityIdentifier("r4.news.filters")
     }

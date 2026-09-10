@@ -117,3 +117,10 @@ import Testing
     // stateChange 是短 cross-fade（Reduce Motion 降级路径）。
     #expect(StockMonitorMotion.hoverHighlightOpacity <= 0.08)
 }
+
+@Test func webInspiredTokensKeepContentLegibleAndSelectionSemantic() {
+    #expect(StockMonitorCornerRadius.webCard > StockMonitorCornerRadius.surface)
+    #expect(StockMonitorCornerRadius.floatingControl < StockMonitorCornerRadius.webCard)
+    #expect(StockMonitorElevation.cardOpacity <= 0.08)
+    #expect(StockMonitorElevation.cardY > 0)
+}

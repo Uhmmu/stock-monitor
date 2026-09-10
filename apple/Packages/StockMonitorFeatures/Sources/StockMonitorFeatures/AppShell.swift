@@ -18,6 +18,8 @@ public struct AppShellView: View {
     @AppStorage("navigation-expanded-sections") private var storedExpandedSections = AppSection.assets.rawValue
     @AppStorage("inspector-visible") private var storedInspectorVisible = false
     @SceneStorage("selected-route") private var restoredRoute = AppRoute.overview.rawValue
+    @SceneStorage("selected-security-symbol") private var restoredSymbol = ""
+    @SceneStorage("route-interaction-states") private var storedRouteStates = ""
     @SceneStorage("navigation-column-visibility") private var columnVisibilityRaw = "all"
     @Environment(\.openWindow) private var openWindow
     @Environment(\.undoManager) private var undoManager
@@ -36,6 +38,10 @@ public struct AppShellView: View {
     }
 
     public var body: some View {
+        presentedShell
+    }
+
+    private var baseShell: some View {
         AdaptiveLayoutReader {
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 sidebar
@@ -61,8 +67,9 @@ public struct AppShellView: View {
                         Button("检查器", systemImage: "sidebar.trailing") { navigation.inspectorVisible.toggle() }
                     }
                     ToolbarItem(id: "com.jiale.StockMonitor.refresh", placement: .automatic, showsByDefault: true) {
-                        Button("刷新", systemImage: "arrow.clockwise") { refreshToken = UUID() }
+                        Button("刷新当前页面", systemImage: "arrow.clockwise") { refreshToken = UUID() }
                             .keyboardShortcut("r", modifiers: .command)
+                            .help("保留当前筛选和选择，重新读取本页数据")
                     }
                     ToolbarItem(id: "com.jiale.StockMonitor.layout", placement: .automatic, showsByDefault: false) {
                         Menu("布局", systemImage: "rectangle.3.group") {
@@ -80,46 +87,54 @@ public struct AppShellView: View {
         }
         .environment(\.interfaceDensity, InterfaceDensity(rawValue: densityRawValue) ?? .comfortable)
         .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
-        .onAppear {
-            restorePreferencesIfNeeded()
-            if let route = AppRoute(rawValue: restoredRoute) {
-                navigation.navigate(to: route)
+    }
+
+    private var restoredShell: some View {
+        baseShell
+            .onAppear(perform: restoreScene)
+            .onChange(of: navigation.selection) { _, route in
+                restoredRoute = route.rawValue
+                persistNavigation()
+                persistRouteStates()
             }
-        }
-        .onChange(of: navigation.selection) { _, route in
-            restoredRoute = route.rawValue
-            persistNavigation()
-        }
-        .onChange(of: navigation.favorites) { _, _ in persistNavigation() }
-        .onChange(of: navigation.recents) { _, _ in persistNavigation() }
-        .onChange(of: navigation.routeOrder) { _, _ in persistNavigation() }
-        .onChange(of: navigation.expandedSections) { _, _ in persistNavigation() }
-        .onChange(of: navigation.inspectorVisible) { _, value in storedInspectorVisible = value }
-        .onChange(of: columnVisibility) { _, value in columnVisibilityRaw = value == .detailOnly ? "detailOnly" : "all" }
-        .onOpenURL { _ = navigation.handle(url: $0) }
-        .contextMenu {
-            Button("在新研究窗口打开") {
-                openWindow(value: ResearchDetailRoute(
-                    route: navigation.selection,
-                    identifier: navigation.selectedSymbol ?? navigation.selection.rawValue
-                ))
+            .onChange(of: navigation.selectedSymbol) { _, value in
+                restoredSymbol = value ?? ""
             }
-            Divider()
-            Button("复制深链") {
-                #if os(macOS)
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString("stockmonitor://\(navigation.selection.rawValue)", forType: .string)
-                #endif
+            .onChange(of: navigation.favorites) { _, _ in persistNavigation() }
+            .onChange(of: navigation.recents) { _, _ in persistNavigation() }
+            .onChange(of: navigation.routeOrder) { _, _ in persistNavigation() }
+            .onChange(of: navigation.expandedSections) { _, _ in persistNavigation() }
+    }
+
+    private var presentedShell: some View {
+        restoredShell
+            .onChange(of: navigation.inspectorVisible) { _, value in storedInspectorVisible = value }
+            .onChange(of: columnVisibility) { _, value in columnVisibilityRaw = value == .detailOnly ? "detailOnly" : "all" }
+            .onOpenURL { _ = navigation.handle(url: $0) }
+            .onDisappear { persistRouteStates() }
+            .contextMenu {
+                Button("在新研究窗口打开") {
+                    openWindow(value: ResearchDetailRoute(
+                        route: navigation.selection,
+                        identifier: navigation.selectedSymbol ?? navigation.selection.rawValue
+                    ))
+                }
+                Divider()
+                Button("复制深链") {
+                    #if os(macOS)
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString("stockmonitor://\(navigation.selection.rawValue)", forType: .string)
+                    #endif
+                }
             }
-        }
-        .sheet(isPresented: $navigation.searchPresented) {
-            CommandSearchView(
-                navigation: navigation,
-                marketService: service,
-                workspaceService: goalM5Service
-            )
-            .frame(minWidth: 520, minHeight: 420)
-        }
+            .sheet(isPresented: $navigation.searchPresented) {
+                CommandSearchView(
+                    navigation: navigation,
+                    marketService: service,
+                    workspaceService: goalM5Service
+                )
+                .frame(minWidth: 520, minHeight: 420)
+            }
     }
 
     private var sidebar: some View {
@@ -225,7 +240,19 @@ public struct AppShellView: View {
         let sections = Set(storedExpandedSections.split(separator: ",").compactMap { AppSection(rawValue: String($0)) })
         navigation.expandedSections = sections.union([navigation.selection.section])
         navigation.inspectorVisible = storedInspectorVisible
+        navigation.selectedSymbol = restoredSymbol.isEmpty ? nil : restoredSymbol
+        if let data = storedRouteStates.data(using: .utf8),
+           let states = try? JSONDecoder().decode([AppRoute: RouteInteractionState].self, from: data)
+        {
+            navigation.routeStates = states
+        }
         columnVisibility = columnVisibilityRaw == "detailOnly" ? .detailOnly : .all
+    }
+
+    private func restoreScene() {
+        restorePreferencesIfNeeded()
+        guard let route = AppRoute(rawValue: restoredRoute) else { return }
+        navigation.navigate(to: route)
     }
 
     private func persistNavigation() {
@@ -234,6 +261,14 @@ public struct AppShellView: View {
         storedRecents = navigation.recents.map(\.rawValue).joined(separator: ",")
         storedRouteOrder = navigation.routeOrder.map(\.rawValue).joined(separator: ",")
         storedExpandedSections = navigation.expandedSections.map(\.rawValue).sorted().joined(separator: ",")
+    }
+
+    private func persistRouteStates() {
+        guard restoredPreferences,
+              let data = try? JSONEncoder().encode(navigation.routeStates),
+              let value = String(data: data, encoding: .utf8)
+        else { return }
+        storedRouteStates = value
     }
 
     private func decodeRoutes(_ value: String) -> [AppRoute] {
@@ -268,20 +303,20 @@ private struct WorkspaceRouteBar: View {
         .scrollIndicators(.hidden)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
-        .overlay(alignment: .bottom) { Divider() }
+        .overlay(alignment: .bottom) {
+            LinearGradient(colors: [.clear, StockMonitorSeparator.standard.opacity(0.65), .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(height: 0.5)
+        }
         .accessibilityIdentifier("workspace.\(workspace.rawValue).navigation")
     }
 
-    @ViewBuilder private func workspaceButton(_ route: AppRoute) -> some View {
-        if route == navigation.selection {
-            Button(route.title) { navigation.navigate(to: route) }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-        } else {
-            Button(route.title) { navigation.navigate(to: route) }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+    private func workspaceButton(_ route: AppRoute) -> some View {
+        Button { navigation.navigate(to: route) } label: {
+            SelectionPill(route.title, systemImage: route.systemImage, selected: route == navigation.selection)
         }
+        .buttonStyle(.plain)
+        .contentShape(Capsule())
+        .accessibilityLabel(route.title)
     }
 }
 
