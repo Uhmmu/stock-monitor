@@ -1,22 +1,51 @@
-node_modules/
+# --- Secrets / local environment (NEVER commit real values) ---
+.env
+.env.*
+!.env.example
+!.env.macos.example
+
+# --- AI agent / assistant instruction files (local only) ---
+AGENTS.md
+CLAUDE.md
+ZCODE.md
+GEMINI.md
+.claude/
+.cursor/
+.cursorrules
+.github/copilot-instructions.md
+
+# --- Internal handoff & working notes (not for publication) ---
+HANDOFF_PROMPT.md
+IBKR_HANDOFF*.md
+docs/plans/
+
+# --- Python ---
 __pycache__/
+*.pyc
+.venv/
+venv/
+.venv-finnhub-mcp/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Node / frontend ---
+node_modules/
 dist/
+
+# --- Desktop (Qt) ---
 desktop/build/
+
+# --- Apple / Xcode ---
 apple/Packages/*/.build/
 apple/.build/
 apple/DerivedData/
 apple/Local.xcconfig
 **/xcuserdata/
 *.xcuserstate
-.venv/
-venv/
-*.pyc
-.env
-.env.macos
+
+# --- OS / editor junk ---
+.DS_Store
 .local/
-.venv-finnhub-mcp/
-.git
-.claude/
-CLAUDE.md
-AGENTS.md
-ZCODE.md
+*.log

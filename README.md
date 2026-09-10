@@ -164,7 +164,7 @@ cp .env.example .env
 设置域名和 Caddy Basic Auth：
 
 ```env
-SITE_DOMAINS="jialenb.com, xn--fjq893a0q8b.com"
+SITE_DOMAINS="your-domain.com"
 AUTH_USER=admin
 AUTH_PASSWORD_HASH=replace-with-a-caddy-password-hash
 ```
