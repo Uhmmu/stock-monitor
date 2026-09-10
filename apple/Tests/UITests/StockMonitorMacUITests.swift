@@ -1,6 +1,9 @@
 import XCTest
 
 final class StockMonitorMacUITests: XCTestCase {
+    // Headless CI runners render SwiftUI far slower than developer machines;
+    // visual-audit routes need a much wider existence-wait window there.
+    private static let waitTimeout: TimeInterval = ProcessInfo.processInfo.environment["CI"] != nil ? 30 : 5
     private struct AuditScenario {
         let route: String
         var state = "normal"
@@ -29,7 +32,7 @@ final class StockMonitorMacUITests: XCTestCase {
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launch()
 
-        XCTAssertTrue(app.descendants(matching: .any)["login.view"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["login.view"].waitForExistence(timeout: Self.waitTimeout))
         XCTAssertTrue(app.staticTexts["Stock Monitor"].exists)
         XCTAssertTrue(app.buttons["登录"].exists)
 
@@ -45,7 +48,7 @@ final class StockMonitorMacUITests: XCTestCase {
             let app = visualAuditApp(route: route)
             app.launch()
             XCTAssertTrue(
-                app.descendants(matching: .any)["visual-audit.\(route).normal"].waitForExistence(timeout: 5),
+                app.descendants(matching: .any)["visual-audit.\(route).normal"].waitForExistence(timeout: Self.waitTimeout),
                 "Missing visual audit root for \(route)"
             )
             attachScreenshot(of: app, name: "r1-route-\(route)-standard-light-comfortable-normal")
@@ -74,7 +77,7 @@ final class StockMonitorMacUITests: XCTestCase {
             )
             app.launch()
             XCTAssertTrue(
-                app.descendants(matching: .any)["visual-audit.\(scenario.route).\(scenario.state)"].waitForExistence(timeout: 5)
+                app.descendants(matching: .any)["visual-audit.\(scenario.route).\(scenario.state)"].waitForExistence(timeout: Self.waitTimeout)
             )
             attachScreenshot(
                 of: app,
@@ -99,7 +102,7 @@ final class StockMonitorMacUITests: XCTestCase {
                 launchArgument: "--navigation-audit"
             )
             app.launch()
-            XCTAssertTrue(app.descendants(matching: .any)["page.header"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.descendants(matching: .any)["page.header"].waitForExistence(timeout: Self.waitTimeout))
             attachScreenshot(of: app, name: "r3-navigation-\(scenario.width)-\(scenario.appearance)-\(scenario.density)")
             app.terminate()
         }
@@ -107,7 +110,7 @@ final class StockMonitorMacUITests: XCTestCase {
         let search = visualAuditApp(route: "fundamentals", launchArgument: "--navigation-audit")
         search.launchEnvironment["STOCK_MONITOR_NAVIGATION_AUDIT_SEARCH"] = "1"
         search.launch()
-        XCTAssertTrue(search.descendants(matching: .any)["r3.command-search"].waitForExistence(timeout: 5))
+        XCTAssertTrue(search.descendants(matching: .any)["r3.command-search"].waitForExistence(timeout: Self.waitTimeout))
         attachScreenshot(of: search, name: "r3-command-k-grouped-search")
     }
 
