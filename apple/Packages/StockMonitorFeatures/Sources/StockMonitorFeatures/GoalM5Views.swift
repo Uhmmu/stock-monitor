@@ -13,14 +13,14 @@ public struct GoalM5RouteView: View {
 
     public var body: some View {
         if route == .ai {
-            AIChatWorkspaceView(service: service, activeSymbol: navigation.selectedSymbol)
+            AIChatWorkspaceView(service: service, activeSymbol: navigation.selectedSymbol, navigation: navigation)
         } else if route == .journal {
-            JournalWorkspaceView(service: service)
+            JournalWorkspaceView(service: service, navigation: navigation)
         } else if let descriptor = GoalM5Catalog().descriptor(for: route, isAdministrator: navigation.isAdministrator) {
             if route == .settings {
-                SettingsWorkspaceView(descriptor: descriptor, service: service)
+                SettingsWorkspaceView(descriptor: descriptor, service: service, navigation: navigation)
             } else {
-                ServerWorkspaceView(descriptor: descriptor, service: service)
+                ServerWorkspaceView(route: route, descriptor: descriptor, service: service, navigation: navigation)
             }
         } else {
             ContentUnavailableView("未找到工作台", systemImage: "exclamationmark.triangle")
@@ -30,6 +30,7 @@ public struct GoalM5RouteView: View {
 
 private struct JournalWorkspaceView: View {
     let service: GoalM5Service
+    let navigation: AppNavigationModel
     @State private var entries: [TradeLogDraft] = []
     @State private var selection: Int?
     @State private var draft: TradeLogDraft?
@@ -73,6 +74,7 @@ private struct JournalWorkspaceView: View {
         .onChange(of: selection) { _, newValue in
             draft = entries.first { $0.id == newValue }
             mutation = .idle
+            navigation.rememberSelection(newValue.map(String.init), for: .journal)
         }
         .confirmationDialog("生成 AI 总结", isPresented: $summaryConfirmation, titleVisibility: .visible) {
             Button("确认并生成") { Task { await summarize() } }
@@ -138,6 +140,12 @@ private struct JournalWorkspaceView: View {
         do {
             let payload = try await service.tradeLogs()
             entries = (payload.objectValue["items"]?.arrayValue ?? payload.arrayValue).compactMap(TradeLogDraft.init)
+            if selection == nil,
+               let saved = navigation.state(for: .journal).selectedIdentifier.flatMap(Int.init),
+               entries.contains(where: { $0.id == saved })
+            {
+                selection = saved
+            }
             if selection == nil {
                 selection = entries.first?.id
             }
@@ -183,6 +191,7 @@ private struct JournalWorkspaceView: View {
 private struct SettingsWorkspaceView: View {
     let descriptor: WorkspaceDescriptor
     let service: GoalM5Service
+    let navigation: AppNavigationModel
     @AppStorage("interface-density") private var density = InterfaceDensity.comfortable.rawValue
     @AppStorage("appearance") private var appearance = "system"
 
@@ -212,7 +221,7 @@ private struct SettingsWorkspaceView: View {
             .frame(height: 190)
             .padding(.horizontal)
             Divider()
-            ServerWorkspaceView(descriptor: descriptor, service: service)
+            ServerWorkspaceView(route: .settings, descriptor: descriptor, service: service, navigation: navigation)
         }.navigationTitle("设置")
     }
 }
@@ -220,8 +229,10 @@ private struct SettingsWorkspaceView: View {
 /// R2.0 后的 M5 工作台：payload 先经过 typed presentation model，再进入语义页面；
 /// raw JSON 只存在于折叠的诊断区。状态与 mutation 反馈遵循 R2.2 统一规范。
 private struct ServerWorkspaceView: View {
+    let route: AppRoute
     let descriptor: WorkspaceDescriptor
     let service: GoalM5Service
+    let navigation: AppNavigationModel
     @State private var selection: WorkspaceEndpoint.ID?
     @State private var payload: JSONValue?
     @State private var previousPayload: JSONValue?
@@ -273,7 +284,17 @@ private struct ServerWorkspaceView: View {
                 .navigationTitle(descriptor.title)
         }
         .task(id: selection) { await reload() }
-        .task { await loadContextOptions() }
+        .task {
+            if let saved = navigation.state(for: route).selectedIdentifier,
+               descriptor.endpoints.contains(where: { $0.id == saved })
+            {
+                selection = saved
+            }
+            await loadContextOptions()
+        }
+        .onChange(of: selection) { _, value in
+            navigation.rememberSelection(value, for: route)
+        }
         .task(id: contextFingerprint) {
             if endpoint?.placeholders.isEmpty == false {
                 await reload()
@@ -480,6 +501,7 @@ private struct ConversationRow: Identifiable {
 private struct AIChatWorkspaceView: View {
     let service: GoalM5Service
     let activeSymbol: String?
+    let navigation: AppNavigationModel
     @State private var conversations: [ConversationRow] = []
     @State private var conversationID: Int?
     @State private var messages: JSONValue?
@@ -530,6 +552,9 @@ private struct AIChatWorkspaceView: View {
         }
         .task { await loadConversations() }
         .task(id: conversationID) { await recoverConversation() }
+        .onChange(of: conversationID) { _, value in
+            navigation.rememberSelection(value.map(String.init), for: .ai)
+        }
         .sheet(isPresented: $citationsPresented) {
             NavigationStack {
                 List(stream.citations, id: \.self) { Text($0).textSelection(.enabled) }
@@ -629,6 +654,12 @@ private struct AIChatWorkspaceView: View {
             conversations = items.compactMap { item in
                 guard let id = item.objectValue["id"]?.intValue else { return nil }
                 return ConversationRow(id: id, title: item.objectValue["title"]?.stringValue ?? "会话 #\(id)")
+            }
+            if conversationID == nil,
+               let saved = navigation.state(for: .ai).selectedIdentifier.flatMap(Int.init),
+               conversations.contains(where: { $0.id == saved })
+            {
+                conversationID = saved
             }
             if conversationID == nil {
                 conversationID = conversations.first?.id

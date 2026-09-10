@@ -21,65 +21,73 @@ public struct GoalM4RouteView: View {
     }
 
     public var body: some View {
-        switch route {
-        case .fundamentals:
-            FundamentalsView(
-                model: FundamentalsModel(service: service),
-                tickerContext: tickerContext,
-                companySummary: companySummary,
-                symbol: activeSymbol
-            )
-        case .financials:
-            FinancialsView(
-                model: FinancialsModel(service: service),
-                tickerContext: tickerContext,
-                companySummary: companySummary,
-                symbol: activeSymbol
-            )
-        case .valuation:
-            ValuationView(
-                model: ValuationModel(service: service),
-                tickerContext: tickerContext,
-                companySummary: companySummary,
-                symbol: activeSymbol
-            )
-        case .compare:
-            CompareView(model: CompareModel(service: service), openStock: openStock)
-        case .sec:
-            SecView(
-                model: SecModel(service: service),
-                tickerContext: tickerContext,
-                companySummary: companySummary,
-                symbol: activeSymbol
-            )
-        case .ownership:
-            OwnershipView(
-                model: OwnershipModel(service: service),
-                tickerContext: tickerContext,
-                companySummary: companySummary,
-                symbol: navigation.selectedSymbol
-            )
-        case .congress:
-            CongressView(model: CongressModel(service: service), openStock: openStock)
-        case .technical:
-            TechnicalAnalysisView(
-                model: TechnicalAnalysisModel(service: service),
-                tickerContext: tickerContext,
-                companySummary: companySummary,
-                symbol: activeSymbol
-            )
-        case .macro:
-            MacroView(model: MacroModel(service: service))
-        case .industry:
-            IndustryPulseView(model: IndustryPulseModel(service: service))
-        case .options:
-            OptionsView(model: OptionsModel(service: service))
-        case .mood:
-            MoodView(model: MoodModel(service: service))
-        case .moodLab:
-            MoodLabView(model: MoodLabModel(service: service))
-        default:
-            EmptyView()
+        Group {
+            switch route {
+            case .fundamentals:
+                FundamentalsView(
+                    model: FundamentalsModel(service: service),
+                    tickerContext: tickerContext,
+                    companySummary: companySummary,
+                    symbol: activeSymbol
+                )
+            case .financials:
+                FinancialsView(
+                    model: FinancialsModel(service: service),
+                    tickerContext: tickerContext,
+                    companySummary: companySummary,
+                    symbol: activeSymbol
+                )
+            case .valuation:
+                ValuationView(
+                    model: ValuationModel(service: service),
+                    tickerContext: tickerContext,
+                    companySummary: companySummary,
+                    symbol: activeSymbol
+                )
+            case .compare:
+                CompareView(model: CompareModel(service: service), openStock: openStock)
+            case .sec:
+                SecView(
+                    model: SecModel(service: service),
+                    tickerContext: tickerContext,
+                    companySummary: companySummary,
+                    symbol: activeSymbol
+                )
+            case .ownership:
+                OwnershipView(
+                    model: OwnershipModel(service: service),
+                    tickerContext: tickerContext,
+                    companySummary: companySummary,
+                    symbol: navigation.selectedSymbol
+                )
+            case .congress:
+                CongressView(model: CongressModel(service: service), openStock: openStock)
+            case .technical:
+                TechnicalAnalysisView(
+                    model: TechnicalAnalysisModel(service: service),
+                    tickerContext: tickerContext,
+                    companySummary: companySummary,
+                    symbol: activeSymbol
+                )
+            case .macro:
+                MacroView(model: MacroModel(service: service))
+            case .industry:
+                IndustryPulseView(model: IndustryPulseModel(service: service))
+            case .options:
+                OptionsView(model: OptionsModel(service: service), navigation: navigation)
+            case .mood:
+                MoodView(model: MoodModel(service: service))
+            case .moodLab:
+                MoodLabView(model: MoodLabModel(service: service))
+            default:
+                EmptyView()
+            }
+        }
+        .onAppear {
+            tickerContext.selectionHandler = { symbol in
+                navigation.selectedSymbol = symbol
+                navigation.rememberSelection(symbol, for: route)
+            }
         }
     }
 
@@ -718,7 +726,7 @@ public struct ValuationView: View {
                     }
                     .width(min: 90, ideal: 110)
                     TableColumn("单位") { row in Text(row.unit ?? "—") }
-                    .width(min: 70, ideal: 90)
+                        .width(min: 70, ideal: 90)
                     TableColumn("同行中位", sortUsing: KeyPathComparator(\CrossModelMetric.peerMedian, order: .reverse)) { row in
                         NumericTableCell(value: row.peerMedian, digits: 2)
                     }

@@ -8,6 +8,7 @@ public final class CompanyTickerContext {
     public private(set) var symbols: [String] = []
     public private(set) var loaded = false
     public private(set) var failed = false
+    public var selectionHandler: ((String) -> Void)?
 
     public init() {}
 
@@ -70,6 +71,7 @@ struct CompanySymbolBar: View {
                 .pickerStyle(.menu)
                 .frame(width: 130)
                 .onChange(of: symbol) { _, value in
+                    context.selectionHandler?(value)
                     Task { await onLoad(value) }
                 }
                 Button("刷新") { Task { await onLoad(symbol) } }.buttonStyle(.bordered)
@@ -87,6 +89,7 @@ struct CompanySymbolBar: View {
         } else {
             await onLoad(resolved)
         }
+        context.selectionHandler?(resolved)
         return resolved
     }
 }
@@ -147,13 +150,13 @@ public struct OwnershipView: View {
     @State private var symbol = ""
     /// R6.0：三张表默认排序——13F 按市值降序、内部人/国会按交易日期降序，列头可再排序。
     @State private var holdingsSort: [KeyPathComparator<Sec13FHoldingItem>] = [
-        KeyPathComparator(\.valueUsd, order: .reverse)
+        KeyPathComparator(\.valueUsd, order: .reverse),
     ]
     @State private var insiderSort: [KeyPathComparator<SecInsiderItem>] = [
-        KeyPathComparator(\.transactionDate, order: .reverse)
+        KeyPathComparator(\.transactionDate, order: .reverse),
     ]
     @State private var congressSort: [KeyPathComparator<CongressTradeItem>] = [
-        KeyPathComparator(\.transactionDate, order: .reverse)
+        KeyPathComparator(\.transactionDate, order: .reverse),
     ]
     let initialSymbol: String?
     let tickerContext: CompanyTickerContext
@@ -254,13 +257,13 @@ public struct OwnershipView: View {
                         }
                         .width(min: 100, ideal: 120)
                         TableColumn("类型") { row in Text(row.putCall ?? "—") }
-                        .width(min: 60, ideal: 80)
+                            .width(min: 60, ideal: 80)
                         TableColumn("环比", sortUsing: KeyPathComparator(\Sec13FHoldingItem.shareChange, order: .reverse)) { row in
                             holdingChangeBadge(row)
                         }
                         .width(min: 90, ideal: 110)
                         TableColumn("申报日") { row in Text(row.filingDate ?? "—") }
-                        .width(min: 90, ideal: 110)
+                            .width(min: 90, ideal: 110)
                     }
                     .alternatingRowBackgrounds(.enabled)
                     .frame(minHeight: 300)
@@ -285,7 +288,7 @@ public struct OwnershipView: View {
                 }
                 .width(min: 180, ideal: 260)
                 TableColumn("代码") { row in Text(row.transactionCode ?? "—") }
-                .width(min: 60, ideal: 80)
+                    .width(min: 60, ideal: 80)
                 TableColumn("股数", sortUsing: KeyPathComparator(\SecInsiderItem.shares, order: .reverse)) { row in
                     optionalCount(row.shares)
                 }
@@ -320,11 +323,11 @@ public struct OwnershipView: View {
                 }
                 .width(min: 140, ideal: 200)
                 TableColumn("方向") { row in Text(row.transactionType ?? "—") }
-                .width(min: 90, ideal: 120)
+                    .width(min: 90, ideal: 120)
                 TableColumn("金额区间") { row in Text(row.amountLabel ?? "数据不足") }
-                .width(min: 120, ideal: 150)
+                    .width(min: 120, ideal: 150)
                 TableColumn("申报日") { row in Text(row.filingDate ?? "—") }
-                .width(min: 100, ideal: 120)
+                    .width(min: 100, ideal: 120)
                 TableColumn("迟报") { row in
                     if row.isLate == true {
                         Text("迟报").foregroundStyle(.orange)

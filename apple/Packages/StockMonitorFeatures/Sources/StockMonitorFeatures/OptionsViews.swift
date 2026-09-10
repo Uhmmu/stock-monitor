@@ -54,9 +54,10 @@ public struct OptionsView: View {
     @State private var model: OptionsModel
     @State private var selectedSymbol: String?
     @State private var expiration = ""
+    private let navigation: AppNavigationModel?
     /// R6.0：期权链默认按行权价升序，列可排序、可拖宽。
     @State private var chainSort: [KeyPathComparator<OptionChainRow>] = [
-        KeyPathComparator(\.strike, order: .forward)
+        KeyPathComparator(\.strike, order: .forward),
     ]
 
     private var rankingBinding: Binding<String> {
@@ -89,8 +90,9 @@ public struct OptionsView: View {
         ("largest_skew_change", "偏斜变化"), ("largest_oi_change", "OI 变化"),
     ]
 
-    init(model: OptionsModel) {
+    init(model: OptionsModel, navigation: AppNavigationModel? = nil) {
         _model = State(initialValue: model)
+        self.navigation = navigation
     }
 
     public var body: some View {
@@ -120,6 +122,8 @@ public struct OptionsView: View {
                     .onChange(of: selectedSymbol) { _, symbol in
                         if let symbol {
                             expiration = ""
+                            navigation?.selectedSymbol = symbol
+                            navigation?.rememberSelection(symbol, for: .options)
                             Task { await model.loadDetail(symbol: symbol) }
                         }
                     }
@@ -131,7 +135,16 @@ public struct OptionsView: View {
             }
         }
         .navigationTitle("期权研究")
-        .task { await model.load(ranking: "activity") }
+        .task {
+            let state = navigation?.state(for: .options)
+            await model.load(ranking: state?.sortKey ?? "activity")
+            if let symbol = state?.selectedIdentifier {
+                selectedSymbol = symbol
+            }
+        }
+        .onChange(of: model.ranking) { _, value in
+            navigation?.updateState(for: .options) { $0.sortKey = value }
+        }
         .overlay(alignment: .top) { FeatureErrorBanner(error: model.error).padding() }
         .accessibilityIdentifier("m4.options")
     }
@@ -231,11 +244,11 @@ public struct OptionsView: View {
                 }
                 .width(min: 80, ideal: 95)
                 TableColumn("最新") { item in optionalPrice(item.last) }
-                .width(min: 80, ideal: 95)
+                    .width(min: 80, ideal: 95)
                 TableColumn("买价") { item in optionalPrice(item.bid) }
-                .width(min: 80, ideal: 90)
+                    .width(min: 80, ideal: 90)
                 TableColumn("卖价") { item in optionalPrice(item.ask) }
-                .width(min: 80, ideal: 90)
+                    .width(min: 80, ideal: 90)
                 TableColumn("成交量", sortUsing: KeyPathComparator(\OptionChainRow.volume, order: .reverse)) { item in
                     NumericTableCell(value: item.volume, digits: 0)
                 }
